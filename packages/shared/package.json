@@ -1,0 +1,32 @@
+{
+  "name": "@dash-ota/shared",
+  "version": "0.1.0",
+  "description": "Shared crypto + protocol core for dash-ota (Ed25519, AES-256-GCM, ECDSA device-key auth, canonical JSON, manifest schema).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "source": "./src/index.ts",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/Scripting-Bear/dash-ota.git",
+    "directory": "packages/shared"
+  },
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "selftest": "tsx src/selftest.ts",
+    "prepublishOnly": "npm run build"
+  }
+}

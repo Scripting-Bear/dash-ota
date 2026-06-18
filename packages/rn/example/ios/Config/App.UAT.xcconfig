@@ -1,0 +1,6 @@
+// dash-ota — UAT flavour.
+OTA_CHANNEL = uat
+OTA_SERVER_URL = http:/$()/localhost:4455
+OTA_PUBLIC_KEYS = vvYysxSSya3UrvPZ1amvNDzQNx681YqZENTzCcJLltc=
+OTA_RUNTIME_VERSION = rt1
+PRODUCT_BUNDLE_IDENTIFIER = dashota.example.uat

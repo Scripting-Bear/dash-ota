@@ -1,0 +1,7 @@
+// dash-ota — DEV flavour (mirrors go-trade's ios/Config/App.*.xcconfig pattern).
+// NOTE: `//` starts a comment in xcconfig, so the URL uses the `$()` trick to emit `//`.
+OTA_CHANNEL = dev
+OTA_SERVER_URL = http:/$()/localhost:4455
+OTA_PUBLIC_KEYS = 2Xzy1lx9F0REwnHkJEaiXjx7CjTaIHRaeWnrghHPhb4=
+OTA_RUNTIME_VERSION = rt1
+PRODUCT_BUNDLE_IDENTIFIER = dashota.example.dev

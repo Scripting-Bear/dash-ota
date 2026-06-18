@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Signing keys — NEVER commit private keys. Public key is fine to share/embed.
+.keys/
+*.private.pem
+*.key
+
+# Local backend state / uploaded bundles
+packages/backend/storage/
+packages/backend/.data/
+
+# Logs / scratch
+*.log
+.DS_Store

@@ -1,0 +1,27 @@
+{
+  "name": "dash-ota",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Hardened over-the-air (OTA) update system for React Native: RN client package + CLI (signing) + backend distributor.",
+  "type": "module",
+  "workspaces": [
+    "packages/shared",
+    "packages/backend",
+    "packages/cli"
+  ],
+  "scripts": {
+    "test:core": "tsx packages/shared/src/selftest.ts",
+    "test:e2e": "tsx packages/backend/src/e2e.test.ts",
+    "test:express": "tsx packages/backend/src/express.smoke.test.ts",
+    "backend": "tsx packages/backend/src/server.ts",
+    "backend:express": "tsx packages/backend/examples/express-server.ts",
+    "cli": "tsx packages/cli/src/index.ts",
+    "build": "npm -w @dash-ota/cli run build",
+    "typecheck": "tsc -p packages/shared && tsc -p packages/backend && tsc -p packages/cli"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

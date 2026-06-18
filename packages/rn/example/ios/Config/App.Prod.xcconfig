@@ -1,0 +1,6 @@
+// dash-ota — PROD flavour.
+OTA_CHANNEL = prod
+OTA_SERVER_URL = http:/$()/localhost:4455
+OTA_PUBLIC_KEYS = MclNZsT7zIV+qS2h23YgYW6D3yvbDtBKQDafBShqFGs=
+OTA_RUNTIME_VERSION = rt1
+PRODUCT_BUNDLE_IDENTIFIER = dashota.example
