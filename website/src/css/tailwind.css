@@ -1,0 +1,104 @@
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Stitch "Linear-style" dark landing. Scoped under `.dash-landing` and isolated from the
+ * Infima docs. Tailwind preflight is disabled, so the few base behaviours the utilities
+ * depend on are restored here, landing-scoped.
+ */
+
+.dash-landing *,
+.dash-landing *::before,
+.dash-landing *::after {
+  box-sizing: border-box;
+  border-width: 0;
+  border-style: solid;
+  border-color: #27272a;
+}
+
+.dash-landing {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: #ededef;
+  background-color: #09090b;
+  position: relative;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+.dash-landing h1,
+.dash-landing h2,
+.dash-landing h3,
+.dash-landing h4,
+.dash-landing p,
+.dash-landing pre,
+.dash-landing table {
+  margin: 0;
+}
+/* preflight is off, so reset the UA <button> chrome ourselves (grey pill leak) */
+.dash-landing button {
+  font-family: inherit;
+  cursor: pointer;
+  background-color: transparent;
+  background-image: none;
+  -webkit-appearance: none;
+  appearance: none;
+  color: inherit;
+}
+/* kill Infima's global table zebra-striping on the landing tables */
+.dash-landing table {
+  border-collapse: collapse;
+}
+.dash-landing tbody tr {
+  background-color: transparent !important;
+}
+.dash-landing tbody tr:hover {
+  background-color: rgba(9, 9, 11, 0.6) !important;
+}
+.dash-landing .font-mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+/* gradient headline (explicit so -webkit-text-fill-color is always set) */
+.dash-landing .grad-text {
+  background: linear-gradient(to right, #4254f0 0%, #8893e6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* Stitch code syntax-highlighting tokens */
+.dash-landing .token-keyword {
+  color: #5e6ad2;
+}
+.dash-landing .token-string {
+  color: #45d09e;
+}
+.dash-landing .token-function {
+  color: #f4bf4f;
+}
+.dash-landing .token-comment {
+  color: #8f8f99;
+}
+
+/* Pipeline diagram dotted grid (kept as a class to avoid fragile arbitrary values) */
+.dash-landing .pipeline-grid {
+  background-image: linear-gradient(to right, #27272a 1px, transparent 1px),
+    linear-gradient(to bottom, #27272a 1px, transparent 1px);
+  background-size: 4rem 4rem;
+  -webkit-mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, #000 70%, transparent 100%);
+  mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, #000 70%, transparent 100%);
+  opacity: 0.2;
+}
+
+.dash-landing .material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+}

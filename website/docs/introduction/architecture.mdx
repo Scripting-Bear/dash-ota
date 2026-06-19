@@ -4,6 +4,8 @@ title: Architecture
 description: How dash-ota's three packages divide trust so no single compromise can forge or apply an update.
 ---
 
+import ArchitectureDiagram from '@site/src/components/ArchitectureDiagram';
+
 # Architecture
 
 dash-ota is built around one idea: **divide trust** so that a compromise of any single component
@@ -12,28 +14,7 @@ update.
 
 ## The pieces
 
-```mermaid
-flowchart TB
-    subgraph CI["🔐 CI / release machine — holds the Ed25519 PRIVATE KEY"]
-      CLI["@dash-ota/cli<br/>bundle → hermesc (HBC) → AES-256-GCM encrypt → SIGN manifest"]
-    end
-    CLI -- "POST /admin/publish<br/>(pre-signed manifest + ciphertext)" --> BE
-
-    subgraph SERVER["Your API (TLS today; pinning later)"]
-      BE["@dash-ota/backend<br/>verify request (ECDSA) · targeting + rollout<br/>serve PRE-SIGNED data · NEVER holds signing key"]
-    end
-
-    APP["react-native-dash-ota<br/>(JS orchestration)"]
-    APP -- "POST /ota/v1/check (device-key signed)" --> BE
-    BE -- "signed manifest + 1-time token" --> APP
-    APP -- "GET /ota/v1/download (token)" --> BE
-    BE -- "AES-GCM ciphertext" --> APP
-
-    APP --> NATIVE
-    subgraph NATIVE["Native (Kotlin / Swift) — trust-critical"]
-      N["verify Ed25519 (embedded key) → AES-GCM decrypt<br/>→ per-file SHA-256 → atomic slot stage<br/>→ apply on cold start → crash-loop rollback"]
-    end
-```
+<ArchitectureDiagram />
 
 ## Division of trust
 

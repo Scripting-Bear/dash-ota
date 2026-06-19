@@ -48,18 +48,56 @@ const config: Config = {
           showLastUpdateTime: true,
         },
         blog: false,
-        theme: { customCss: './src/css/custom.css' },
+        theme: { customCss: ['./src/css/custom.css', './src/css/tailwind.css'] },
       } satisfies Preset.Options,
     ],
+  ],
+
+  plugins: [
+    // Tailwind (scoped to the landing page via `important: '.dash-landing'`, preflight off)
+    function tailwindPlugin() {
+      return {
+        name: 'tailwind-plugin',
+        configurePostCss(postcssOptions: { plugins: unknown[] }) {
+          postcssOptions.plugins.push(require('tailwindcss'), require('autoprefixer'));
+          return postcssOptions;
+        },
+      };
+    },
   ],
 
   themeConfig: {
     image: 'img/logo.svg',
     colorMode: {
       defaultMode: 'dark',
-      respectPrefersColorScheme: true,
+      disableSwitch: true,
+      respectPrefersColorScheme: false,
     },
-    mermaid: { theme: { light: 'neutral', dark: 'dark' } },
+    mermaid: {
+      theme: { light: 'base', dark: 'base' },
+      options: {
+        fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+        themeVariables: {
+          fontFamily: 'Inter, system-ui, -apple-system, sans-serif',
+          fontSize: '13px',
+          background: '#09090b',
+          primaryColor: '#121214',
+          primaryBorderColor: '#34343a',
+          primaryTextColor: '#ededef',
+          secondaryColor: '#16161a',
+          tertiaryColor: '#0e0e12',
+          mainBkg: '#121214',
+          nodeBorder: '#34343a',
+          lineColor: '#6a6a76',
+          textColor: '#c4c4cc',
+          titleColor: '#ffffff',
+          clusterBkg: 'rgba(18, 18, 20, 0.5)',
+          clusterBorder: '#34343a',
+          edgeLabelBackground: '#0e0e12',
+          nodeTextColor: '#ededef',
+        },
+      },
+    },
     docs: { sidebar: { hideable: true, autoCollapseCategories: true } },
     navbar: {
       title: 'dash-ota',
