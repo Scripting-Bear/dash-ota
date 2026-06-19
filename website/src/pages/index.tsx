@@ -24,7 +24,7 @@ const CMP = [
 function Hero() {
   const bear = useBaseUrl('/img/scripting-bear.png');
   return (
-    <header className="hero">
+    <header className="dashHero">
       <span className="heroBadge">
         <img src={bear} alt="Scripting Bear" /> by Scripting Bear
       </span>

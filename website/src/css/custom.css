@@ -54,20 +54,27 @@ html { scroll-behavior: smooth; }
 }
 .button--primary:hover { color: #fff; filter: brightness(1.08); transform: translateY(-1px); }
 .button { transition: transform 0.15s ease, filter 0.15s ease; font-weight: 650; }
+.button--outline {
+  border: 1px solid var(--ifm-color-emphasis-400);
+  color: var(--ifm-font-color-base);
+}
+.button--outline:hover { border-color: var(--ifm-color-primary); color: var(--ifm-color-primary); background: transparent; }
+.button--secondary { background: var(--ifm-color-emphasis-200); color: var(--ifm-font-color-base); }
+.button--secondary:hover { background: var(--ifm-color-emphasis-300); color: var(--ifm-font-color-base); }
 
 /* ---------- Hero ---------- */
-.hero {
+.dashHero {
   position: relative; overflow: hidden; text-align: center;
   padding: 5.5rem 1rem 3rem;
 }
-.hero::before {
+.dashHero::before {
   content: ''; position: absolute; inset: -40% 0 auto 0; height: 720px; z-index: 0;
   background:
     radial-gradient(620px 320px at 30% 12%, rgba(66, 99, 235, 0.22), transparent 70%),
     radial-gradient(620px 320px at 72% 4%, rgba(124, 77, 255, 0.22), transparent 70%);
   pointer-events: none;
 }
-.hero > * { position: relative; z-index: 1; }
+.dashHero > * { position: relative; z-index: 1; }
 .heroBadge {
   display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 1.4rem;
   padding: 0.32rem 0.8rem 0.32rem 0.4rem; border-radius: 999px; font-size: 0.82rem; font-weight: 600;
@@ -158,12 +165,12 @@ html { scroll-behavior: smooth; }
 }
 
 /* nothing should exceed the viewport */
-.hero, .section, .codeWindow, .guarantee, .cmpGrid { max-width: 100%; }
+.dashHero, .section, .codeWindow, .guarantee, .cmpGrid { max-width: 100%; }
 .codeWindow { box-sizing: border-box; }
 .codeWindow pre, .codeWindow code { white-space: pre; }
 
 @media (max-width: 996px) {
-  .hero { padding: 4rem 1rem 2.5rem; }
+  .dashHero { padding: 4rem 1rem 2.5rem; }
   .section { padding: 3rem 0; }
   .guarantee { padding: 1.8rem 1.3rem; }
 }
@@ -178,6 +185,6 @@ html { scroll-behavior: smooth; }
 }
 
 @media (max-width: 480px) {
-  .hero { padding: 3rem 0.75rem 2rem; }
+  .dashHero { padding: 3rem 0.75rem 2rem; }
   .heroBadge { font-size: 0.74rem; }
 }
