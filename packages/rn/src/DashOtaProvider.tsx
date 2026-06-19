@@ -21,7 +21,34 @@ export interface DashOtaProviderProps {
   children: React.ReactNode;
 }
 
-/** Wrap the app root to enable OTA. */
+/**
+ * Wrap your app root to enable OTA. On launch it reads the current bundle, enrolls the hardware
+ * device key (once), and — by default — checks → downloads → natively verifies/stages → schedules
+ * an apply on next cold start. Everything fails closed: any error leaves the last-known-good /
+ * embedded bundle running. State + actions are exposed via {@link useOtaUpdate}.
+ *
+ * @param props `config` ({@link OtaConfig}) + your app's `children`.
+ *
+ * @example
+ * ```tsx
+ * import { DashOtaProvider } from 'react-native-dash-ota';
+ *
+ * export default function Root() {
+ *   return (
+ *     <DashOtaProvider
+ *       config={{
+ *         appVersion: '1.4.0',
+ *         storage,                                     // AsyncStorage / MMKV / secure-storage adapter
+ *         getEnrollToken: () => auth.getSessionToken(), // ties the device key to a real user
+ *         checkOnAppForeground: true,
+ *       }}
+ *     >
+ *       <App />
+ *     </DashOtaProvider>
+ *   );
+ * }
+ * ```
+ */
 export function DashOtaProvider({ config, children }: DashOtaProviderProps): React.ReactElement {
   const logger = config.logger ?? consoleLogger;
   const [status, setStatus] = useState<OtaStatus>('idle');

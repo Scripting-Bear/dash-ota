@@ -98,8 +98,27 @@ function middlewareFromRoutes(routes: readonly OtaRoute[]): OtaMiddleware {
 /**
  * Create the OTA distributor as a single Connect/Express middleware.
  *
+ * Mount it at the **root** of your app — the OTA routes are absolute (`/ota/v1/*`, `/admin/*`,
+ * `/health`) and the device signs over the request `path`, so a sub-path mount breaks signature
+ * verification.
+ *
  * @param options partial config + hooks (auth, analytics, logger) + optional bring-your-own store
  * @returns a `(req, res, next)` middleware to `app.use(...)` at the root
+ *
+ * @example
+ * ```ts
+ * import express from 'express';
+ * import { dashOtaMiddleware, rawBodySaver } from '@dash-ota/backend';
+ *
+ * const app = express();
+ * // The signature is over the RAW body; keep the bytes if a parser runs first.
+ * app.use(express.json({ verify: rawBodySaver }));
+ * app.use(dashOtaMiddleware({
+ *   adminToken: process.env.OTA_ADMIN_TOKEN,
+ *   verifyEnrollToken: (token) => auth.verifySession(token),
+ * }));
+ * app.listen(4455);
+ * ```
  */
 export function dashOtaMiddleware(options: OtaBackendOptions = {}): OtaMiddleware {
   const config = resolveBackendConfig(options);

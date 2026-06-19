@@ -63,6 +63,29 @@ export interface OtaBackend {
  *
  * @param options partial config + hooks (auth, analytics, logger) + optional bring-your-own store
  * @returns an {@link OtaBackend} with `.middleware`, `.listen()`, `.routes`, `.store`, `.config`
+ *
+ * @example Mount into an existing Express app
+ * ```ts
+ * import express from 'express';
+ * import { createOtaBackend, rawBodySaver } from '@dash-ota/backend';
+ *
+ * const ota = createOtaBackend({
+ *   adminToken: process.env.OTA_ADMIN_TOKEN,
+ *   verifyEnrollToken: (token) => auth.verifySession(token),
+ *   onConfirm: (e) => metrics.track('ota_confirm', e),
+ * });
+ *
+ * const app = express();
+ * app.use(express.json({ verify: rawBodySaver })); // keep raw bytes for the request signature
+ * app.use(ota.middleware);                          // mount at the ROOT
+ * app.listen(4455);
+ * ```
+ *
+ * @example Run standalone (no Express)
+ * ```ts
+ * const ota = createOtaBackend({ adminToken: process.env.OTA_ADMIN_TOKEN });
+ * await ota.listen(4455); // node:http server
+ * ```
  */
 export function createOtaBackend(options: OtaBackendOptions = {}): OtaBackend {
   const config = resolveBackendConfig(options);
