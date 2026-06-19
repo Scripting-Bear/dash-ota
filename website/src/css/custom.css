@@ -1,0 +1,183 @@
+/**
+ * dash-ota theme — blue → purple, matched to the Scripting Bear mark.
+ */
+
+:root {
+  --ifm-color-primary: #4263eb;
+  --ifm-color-primary-dark: #2c4ee8;
+  --ifm-color-primary-darker: #2046e6;
+  --ifm-color-primary-darkest: #1b3bc0;
+  --ifm-color-primary-light: #5a78ee;
+  --ifm-color-primary-lighter: #6884ef;
+  --ifm-color-primary-lightest: #8ba2f3;
+  --ifm-code-font-size: 90%;
+  --ifm-font-family-base: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  --ifm-heading-font-weight: 750;
+  --ifm-navbar-shadow: 0 1px 0 rgba(0, 0, 0, 0.06);
+  --dash-accent: #7c4dff;
+  --dash-grad: linear-gradient(95deg, #4263eb 0%, #7c4dff 55%, #a368fc 100%);
+  --docusaurus-highlighted-code-line-bg: rgba(66, 99, 235, 0.12);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #748ffc;
+  --ifm-color-primary-dark: #5c7cfb;
+  --ifm-color-primary-darker: #4d70fa;
+  --ifm-color-primary-darkest: #2b54f0;
+  --ifm-color-primary-light: #8ca2fd;
+  --ifm-color-primary-lighter: #9bb0fd;
+  --ifm-color-primary-lightest: #b3c2fe;
+  --ifm-background-color: #0a0c12;
+  --ifm-background-surface-color: #11131c;
+  --dash-accent: #9775fa;
+  --dash-grad: linear-gradient(95deg, #5c7cfb 0%, #9775fa 55%, #c0a0ff 100%);
+  --docusaurus-highlighted-code-line-bg: rgba(116, 143, 252, 0.16);
+}
+
+html { scroll-behavior: smooth; }
+
+/* ---------- Navbar ---------- */
+.navbar { backdrop-filter: saturate(140%) blur(8px); }
+[data-theme='dark'] .navbar { background: rgba(10, 12, 18, 0.72); }
+.navbar__logo img { border-radius: 7px; }
+.navbar-github::before {
+  content: ''; width: 22px; height: 22px; display: flex;
+  background: var(--ifm-navbar-link-color);
+  mask: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2 0 1.9 1.2 1.9 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6 0-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8 0 3.2.9.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1 .9 2.2v3.3c0 .3.1.7.8.6A12 12 0 0 0 12 .3Z'/%3E%3C/svg%3E") no-repeat;
+}
+.navbar-github:hover::before { background: var(--ifm-color-primary); }
+
+/* ---------- Buttons ---------- */
+.button--primary {
+  background: var(--dash-grad); border: none; color: #fff;
+  box-shadow: 0 6px 20px -8px rgba(124, 77, 255, 0.7);
+}
+.button--primary:hover { color: #fff; filter: brightness(1.08); transform: translateY(-1px); }
+.button { transition: transform 0.15s ease, filter 0.15s ease; font-weight: 650; }
+
+/* ---------- Hero ---------- */
+.hero {
+  position: relative; overflow: hidden; text-align: center;
+  padding: 5.5rem 1rem 3rem;
+}
+.hero::before {
+  content: ''; position: absolute; inset: -40% 0 auto 0; height: 720px; z-index: 0;
+  background:
+    radial-gradient(620px 320px at 30% 12%, rgba(66, 99, 235, 0.22), transparent 70%),
+    radial-gradient(620px 320px at 72% 4%, rgba(124, 77, 255, 0.22), transparent 70%);
+  pointer-events: none;
+}
+.hero > * { position: relative; z-index: 1; }
+.heroBadge {
+  display: inline-flex; align-items: center; gap: 0.5rem; margin-bottom: 1.4rem;
+  padding: 0.32rem 0.8rem 0.32rem 0.4rem; border-radius: 999px; font-size: 0.82rem; font-weight: 600;
+  border: 1px solid var(--ifm-color-emphasis-300); background: var(--ifm-background-surface-color);
+}
+.heroBadge img { width: 22px; height: 22px; border-radius: 6px; }
+.heroTitle {
+  font-size: clamp(2.3rem, 6vw, 4.1rem); font-weight: 820; letter-spacing: -0.03em;
+  line-height: 1.04; margin: 0 auto 1.1rem; max-width: 16ch;
+}
+.heroGrad {
+  background: var(--dash-grad); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.heroSub { font-size: 1.2rem; opacity: 0.82; max-width: 56ch; margin: 0 auto 2rem; line-height: 1.55; }
+.heroBtns { display: flex; gap: 0.8rem; justify-content: center; flex-wrap: wrap; }
+.heroPills { margin-top: 2.4rem; display: flex; gap: 0.5rem; justify-content: center; flex-wrap: wrap; }
+.heroPill {
+  font-size: 0.78rem; padding: 0.3rem 0.75rem; border-radius: 999px; opacity: 0.92;
+  border: 1px solid var(--ifm-color-emphasis-200); background: var(--ifm-background-surface-color);
+}
+
+/* ---------- Code window ---------- */
+.codeWindow {
+  max-width: 720px; margin: 2.8rem auto 0; border-radius: 14px; overflow: hidden;
+  border: 1px solid var(--ifm-color-emphasis-200);
+  box-shadow: 0 30px 60px -30px rgba(60, 80, 200, 0.45);
+  text-align: left;
+}
+.codeWindow .winBar {
+  display: flex; align-items: center; gap: 0.45rem; padding: 0.6rem 0.9rem;
+  background: var(--ifm-background-surface-color); border-bottom: 1px solid var(--ifm-color-emphasis-200);
+}
+.codeWindow .dot { width: 11px; height: 11px; border-radius: 50%; }
+.codeWindow .dot.r { background: #ff5f57; } .codeWindow .dot.y { background: #febc2e; } .codeWindow .dot.g { background: #28c840; }
+.codeWindow .winTitle { margin-left: 0.5rem; font-size: 0.78rem; opacity: 0.6; }
+.codeWindow pre { margin: 0; border-radius: 0; }
+.codeWindow .theme-code-block { margin: 0; box-shadow: none; }
+
+/* ---------- Sections ---------- */
+.section { padding: 4rem 0; }
+.sectionAlt { background: var(--ifm-background-surface-color); }
+.sectionEyebrow { text-align: center; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; font-size: 0.78rem; color: var(--ifm-color-primary); }
+.sectionTitle { text-align: center; font-size: clamp(1.7rem, 4vw, 2.4rem); font-weight: 800; margin: 0.4rem 0 0.5rem; }
+.sectionSub { text-align: center; opacity: 0.72; margin-bottom: 2.4rem; max-width: 60ch; margin-left: auto; margin-right: auto; }
+
+/* ---------- Feature cards ---------- */
+.fCard {
+  height: 100%; padding: 1.5rem; border-radius: 16px;
+  border: 1px solid var(--ifm-color-emphasis-200); background: var(--ifm-background-surface-color);
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+.fCard:hover { transform: translateY(-4px); border-color: var(--dash-accent); box-shadow: 0 18px 40px -24px rgba(124, 77, 255, 0.6); }
+.fIcon {
+  width: 44px; height: 44px; display: grid; place-items: center; border-radius: 12px; font-size: 1.35rem;
+  background: linear-gradient(140deg, rgba(66,99,235,0.16), rgba(124,77,255,0.16));
+  border: 1px solid var(--ifm-color-emphasis-200);
+}
+.fCard h3 { margin: 0.85rem 0 0.4rem; font-size: 1.1rem; }
+.fCard p { margin: 0; opacity: 0.78; font-size: 0.95rem; line-height: 1.5; }
+
+/* ---------- Security band ---------- */
+.guarantee {
+  max-width: 900px; margin: 0 auto; padding: 2.2rem 2rem; border-radius: 20px; text-align: center;
+  background: var(--dash-grad); color: #fff;
+  box-shadow: 0 30px 70px -34px rgba(124, 77, 255, 0.8);
+}
+.guarantee h2 { color: #fff; font-size: clamp(1.4rem, 3.4vw, 2.1rem); margin: 0 0 0.6rem; }
+.guarantee p { color: rgba(255,255,255,0.92); margin: 0; font-size: 1.05rem; }
+
+/* ---------- Compare strip ---------- */
+.cmpGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+.cmpCard { padding: 1.2rem 1.3rem; border-radius: 14px; border: 1px solid var(--ifm-color-emphasis-200); background: var(--ifm-background-surface-color); }
+.cmpCard .big { font-size: 1.7rem; font-weight: 800; background: var(--dash-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.cmpCard p { opacity: 0.78; margin: 0.2rem 0 0; font-size: 0.92rem; }
+
+/* ---------- Footer credit ---------- */
+.footer__copyright a { color: var(--ifm-color-primary-lighter); }
+
+/* ---------- Responsive ---------- */
+/* Wide tables (comparison matrix, config tables) scroll inside their column instead of
+   blowing the page width out — the #1 cause of horizontal overflow on small screens. */
+.markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* nothing should exceed the viewport */
+.hero, .section, .codeWindow, .guarantee, .cmpGrid { max-width: 100%; }
+.codeWindow { box-sizing: border-box; }
+.codeWindow pre, .codeWindow code { white-space: pre; }
+
+@media (max-width: 996px) {
+  .hero { padding: 4rem 1rem 2.5rem; }
+  .section { padding: 3rem 0; }
+  .guarantee { padding: 1.8rem 1.3rem; }
+}
+
+@media (max-width: 768px) {
+  .heroTitle { font-size: clamp(2rem, 9vw, 2.8rem); max-width: 100%; }
+  .heroSub { font-size: 1.05rem; }
+  .heroBtns .button { width: 100%; max-width: 320px; }
+  .codeWindow { margin-top: 2rem; }
+  .codeWindow .theme-code-block-highlighted-line, .codeWindow pre { font-size: 0.8rem; }
+  .cmpGrid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 480px) {
+  .hero { padding: 3rem 0.75rem 2rem; }
+  .heroBadge { font-size: 0.74rem; }
+}

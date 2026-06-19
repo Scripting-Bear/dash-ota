@@ -1,0 +1,68 @@
+---
+sidebar_position: 2
+title: dash-ota vs alternatives
+description: How dash-ota compares to Stallion, hot-updater, CodePush, and expo-updates.
+---
+
+# dash-ota vs the alternatives
+
+There are good OTA tools for React Native. dash-ota's distinguishing bet is a **security model
+that holds even against a compromised backend or a broken TLS channel**, while staying fully
+**self-hosted and config-driven**. Here's an honest comparison.
+
+## Feature matrix
+
+| | **dash-ota** | Stallion | hot-updater | CodePush (App Center) | expo-updates |
+|---|:--:|:--:|:--:|:--:|:--:|
+| Self-hosted backend | ✅ (yours) | ❌ SaaS | ✅ (your S3/Supabase/CF) | ❌ (retired) | ⚠️ EAS or self-host |
+| **Signed bundles, verified in native** | ✅ Ed25519, embedded key | ❌ | ❌ | ❌ | ✅ (code signing, opt-in) |
+| **Safe if backend is breached** | ✅ can't forge | ❌ | ❌ | ❌ | ✅ if signing on |
+| Payload encryption (AES-256-GCM) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **Hardware device-key request auth** | ✅ Keystore/Enclave | ❌ | ❌ | ❌ | ❌ |
+| Anti-replay (nonce + timestamp) | ✅ | ❌ | ❌ | ⚠️ | ⚠️ |
+| No S3 URL on the client | ✅ API-only + 1-time token | ❌ | ❌ (signed URL) | ❌ | ❌ |
+| runtimeVersion / native-compat gate | ✅ enforced both sides | ⚠️ | ✅ | ⚠️ targetBinary | ✅ |
+| Channels (dev/uat/prod) | ✅ per-flavour key | ✅ | ✅ | ✅ deployments | ✅ |
+| Staged rollout % | ✅ deterministic | ✅ | ✅ | ✅ | ✅ |
+| **Crash-loop auto-rollback** | ✅ → last-good → embedded | ⚠️ | ⚠️ | ✅ | ✅ |
+| Server-side auto-pause on failures | ✅ | ❌ | ❌ | ⚠️ | ⚠️ |
+| Force-update ("go to store") gate | ✅ built-in | ❌ | ❌ | ❌ | ⚠️ |
+| `npx` release CLI | ✅ | ✅ | ✅ | ✅ | ✅ EAS |
+| New Arch + Hermes (RN 0.79+) | ✅ | ✅ | ✅ | ⚠️ | ✅ |
+| License / ownership | MIT, all yours | proprietary | MIT | retiring 2025 | mixed |
+
+> Legend: ✅ first-class · ⚠️ partial/possible-with-work · ❌ not available. Competitor columns
+> reflect the commonly-documented behaviour at the time of writing; verify against their latest docs.
+
+## Why the security columns matter
+
+Most OTA tools secure the *transport* (HTTPS, signed download URLs) but trust the **server** to
+hand the client the right bytes. If that server (or the channel) is compromised, it can serve
+malicious JavaScript that runs with your app's full privileges.
+
+dash-ota removes that trust:
+
+- **Signing happens in the CLI, not the server.** The backend never has the private key, so it
+  physically cannot forge an update — the worst it can do is serve a *validly-signed, older*
+  bundle, which the **downgrade guard** rejects.
+- **Verification happens in native, before JS runs**, against a key compiled into the binary —
+  so a tampered bundle never executes, even over a hostile network.
+- **Enrollment transmits no secret.** Each device proves itself with a key generated in the
+  **Secure Enclave / AndroidKeyStore**; only the public half is ever sent.
+
+See the [full security model](/docs/concepts/security-model) and [threat model](/docs/security/threat-model).
+
+## When *not* to choose dash-ota
+
+- You want a zero-ops managed dashboard and are comfortable trusting a vendor → a SaaS like
+  Stallion is less setup.
+- You're all-in on Expo/EAS → `expo-updates` with code signing is well-integrated.
+- You need OTA on RN versions older than 0.79 / old architecture → dash-ota targets New Arch.
+
+dash-ota's sweet spot is teams that want **ownership + a defensible security story** and are
+willing to run a small backend.
+
+## Migrating?
+
+- [Migrate from Stallion →](/docs/guides/migrate-from-stallion)
+- [Migrate from CodePush / hot-updater →](/docs/guides/migrate-from-codepush)
