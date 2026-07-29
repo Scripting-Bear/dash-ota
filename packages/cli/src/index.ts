@@ -16,7 +16,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   buildRelease,
@@ -113,6 +113,19 @@ function cmdFingerprint(args: ParsedArgs): void {
   console.log(`  ios:     ${inputs.nativeDirHashes.ios}`);
 }
 
+/** Locate the RN-bundled `hermesc` binary for the current OS, or null if absent. */
+function resolveHermesc(project: string): string | null {
+  const base = join(project, 'node_modules', 'react-native', 'sdks', 'hermesc');
+  const rel =
+    process.platform === 'darwin'
+      ? 'osx-bin/hermesc'
+      : process.platform === 'win32'
+        ? 'win64-bin/hermesc.exe'
+        : 'linux64-bin/hermesc';
+  const p = join(base, rel);
+  return existsSync(p) ? p : null;
+}
+
 /** Wrap `react-native bundle` into a payload dir. */
 function cmdBundle(args: ParsedArgs): void {
   const project = flagStr(args, 'project', process.cwd());
@@ -135,7 +148,26 @@ function cmdBundle(args: ParsedArgs): void {
   const res = spawnSync('npx', cmd, { cwd: project, stdio: 'inherit' });
   if (res.status !== 0) throw new Error(`react-native bundle failed (exit ${res.status ?? 'null'})`);
   console.log(`\n✓ bundle written to ${out}`);
-  console.log(`  NOTE: for Hermes builds, compile ${bundleName} with the binary's hermesc (HBC) before publish.`);
+
+  const plainBundle = join(out, bundleName);
+  if (flagBool(args, 'hermes')) {
+    // Compile to Hermes bytecode (HBC) and replace the plain JS bundle in place (same name RN
+    // loads). Fail loud if hermesc is missing rather than silently shipping a non-HBC bundle.
+    const hermesc = resolveHermesc(project);
+    if (!hermesc) {
+      throw new Error(
+        '--hermes requested but hermesc was not found under node_modules/react-native/sdks/hermesc — cannot produce an HBC bundle',
+      );
+    }
+    const hbc = `${plainBundle}.hbc`;
+    console.log(`$ ${hermesc} -emit-binary -O -out ${hbc} ${plainBundle}`);
+    const hres = spawnSync(hermesc, ['-emit-binary', '-O', '-out', hbc, plainBundle], { stdio: 'inherit' });
+    if (hres.status !== 0) throw new Error(`hermesc failed (exit ${hres.status ?? 'null'})`);
+    renameSync(hbc, plainBundle);
+    console.log(`✓ compiled Hermes bytecode (HBC): ${plainBundle}`);
+  } else {
+    console.log(`  NOTE: this is a PLAIN JS bundle. For Hermes builds, re-run with --hermes to emit HBC before publish.`);
+  }
   console.log(`  next: dash-ota publish --bundle-dir ${out} --platform ${platform} ...`);
 }
 
@@ -331,7 +363,7 @@ function printHelp(): void {
                   [--server --admin-token]
   register-key    --key-id <id> (--pub <rawB64> | --key-file <.public.json>)
   fingerprint     --project <path>
-  bundle          --project <path> --platform ios|android --out <dir> [--dev]
+  bundle          --project <path> --platform ios|android --out <dir> [--dev] [--hermes]
   publish         --bundle-dir <dir> --platform --channel --runtime-version auto|<R>
                   --bundle-version <n> [--mandatory] [--target-app-versions <range>]
                   [--rollout <pct>] [--release-note <txt>] [--interactive] [--no-upload]
