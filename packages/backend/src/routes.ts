@@ -124,10 +124,28 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
   const log = config.logger;
   const routes: OtaRoute[] = [];
 
+  // Liveness: the process is up. MUST NOT touch dependencies — a liveness probe should not fail
+  // (and trigger a restart) just because the database is briefly unreachable.
   routes.push({
     method: 'GET',
     path: '/health',
-    handler: async () => json({ ok: true, releases: (await store.listReleases()).length }),
+    handler: () => json({ ok: true }),
+  });
+
+  // Readiness: can we actually serve? Touches the store, so a load balancer can pull this instance
+  // out of rotation when its database/backing store is unreachable. 503 when not ready.
+  routes.push({
+    method: 'GET',
+    path: '/ready',
+    handler: async () => {
+      try {
+        const releases = (await store.listReleases()).length;
+        return json({ ready: true, releases });
+      } catch (err) {
+        log?.warn(`readiness check failed: ${err instanceof Error ? err.message : 'store unreachable'}`);
+        return json({ ready: false, error: 'store unreachable' }, 503);
+      }
+    },
   });
 
   // --- client: enroll (register the device's hardware public key) -------

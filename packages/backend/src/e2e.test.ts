@@ -135,6 +135,17 @@ async function main(): Promise<void> {
 
   console.log('dash-ota backend e2e\n');
 
+  await check('health is liveness-only; ready reflects the store', async () => {
+    const health = await fetch(`${base}/health`);
+    assert.equal(health.status, 200);
+    assert.deepEqual(await health.json(), { ok: true });
+    const ready = await fetch(`${base}/ready`);
+    assert.equal(ready.status, 200);
+    const body = (await ready.json()) as { ready: boolean; releases: number };
+    assert.equal(body.ready, true);
+    assert.equal(typeof body.releases, 'number');
+  });
+
   await check('admin registers the trusted public key', async () => {
     const res = await adminPost('/admin/keys', { keyId, publicKeyRawB64: keys.publicKeyRawB64 });
     assert.equal(res.status, 200);

@@ -100,7 +100,13 @@ token (a constant-time compare is REQUIRED). Missing/wrong → `403 forbidden`.
 ## 5. Endpoints
 
 ### `GET /health`
-Liveness. `200 { "ok": true, "releases": <count> }`. No auth.
+Liveness — process is up. `200 { "ok": true }`. No auth. MUST NOT touch dependencies (a liveness
+probe must not fail just because the store is briefly unreachable).
+
+### `GET /ready`
+Readiness — can this instance serve? Touches the store. `200 { "ready": true, "releases": <count> }`
+when the backing store is reachable, else `503 { "ready": false, "error": "store unreachable" }`.
+No auth. Use this for load-balancer / orchestrator rotation.
 
 ### `POST /ota/v1/enroll`
 Register the device's **public** key (called once; re-call to rotate). Auth: `enrollToken`
