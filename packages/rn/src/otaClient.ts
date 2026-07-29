@@ -1,9 +1,9 @@
 /**
  * The OTA HTTP client: enroll, check, and confirm. Small JSON calls only — the heavy,
  * trust-critical bundle download + verify + decrypt is done natively via
- * {@link downloadAndStage}. Requests are signed with the per-install HMAC secret using the
- * **native** HMAC (no node:crypto in JS); the canonical signing string matches the backend
- * exactly.
+ * {@link downloadAndStage}. Each request is signed **natively** with the device's
+ * non-exportable hardware key (ECDSA-P256; no crypto in JS); the canonical signing string
+ * matches the backend exactly.
  */
 
 import { Platform } from 'react-native';

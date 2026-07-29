@@ -113,12 +113,12 @@ check('per-file sha256 detects a swapped asset', () => {
   assert.notEqual(fileHash, sha256Hex(Buffer.from('malicious', 'utf8')));
 });
 
-check('HMAC request signing is deterministic + constant-time compared', () => {
-  const secret = Buffer.from('per-install-secret').toString('base64');
-  const a = hmacSha256Hex(secret, 'POST/ota/v1/check|nonce|123');
-  const b = hmacSha256Hex(secret, 'POST/ota/v1/check|nonce|123');
+check('HMAC-SHA256 primitive is deterministic + constant-time compared', () => {
+  const key = Buffer.from('mac-key').toString('base64');
+  const a = hmacSha256Hex(key, 'POST/ota/v1/check|nonce|123');
+  const b = hmacSha256Hex(key, 'POST/ota/v1/check|nonce|123');
   assert.equal(constantTimeEqualHex(a, b), true);
-  assert.equal(constantTimeEqualHex(a, hmacSha256Hex(secret, 'tampered')), false);
+  assert.equal(constantTimeEqualHex(a, hmacSha256Hex(key, 'tampered')), false);
 });
 
 check('manifest shape validation catches malformed input', () => {

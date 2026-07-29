@@ -1,14 +1,14 @@
 /**
  * Wire protocol types shared by the RN client and the backend. All API communication is
- * JSON over HTTPS; the client signs requests with its per-install HMAC secret (issued at
- * enroll) and echoes a server-issued nonce for anti-replay.
+ * JSON over HTTPS; the client signs each request with its non-exportable hardware device key
+ * (ECDSA-P256, registered at enroll) and echoes a server-issued nonce for anti-replay.
  *
  * @module protocol
  */
 
 import type { Channel, Platform, SignedManifest } from './manifest.js';
 
-/** Header names for per-install request signing / anti-replay. */
+/** Header names for device-key request signing / anti-replay. */
 export const OTA_HEADERS = {
   installId: 'x-ota-install',
   nonce: 'x-ota-nonce',

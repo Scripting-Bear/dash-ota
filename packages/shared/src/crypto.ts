@@ -3,13 +3,16 @@
  * crypto deps, so the trust base is small and auditable).
  *
  * - **Ed25519** for manifest signing/verification (the integrity guarantee).
- * - **AES-256-GCM** for bundle payload confidentiality (defense-in-depth).
+ * - **AES-256-GCM** for bundle payload encryption (defense-in-depth; per the security model,
+ *   integrity — not active-MITM confidentiality — is the v1 guarantee).
  * - **SHA-256** for per-file integrity hashes.
- * - **HMAC-SHA256** for per-install request signing (anti-abuse / anti-replay binding).
+ * - **ECDSA-P256** to verify per-request signatures made by the device's hardware key
+ *   (the request-auth / anti-replay binding — there is no shared secret).
+ * - **HMAC-SHA256** is exposed as a generic primitive only (not part of the request-auth path).
  *
  * The native RN client re-implements the *verify* and *decrypt* halves with CryptoKit
- * (iOS) and Tink/BouncyCastle (Android); this module is the canonical reference and is used
- * by the CLI (sign/encrypt) and backend (serve).
+ * (iOS) and Tink (Ed25519) + JDK `javax.crypto` (AES/SHA) on Android; this module is the
+ * canonical reference and is used by the CLI (sign/encrypt) and backend (serve).
  *
  * @module crypto
  */
@@ -155,9 +158,10 @@ export function sha256Hex(buf: Buffer): string {
 }
 
 /**
- * HMAC-SHA256 over a string with a base64 key, as hex. Used for per-install request signing.
+ * HMAC-SHA256 over a string with a base64 key, as hex. Generic MAC primitive (not used by the
+ * request-auth path, which is ECDSA device-key signatures — see {@link ecdsaP256VerifyB64}).
  * @param keyB64 base64-encoded HMAC key
- * @param data the canonical request string
+ * @param data the message to authenticate
  * @returns hex digest
  */
 export function hmacSha256Hex(keyB64: string, data: string): string {
@@ -207,8 +211,8 @@ export function randomNonceB64(bytes = 18): string {
 }
 
 /**
- * Random high-entropy secret as base64 (per-install HMAC secret, download tokens).
- * @param bytes secret length in bytes (default 32)
+ * Random high-entropy token as base64 (one-time download tokens, server-issued nonces).
+ * @param bytes token length in bytes (default 32)
  */
 export function randomSecretB64(bytes = 32): string {
   return randomBytes(bytes).toString('base64');

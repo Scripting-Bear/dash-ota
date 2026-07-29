@@ -1,10 +1,11 @@
 /**
- * In-memory + on-disk store for the POC backend. Holds published **releases** (pre-signed
+ * In-memory + on-disk store for the default backend. Holds published **releases** (pre-signed
  * manifest + ciphertext path + rollout state + adoption stats), enrolled **installs** (their
- * HMAC secrets), and ephemeral **nonce / download-token** caches for anti-replay.
+ * hardware device public key — the auth identity), and ephemeral **nonce / download-token**
+ * caches for anti-replay.
  *
  * Swap the disk/in-memory bits for Postgres + Redis + object storage when productionizing;
- * the method surface stays the same.
+ * the method surface stays the same (this is the seam the provider interfaces formalize).
  *
  * @module store
  */

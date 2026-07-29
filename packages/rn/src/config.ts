@@ -1,9 +1,9 @@
 /**
  * Host-injected configuration. The package is storage- and transport-agnostic: the host app
- * provides a key/value storage adapter (for the install id + HMAC secret), an optional
- * logger, and optional pinning/attestation plug-ins. Server URL / channel / runtimeVersion /
- * public keys come from the **native** side (embedded per build flavour), so they can't be
- * tampered from JS.
+ * provides a key/value storage adapter (for the install id), an optional logger, and optional
+ * pinning/attestation plug-ins. Server URL / channel / runtimeVersion / public keys come from
+ * the **native** side (embedded per build flavour), so they can't be tampered from JS. The
+ * per-request signing key is a non-exportable hardware key held in the Keystore / Enclave.
  */
 
 import type { IntegrityAttestor, TransportSecurity } from './verifiers';
@@ -17,7 +17,7 @@ export interface OtaStorage {
 
 /** Configuration passed to {@link DashOtaProvider}. */
 export interface OtaConfig {
-  /** persistence for the install id + per-install HMAC secret. */
+  /** persistence for the install id (the signing key lives in the hardware Keystore / Enclave). */
   storage: OtaStorage;
   /** app marketing version (for `targetAppVersions` matching). */
   appVersion: string;
