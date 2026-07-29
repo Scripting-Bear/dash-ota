@@ -94,6 +94,10 @@
   return [_impl sha256Hex:message];
 }
 
+- (NSString *)generateNonce {
+  return [_impl generateNonce];
+}
+
 - (std::shared_ptr<facebook::react::TurboModule>)getTurboModule:
     (const facebook::react::ObjCTurboModule::InitParams &)params {
   return std::make_shared<facebook::react::NativeDashOtaSpecJSI>(params);

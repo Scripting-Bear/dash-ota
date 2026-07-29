@@ -1,5 +1,6 @@
 package com.dashota
 
+import android.util.Base64
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -7,6 +8,7 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.SecureRandom
 
 /**
  * The DashOta TurboModule. JS orchestrates; this implements the trust-critical native work:
@@ -207,6 +209,13 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
 
   override fun sha256Hex(message: String): String =
     DashOtaCrypto.sha256Hex(message.toByteArray(Charsets.UTF_8))
+
+  /** Cryptographically-secure 16-byte nonce (base64url, unpadded) from SecureRandom, for anti-replay. */
+  override fun generateNonce(): String {
+    val bytes = ByteArray(16)
+    SecureRandom().nextBytes(bytes)
+    return Base64.encodeToString(bytes, Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)
+  }
 
   companion object {
     const val NAME = NativeDashOtaSpec.NAME

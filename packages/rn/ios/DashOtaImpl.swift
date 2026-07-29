@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// @objc bridge the Obj-C++ TurboModule (`DashOta.mm`) forwards to. Holds the trust-critical
 /// pipeline (verify → decrypt → unpack → per-file hash → stage) so the heavy/secret work stays
@@ -41,6 +42,18 @@ public class DashOtaImpl: NSObject {
   @objc public func signWithDeviceKey(_ message: String) -> String { DashOtaDeviceKey.signB64(message) }
 
   @objc public func sha256Hex(_ message: String) -> String { DashOtaCrypto.sha256Hex(Data(message.utf8)) }
+
+  /// Cryptographically-secure 16-byte nonce (base64url, unpadded) from `SecRandomCopyBytes`, for anti-replay.
+  @objc public func generateNonce() -> String {
+    var bytes = [UInt8](repeating: 0, count: 16)
+    if SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) != errSecSuccess {
+      return UUID().uuidString // vanishingly unlikely; still unpredictable
+    }
+    return Data(bytes).base64EncodedString()
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "=", with: "")
+  }
 
   /// Download → Ed25519-verify → AES-GCM decrypt → unpack → per-file hash → stage. Throws on
   /// any failure (fail closed). Returns `{ bundleId, bundleVersion }`.
