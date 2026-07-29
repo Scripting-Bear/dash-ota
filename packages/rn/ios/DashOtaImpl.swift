@@ -167,6 +167,11 @@ public class DashOtaImpl: NSObject {
         .map { $0.trimmingCharacters(in: .whitespaces) }
         .filter { !$0.isEmpty }
     )
+    // When pinning is on, refuse a non-https URL — an http:// download (misconfig or SSL-strip)
+    // never triggers a server-trust challenge, so the pin would silently not be enforced.
+    if !pins.isEmpty, url.scheme?.lowercased() != "https" {
+      throw DashOtaError.message("TLS pinning is enabled but the download URL is not https")
+    }
     let session: URLSession =
       pins.isEmpty
       ? URLSession.shared

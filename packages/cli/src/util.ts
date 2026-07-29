@@ -163,7 +163,8 @@ export function assertSecureServer(server: string, allowInsecure: boolean): void
   } catch {
     throw new Error(`invalid --server URL: ${server}`);
   }
-  const isLocal = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
+  const host = u.hostname.replace(/^\[|\]$/g, ''); // URL.hostname wraps IPv6 in brackets ([::1])
+  const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
   if (u.protocol === 'http:' && !isLocal && !allowInsecure) {
     throw new Error(
       `refusing to send admin credentials over plaintext http:// to ${u.hostname} — use https:// (or --allow-insecure on a trusted private network).`,

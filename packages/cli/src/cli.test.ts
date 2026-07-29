@@ -59,9 +59,11 @@ async function main(): Promise<void> {
   await check('assertSecureServer allows localhost/https, refuses remote http', () => {
     assertSecureServer('http://localhost:4455', false);
     assertSecureServer('http://127.0.0.1:4455', false);
+    assertSecureServer('http://[::1]:4455', false); // IPv6 localhost (brackets stripped)
     assertSecureServer('https://ota.example.com', false);
     assertSecureServer('http://ota.example.com', true); // explicit escape hatch
     assert.throws(() => assertSecureServer('http://ota.example.com', false), /plaintext http/);
+    assert.throws(() => assertSecureServer('http://localhost.evil.com', false), /plaintext http/); // not local
     assert.throws(() => assertSecureServer('not a url', false), /invalid --server/);
   });
 

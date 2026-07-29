@@ -20,6 +20,7 @@ import {
   publicKeyFromRawB64,
   sha256Hex,
   type SignedManifest,
+  validateManifestShape,
   verifyManifest,
   verifyRequestEcdsa,
 } from '@dash-ota/shared';
@@ -57,7 +58,6 @@ async function authenticate(ctx: ReqCtx, store: Store, config: BackendConfig): P
   if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > config.timestampSkewMs) {
     return httpError(401, 'stale or invalid timestamp', 'stale_timestamp');
   }
-  if (!(await store.registerNonce(nonce))) return httpError(401, 'replayed nonce', 'replay');
 
   const devicePublicKeyB64 = await store.getDevicePublicKey(installId);
   if (!devicePublicKeyB64) return httpError(401, 'install not enrolled', 'not_enrolled');
@@ -68,6 +68,10 @@ async function authenticate(ctx: ReqCtx, store: Store, config: BackendConfig): P
     signature,
   );
   if (!ok) return httpError(401, 'bad request signature', 'bad_signature');
+
+  // Register the nonce (replay guard) LAST — only for a validly-signed request — so a forged
+  // signature can't fill the nonce cache or force work with an unauthenticated request.
+  if (!(await store.registerNonce(nonce))) return httpError(401, 'replayed nonce', 'replay');
   return { installId };
 }
 
@@ -217,7 +221,9 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
     method: 'GET',
     path: '/ota/v1/download',
     handler: async (ctx) => {
-      const token = header(ctx, OTA_HEADERS.downloadToken) ?? ctx.query.get('token') ?? '';
+      // Header only — never accept the one-time token via query string (it would leak into proxy
+      // access logs / Referer and could be replayed within its TTL).
+      const token = header(ctx, OTA_HEADERS.downloadToken) ?? '';
       const bundleId = await store.consumeDownloadToken(token);
       if (!bundleId) return httpError(403, 'invalid or used download token', 'bad_token');
       const stat = await store.statCiphertext(bundleId);
@@ -238,7 +244,7 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
       if (isError(auth)) return auth;
       const body = ctx.json<ConfirmRequest>();
       if (!body?.bundleId || !body.status) return httpError(400, 'invalid confirm body');
-      if (!(await store.consumeServerNonce(body.serverNonce, auth.installId))) {
+      if (!(await store.consumeServerNonce(body.serverNonce, auth.installId, body.bundleId))) {
         return httpError(401, 'invalid server nonce', 'bad_nonce');
       }
       const autoPaused = await store.recordConfirm(body.bundleId, body.status);
@@ -279,6 +285,9 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
       if (!body?.signedManifest || !body.ciphertextB64) return httpError(400, 'signedManifest and ciphertextB64 required');
 
       const { signedManifest } = body;
+      // Defense-in-depth: reject a structurally-invalid manifest even if it's validly signed.
+      const shapeErrors = validateManifestShape(signedManifest.manifest);
+      if (shapeErrors.length > 0) return httpError(400, `invalid manifest: ${shapeErrors.join('; ')}`, 'bad_manifest');
       const rawKey = await store.getTrustedKey(signedManifest.keyId);
       if (!rawKey) return httpError(400, `unknown signing keyId ${signedManifest.keyId}`, 'unknown_key');
       if (!verifyManifest(signedManifest, publicKeyFromRawB64(rawKey))) {

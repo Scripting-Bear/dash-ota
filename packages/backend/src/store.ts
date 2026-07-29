@@ -257,17 +257,27 @@ export class Store {
 
   // ---- server nonces (bind /confirm to a real /check) -------------------
 
-  /** Issue a server nonce returned from /check and echoed on /confirm (bound to the install). */
-  async issueServerNonce(installId: string, _bundleId: string): Promise<string> {
+  /**
+   * Issue a server nonce returned from /check and echoed on /confirm, bound to **both** the install
+   * and the offered bundle — so a device can only confirm the bundle it was actually offered (an
+   * arbitrary-bundle confirm can't poison adoption or trip a targeted rollout's auto-pause).
+   */
+  async issueServerNonce(installId: string, bundleId: string): Promise<string> {
     const nonce = randomSecretB64(18);
-    await this.cache.putToken(nonce, installId, this.config.nonceTtlMs);
+    await this.cache.putToken(nonce, JSON.stringify({ installId, bundleId }), this.config.nonceTtlMs);
     return nonce;
   }
 
-  /** Consume a server nonce, asserting it was the one issued to this install. */
-  async consumeServerNonce(nonce: string, installId: string): Promise<boolean> {
+  /** Consume a server nonce, asserting it was issued to this install for this exact bundle. */
+  async consumeServerNonce(nonce: string, installId: string, bundleId: string): Promise<boolean> {
     const value = await this.cache.consumeToken(nonce);
-    return value !== null && value === installId;
+    if (value === null) return false;
+    try {
+      const parsed = JSON.parse(value) as { installId: string; bundleId: string };
+      return parsed.installId === installId && parsed.bundleId === bundleId;
+    } catch {
+      return false;
+    }
   }
 
   // ---- adoption + auto-pause --------------------------------------------

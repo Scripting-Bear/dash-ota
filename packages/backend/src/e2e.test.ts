@@ -345,6 +345,31 @@ async function main(): Promise<void> {
     assert.equal(data.ok, true);
   });
 
+  await check('confirm for a bundle the server nonce was NOT issued for is rejected', async () => {
+    // Fresh check → a server nonce bound to bnd_R2_v1; confirming a different bundleId must fail.
+    const checkRes = await signedPost(
+      '/ota/v1/check',
+      {
+        installId: r2Device.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R2',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        currentBundleVersion: 0,
+      },
+      r2Device,
+    );
+    const nonce = ((await checkRes.json()) as CheckResponse).serverNonce;
+    const res = await signedPost(
+      '/ota/v1/confirm',
+      { installId: r2Device.id, bundleId: 'bnd_not_offered', runtimeVersion: 'R2', status: 'failed', serverNonce: nonce },
+      r2Device,
+    );
+    assert.equal(res.status, 401);
+    assert.equal(((await res.json()) as { code: string }).code, 'bad_nonce');
+  });
+
   await check('force-update gate: hard severity when build is below minimum', async () => {
     await adminPost('/admin/native-policy', {
       channel: 'dev',
