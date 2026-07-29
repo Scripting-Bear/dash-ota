@@ -10,10 +10,11 @@
     "packages/cli"
   ],
   "scripts": {
-    "test": "npm run test:core && npm run test:e2e && npm run test:express",
+    "test": "npm run test:core && npm run test:e2e && npm run test:express && npm run test:redis",
     "test:core": "tsx --conditions source packages/shared/src/selftest.ts",
     "test:e2e": "tsx --conditions source packages/backend/src/e2e.test.ts",
     "test:express": "tsx --conditions source packages/backend/src/express.smoke.test.ts",
+    "test:redis": "tsx --conditions source packages/backend/src/adapters/redis-cache.test.ts",
     "backend": "tsx --conditions source packages/backend/src/server.ts",
     "backend:express": "tsx --conditions source packages/backend/examples/express-server.ts",
     "cli": "tsx --conditions source packages/cli/src/index.ts",

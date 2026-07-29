@@ -104,6 +104,12 @@ export interface BackendConfig extends BackendHooks {
   requireRequestSignature: boolean;
   /** require an authenticated session token (enrollToken) on /enroll. */
   requireEnrollAuth: boolean;
+  /**
+   * One-line upgrade to a shared cache: a Redis connection string (or `OTA_REDIS_URL`). When set
+   * — and no explicit `cache` provider is passed — the backend wires the Redis {@link CacheProvider}
+   * for correct multi-instance anti-replay + rate-limiting. Requires the optional `ioredis` peer.
+   */
+  redisUrl?: string;
 }
 
 /** Read a number env var with a fallback. */
@@ -132,6 +138,7 @@ export function loadConfig(): BackendConfig {
     rateLimitWindowMs: envNum('OTA_RATE_WINDOW_MS', 60 * 1000),
     requireRequestSignature: process.env.OTA_REQUIRE_SIG !== 'false',
     requireEnrollAuth: process.env.OTA_REQUIRE_ENROLL_AUTH !== 'false',
+    redisUrl: process.env.OTA_REDIS_URL,
   };
 }
 

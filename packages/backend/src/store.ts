@@ -23,6 +23,7 @@ import {
   sha256Hex,
 } from '@dash-ota/shared';
 import type { Readable } from 'node:stream';
+import { RedisCacheProvider } from './adapters/redis-cache.js';
 import type { BackendConfig } from './config.js';
 import {
   type BlobStore,
@@ -60,7 +61,9 @@ export class Store {
   ) {
     this.db = providers?.db ?? new DiskDatabaseProvider(config.dataDir);
     this.blob = providers?.blob ?? new DiskBlobStore(config.storageDir);
-    this.cache = providers?.cache ?? new MemoryCacheProvider();
+    // Cache: explicit provider wins; else the one-line `redisUrl` upgrade; else in-memory (single node).
+    this.cache =
+      providers?.cache ?? (config.redisUrl ? new RedisCacheProvider({ url: config.redisUrl }) : new MemoryCacheProvider());
   }
 
   // ---- trusted signing keys ---------------------------------------------

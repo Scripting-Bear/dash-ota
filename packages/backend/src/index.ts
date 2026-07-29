@@ -48,8 +48,10 @@ export {
   type DatabaseProvider,
   type BlobStore,
   type CacheProvider,
+  type RateLimitResult,
   type StoreProviders,
 } from './store.js';
+export { RedisCacheProvider, type RedisCacheOptions, type RedisLike } from './adapters/redis-cache.js';
 
 /** Everything you need to serve OTA, assembled once from a single config. */
 export interface OtaBackend {
