@@ -26,9 +26,8 @@ private final class DashOtaPinningDelegate: NSObject, URLSessionDelegate {
       completionHandler(.cancelAuthenticationChallenge, nil)
       return
     }
-    let count = SecTrustGetCertificateCount(trust)
-    for i in 0..<count {
-      guard let cert = SecTrustGetCertificateAtIndex(trust, i) else { continue }
+    let chain = (SecTrustCopyCertificateChain(trust) as? [SecCertificate]) ?? []
+    for cert in chain {
       let der = SecCertificateCopyData(cert) as Data
       let pin = Data(SHA256.hash(data: der)).base64EncodedString()
       if pins.contains(pin) {
