@@ -15,18 +15,30 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildRelease, type Channel, generateSigningKeyPair, type Platform, signManifest } from '@dash-ota/shared';
+import {
+  buildRelease,
+  type Channel,
+  generateSigningKeyPair,
+  type Platform,
+  publicKeyFromRawB64,
+  signManifest,
+  verifyManifest,
+} from '@dash-ota/shared';
 import {
   adminGet,
   adminPost,
   ask,
   askMultiline,
   askYesNo,
+  decryptPrivateKeyPem,
+  encryptPrivateKeyPem,
   fingerprintProject,
   flagBool,
   flagStr,
+  isEncryptedPem,
   type ParsedArgs,
   parseArgs,
   readBundleDir,
@@ -48,10 +60,25 @@ async function cmdKeygen(args: ParsedArgs): Promise<void> {
   const keyId = flagStr(args, 'key-id', 'key_dev_1');
   mkdirSync(out, { recursive: true });
   const kp = generateSigningKeyPair();
-  writeFileSync(join(out, `${keyId}.private.pem`), kp.privateKeyPem, { mode: 0o600 });
+
+  // Encrypt the private key at rest unless explicitly opted out. Passphrase from flag/env, or
+  // prompt interactively (blank = store unencrypted, with a loud warning).
+  let passphrase = flagStr(args, 'passphrase') || process.env.OTA_KEY_PASSPHRASE || '';
+  const noEncrypt = flagBool(args, 'no-encrypt');
+  if (!passphrase && !noEncrypt) {
+    passphrase = await ask('Passphrase to encrypt the signing key at rest (blank = store UNENCRYPTED)');
+  }
+  const privatePem = passphrase ? encryptPrivateKeyPem(kp.privateKeyPem, passphrase) : kp.privateKeyPem;
+
+  writeFileSync(join(out, `${keyId}.private.pem`), privatePem, { mode: 0o600 });
   writeFileSync(join(out, `${keyId}.public.pem`), kp.publicKeyPem);
   writeFileSync(join(out, `${keyId}.public.json`), JSON.stringify({ keyId, publicKeyRawB64: kp.publicKeyRawB64 }, null, 2));
   console.log(`✓ wrote keypair to ${out}/${keyId}.*`);
+  if (passphrase) console.log('  ✓ private key encrypted at rest (AES-256-CBC).');
+  else
+    console.warn(
+      '  ⚠ private key stored UNENCRYPTED — restrict .keys/ and prefer --passphrase / OTA_KEY_PASSPHRASE (e.g. in CI).',
+    );
   console.log(`\n  keyId:            ${keyId}`);
   console.log(`  publicKeyRawB64:  ${kp.publicKeyRawB64}`);
   console.log(`\n  → Embed publicKeyRawB64 in the app (per channel) and KEEP THE PRIVATE KEY in CI secrets only.`);
@@ -112,6 +139,22 @@ function cmdBundle(args: ParsedArgs): void {
   console.log(`  next: dash-ota publish --bundle-dir ${out} --platform ${platform} ...`);
 }
 
+/**
+ * Resolve the public key to self-verify a freshly-signed manifest against, preferring the key the
+ * app actually embeds: `--verify-pub <rawB64>`, else the sibling `<keyId>.public.json`, else derive
+ * from the signing key (a consistency check only — can't catch a wrong-key-vs-app mismatch).
+ */
+function resolveVerifyKey(args: ParsedArgs, keyPath: string, privateKeyPem: string): { key: KeyObject; source: string } {
+  const pubFlag = flagStr(args, 'verify-pub');
+  if (pubFlag) return { key: publicKeyFromRawB64(pubFlag), source: '--verify-pub' };
+  const sibling = keyPath.replace(/\.private\.pem$/, '.public.json');
+  if (existsSync(sibling)) {
+    const raw = (JSON.parse(readFileSync(sibling, 'utf8')) as { publicKeyRawB64: string }).publicKeyRawB64;
+    return { key: publicKeyFromRawB64(raw), source: sibling };
+  }
+  return { key: createPublicKey(createPrivateKey(privateKeyPem)), source: 'signing key (consistency check only)' };
+}
+
 /** Build, sign, and upload a release. */
 async function cmdPublish(args: ParsedArgs): Promise<void> {
   const interactive = flagBool(args, 'interactive');
@@ -150,7 +193,17 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
   const keyId = flagStr(args, 'key-id', 'key_dev_1');
   const keyPath = flagStr(args, 'key', join('.keys', `${keyId}.private.pem`));
   if (!existsSync(keyPath)) throw new Error(`signing key not found: ${keyPath} (run: dash-ota keygen)`);
-  const privateKeyPem = readFileSync(keyPath, 'utf8');
+  let privateKeyPem = readFileSync(keyPath, 'utf8');
+  if (isEncryptedPem(privateKeyPem)) {
+    const passphrase =
+      flagStr(args, 'passphrase') || process.env.OTA_KEY_PASSPHRASE || (interactive ? await ask('Signing key passphrase') : '');
+    if (!passphrase) throw new Error('signing key is encrypted — provide --passphrase or OTA_KEY_PASSPHRASE');
+    try {
+      privateKeyPem = decryptPrivateKeyPem(privateKeyPem, passphrase);
+    } catch {
+      throw new Error('failed to decrypt the signing key — wrong passphrase?');
+    }
+  }
 
   const bundleId = flagStr(args, 'bundle-id', `bnd_${runtimeVersion}_${bundleVersion}_${Date.now().toString(36)}`);
 
@@ -167,6 +220,17 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
     ...(releaseNotes ? { releaseNotes } : {}),
   });
   const signed = signManifest(built.manifest, privateKeyPem);
+
+  // Self-verify BEFORE upload against the public key the app embeds (or, failing that, a
+  // consistency check against the signing key). Catches a wrong key / keyId mismatch that would
+  // otherwise ship an update every device rejects.
+  const verify = resolveVerifyKey(args, keyPath, privateKeyPem);
+  if (!verifyManifest(signed, verify.key)) {
+    throw new Error(
+      `self-verify FAILED against ${verify.source}: the app embeds this key and would REJECT this update. Aborting.`,
+    );
+  }
+  console.log(`  ✓ self-verified signature (${verify.source})`);
 
   console.log(`\n  bundleId:        ${bundleId}`);
   console.log(`  runtimeVersion:  ${runtimeVersion}   bundleVersion: ${bundleVersion}`);
@@ -263,14 +327,20 @@ async function cmdNativePolicy(args: ParsedArgs): Promise<void> {
 function printHelp(): void {
   console.log(`dash-ota <command> [flags]
 
-  keygen          --out .keys --key-id key_dev_1 [--server --admin-token]
+  keygen          --out .keys --key-id key_dev_1 [--passphrase <p> | --no-encrypt]
+                  [--server --admin-token]
   register-key    --key-id <id> (--pub <rawB64> | --key-file <.public.json>)
   fingerprint     --project <path>
   bundle          --project <path> --platform ios|android --out <dir> [--dev]
   publish         --bundle-dir <dir> --platform --channel --runtime-version auto|<R>
                   --bundle-version <n> [--mandatory] [--target-app-versions <range>]
                   [--rollout <pct>] [--release-note <txt>] [--interactive] [--no-upload]
-                  [--key <pem>] [--key-id <id>] [--server --admin-token]
+                  [--key <pem>] [--key-id <id>] [--passphrase <p>] [--verify-pub <rawB64>]
+                  [--server --admin-token]
+
+  Trust root: --admin-token (or OTA_ADMIN_TOKEN) is required for server calls — no default.
+  Plaintext http:// to a remote host is refused (use https://, or --allow-insecure on a
+  trusted network). Encrypted signing keys need --passphrase or OTA_KEY_PASSPHRASE.
   list            [--server --admin-token]
   rollout         --bundle-id <id> --pct <0-100>
   pause           --bundle-id <id> [--resume]

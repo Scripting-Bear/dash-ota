@@ -5,7 +5,7 @@
  * @module util
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, createPrivateKey } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import * as readline from 'node:readline/promises';
@@ -15,6 +15,24 @@ import { type ArchiveFile, computeRuntimeVersion, type FingerprintInputs } from 
 export interface ParsedArgs {
   _: string[];
   flags: Record<string, string | boolean>;
+}
+
+/** True if a PKCS#8 PEM is passphrase-encrypted. */
+export function isEncryptedPem(pem: string): boolean {
+  return pem.includes('ENCRYPTED PRIVATE KEY');
+}
+
+/** Encrypt a PKCS#8 private-key PEM at rest with a passphrase (AES-256-CBC). */
+export function encryptPrivateKeyPem(pem: string, passphrase: string): string {
+  return createPrivateKey(pem).export({ type: 'pkcs8', format: 'pem', cipher: 'aes-256-cbc', passphrase }).toString();
+}
+
+/**
+ * Decrypt an encrypted PKCS#8 private-key PEM to plaintext PEM **in memory only** (for signing).
+ * @throws if the passphrase is wrong / the key can't be decrypted
+ */
+export function decryptPrivateKeyPem(pem: string, passphrase: string): string {
+  return createPrivateKey({ key: pem, passphrase }).export({ type: 'pkcs8', format: 'pem' }).toString();
 }
 
 /** Parse argv into positionals + flags (`--k v`, `--k=v`, `--bool`). */
@@ -88,12 +106,41 @@ export async function askMultiline(question: string): Promise<string> {
   return lines.join('\n').trim();
 }
 
-/** Resolve the backend base URL + admin token from flags or env. */
+/**
+ * Refuse to send admin credentials over plaintext `http://` to a non-local host. Localhost is
+ * allowed (dev), and `--allow-insecure` is an explicit escape hatch for trusted private networks.
+ * @throws if the server URL is invalid or is insecure and not exempted
+ */
+export function assertSecureServer(server: string, allowInsecure: boolean): void {
+  let u: URL;
+  try {
+    u = new URL(server);
+  } catch {
+    throw new Error(`invalid --server URL: ${server}`);
+  }
+  const isLocal = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
+  if (u.protocol === 'http:' && !isLocal && !allowInsecure) {
+    throw new Error(
+      `refusing to send admin credentials over plaintext http:// to ${u.hostname} — use https:// (or --allow-insecure on a trusted private network).`,
+    );
+  }
+}
+
+/**
+ * Resolve the backend base URL + admin token from flags or env. The admin token is the CLI's
+ * publish credential (the trust root) — there is **no default**; it must come from `--admin-token`
+ * or `OTA_ADMIN_TOKEN`, and plaintext `http://` to a remote host is refused. Only call this for
+ * commands that actually contact the backend (offline `keygen` / `--no-upload` never do).
+ * @throws if no admin token is set, or the server is insecure (see {@link assertSecureServer})
+ */
 export function resolveServer(args: ParsedArgs): { server: string; adminToken: string } {
-  return {
-    server: flagStr(args, 'server', process.env.OTA_SERVER ?? 'http://localhost:4455'),
-    adminToken: flagStr(args, 'admin-token', process.env.OTA_ADMIN_TOKEN ?? 'dev-admin-token'),
-  };
+  const server = flagStr(args, 'server', process.env.OTA_SERVER ?? 'http://localhost:4455');
+  const adminToken = flagStr(args, 'admin-token') || process.env.OTA_ADMIN_TOKEN || '';
+  if (!adminToken) {
+    throw new Error('admin token required: pass --admin-token or set OTA_ADMIN_TOKEN (no default — the CLI is the trust root).');
+  }
+  assertSecureServer(server, flagBool(args, 'allow-insecure'));
+  return { server, adminToken };
 }
 
 /** POST JSON to an admin endpoint; throws on non-2xx. */
