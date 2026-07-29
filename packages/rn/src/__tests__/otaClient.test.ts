@@ -22,7 +22,7 @@ jest.mock('../NativeDashOta', () => ({
 }));
 
 import DashOta from '../NativeDashOta';
-import { createClientContext, makeNonce, signingString } from '../otaClient';
+import { checkForUpdate, createClientContext, makeNonce, type OtaClientContext, signingString } from '../otaClient';
 import type { OtaConfig } from '../config';
 import type { OtaLogger } from '../types';
 
@@ -33,6 +33,18 @@ function memoryStorage() {
   return {
     getItem: async (k: string) => m.get(k) ?? null,
     setItem: async (k: string, v: string) => void m.set(k, v),
+  };
+}
+
+function ctxWith(fetchImpl: typeof fetch): OtaClientContext {
+  return {
+    serverUrl: 'https://ota.example.com',
+    channel: 'dev',
+    runtimeVersion: 'R2',
+    buildNumber: 10,
+    installId: 'inst',
+    fetchImpl,
+    logger: noopLogger,
   };
 }
 
@@ -94,5 +106,55 @@ describe('createClientContext', () => {
     };
     await createClientContext(config, noopLogger);
     expect(sentBody.attestationToken).toBeUndefined();
+  });
+
+  it('persists and reuses the install id across enrollments', async () => {
+    const storage = memoryStorage();
+    const fetchImpl = jest.fn(async () => ({ ok: true }) as Response);
+    const config: OtaConfig = { storage, appVersion: '1.2.0', transport: { fetch: fetchImpl as unknown as typeof fetch } };
+    const c1 = await createClientContext(config, noopLogger);
+    const c2 = await createClientContext(config, noopLogger);
+    expect(c1.installId).toBe(c2.installId);
+  });
+
+  it('throws when enrollment fails', async () => {
+    const fetchImpl = jest.fn(async () => ({ ok: false, status: 500 }) as Response);
+    const config: OtaConfig = {
+      storage: memoryStorage(),
+      appVersion: '1.2.0',
+      transport: { fetch: fetchImpl as unknown as typeof fetch },
+    };
+    await expect(createClientContext(config, noopLogger)).rejects.toThrow(/enroll failed/);
+  });
+});
+
+describe('checkForUpdate (signed request path)', () => {
+  it('sends the device-key signature headers and signs the canonical string', async () => {
+    jest.mocked(DashOta.generateNonce).mockReturnValue('NNONCE');
+    let sentHeaders: Record<string, string> = {};
+    let sentBody = '';
+    const fetchImpl = jest.fn(async (_url: string, init: { headers: Record<string, string>; body: string }) => {
+      sentHeaders = init.headers;
+      sentBody = init.body;
+      return { ok: true, json: async () => ({ update: null, serverNonce: 's' }) } as unknown as Response;
+    });
+    await checkForUpdate(ctxWith(fetchImpl as unknown as typeof fetch), 0, '1.2.0');
+
+    expect(sentHeaders['x-ota-install']).toBe('inst');
+    expect(sentHeaders['x-ota-nonce']).toBe('NNONCE');
+    expect(sentHeaders['x-ota-signature']).toBe('SIG');
+    expect(typeof sentHeaders['x-ota-timestamp']).toBe('string');
+    // The signature is over the exact canonical string, with the native body hash.
+    expect(jest.mocked(DashOta.signWithDeviceKey)).toHaveBeenCalledWith(
+      expect.stringMatching(/^POST\n\/ota\/v1\/check\ninst\nNNONCE\n\d+\nBODYHASH$/),
+    );
+    const body = JSON.parse(sentBody) as { runtimeVersion: string; currentBundleVersion: number };
+    expect(body.runtimeVersion).toBe('R2');
+    expect(body.currentBundleVersion).toBe(0);
+  });
+
+  it('throws on a non-ok response', async () => {
+    const fetchImpl = jest.fn(async () => ({ ok: false, status: 401 }) as Response);
+    await expect(checkForUpdate(ctxWith(fetchImpl as unknown as typeof fetch), 0, '1.2.0')).rejects.toThrow(/401/);
   });
 });
