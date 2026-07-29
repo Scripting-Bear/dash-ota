@@ -97,13 +97,21 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
           return@Thread
         }
 
-        // 4. download ciphertext to a temp file.
+        // The manifest is already Ed25519-verified, so its signed ciphertextSize is trustworthy —
+        // use it to bound the download (closes a memory-DoS + rejects a MITM-swapped body early).
+        val enc = manifest.getJSONObject("encryption")
+        val expectedSize = enc.optLong("ciphertextSize", -1L)
+        if (expectedSize < 0L) {
+          promise.reject("bad_manifest", "manifest missing encryption.ciphertextSize")
+          return@Thread
+        }
+
+        // 4. download ciphertext to a temp file, bounded to the signed size.
         tmp = File(DashOtaStore.tmpDir(reactContext), "$bundleId.bin")
-        downloadTo(downloadUrl, downloadToken, tmp)
+        downloadTo(downloadUrl, downloadToken, tmp, expectedSize)
         val ciphertext = tmp.readBytes()
 
         // 5. ciphertext hash.
-        val enc = manifest.getJSONObject("encryption")
         if (DashOtaCrypto.sha256Hex(ciphertext) != enc.getString("ciphertextSha256")) {
           promise.reject("hash_mismatch", "ciphertext hash mismatch")
           return@Thread
@@ -151,7 +159,7 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
     }.start()
   }
 
-  private fun downloadTo(urlStr: String, token: String, dest: File) {
+  private fun downloadTo(urlStr: String, token: String, dest: File, expectedSize: Long) {
     val conn = URL(urlStr).openConnection() as HttpURLConnection
     conn.requestMethod = "GET"
     conn.setRequestProperty("x-ota-download-token", token)
@@ -159,7 +167,26 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
     conn.readTimeout = 30000
     try {
       if (conn.responseCode != 200) throw RuntimeException("download HTTP ${conn.responseCode}")
-      conn.inputStream.use { input -> dest.outputStream().use { out -> input.copyTo(out) } }
+      // Reject a Content-Length that disagrees with the signed size before reading a single byte.
+      val declared = conn.contentLengthLong
+      if (declared >= 0L && declared != expectedSize) {
+        throw RuntimeException("Content-Length $declared != signed ciphertextSize $expectedSize")
+      }
+      // Stream with a hard byte cap so a lying server can't exhaust memory/disk.
+      conn.inputStream.use { input ->
+        dest.outputStream().use { out ->
+          val buf = ByteArray(64 * 1024)
+          var total = 0L
+          while (true) {
+            val n = input.read(buf)
+            if (n < 0) break
+            total += n
+            if (total > expectedSize) throw RuntimeException("download exceeded signed ciphertextSize $expectedSize")
+            out.write(buf, 0, n)
+          }
+          if (total != expectedSize) throw RuntimeException("download truncated: $total != $expectedSize")
+        }
+      }
     } finally {
       conn.disconnect()
     }

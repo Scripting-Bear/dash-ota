@@ -80,7 +80,12 @@ public class DashOtaImpl: NSObject {
       throw DashOtaError.message("bundle was disabled after a crash loop")
     }
 
-    let ciphertext = try downloadSync(downloadUrl, token: downloadToken)
+    // The manifest is already Ed25519-verified, so its signed ciphertextSize is trustworthy — use
+    // it to bound the download (rejects a MITM-swapped/oversized body).
+    guard let expectedSize = enc["ciphertextSize"] as? Int else {
+      throw DashOtaError.message("manifest missing encryption.ciphertextSize")
+    }
+    let ciphertext = try downloadSync(downloadUrl, token: downloadToken, expectedSize: expectedSize)
     guard DashOtaCrypto.sha256Hex(ciphertext) == (enc["ciphertextSha256"] as? String) else {
       throw DashOtaError.message("ciphertext hash mismatch")
     }
@@ -107,7 +112,7 @@ public class DashOtaImpl: NSObject {
     return ["bundleId": bundleId, "bundleVersion": version] as NSDictionary
   }
 
-  private func downloadSync(_ urlStr: String, token: String) throws -> Data {
+  private func downloadSync(_ urlStr: String, token: String, expectedSize: Int) throws -> Data {
     guard let url = URL(string: urlStr) else { throw DashOtaError.message("bad download url") }
     var req = URLRequest(url: url)
     req.httpMethod = "GET"
@@ -126,6 +131,12 @@ public class DashOtaImpl: NSObject {
     sem.wait()
     if let taskError = taskError { throw taskError }
     guard status == 200, let data = result else { throw DashOtaError.message("download HTTP \(status)") }
+    // Enforce the signed size. NOTE (Phase 5): dataTask buffers the whole body first, so a fully
+    // streaming bounded download (a URLSessionDataDelegate that cancels past the cap) is the
+    // stronger memory-DoS fix; this equality check already rejects a swapped/oversized bundle.
+    guard data.count == expectedSize else {
+      throw DashOtaError.message("download size \(data.count) != signed ciphertextSize \(expectedSize)")
+    }
     return data
   }
 }
