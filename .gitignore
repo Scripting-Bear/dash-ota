@@ -14,3 +14,7 @@ packages/backend/.data/
 # Logs / scratch
 *.log
 .DS_Store
+
+# never commit emitted declarations that leak into src
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts.map

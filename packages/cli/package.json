@@ -19,7 +19,7 @@
   },
   "license": "MIT",
   "devDependencies": {
-    "@dash-ota/shared": "^0.1.0",
+    "@dash-ota/shared": "^0.2.0",
     "esbuild": "^0.24.2"
   },
   "scripts": {
