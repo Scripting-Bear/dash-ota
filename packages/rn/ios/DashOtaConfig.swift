@@ -14,4 +14,8 @@ enum DashOtaConfig {
   static var publicKeysB64: String { str("OTA_PUBLIC_KEYS", "") }
   static var runtimeVersion: String { str("OTA_RUNTIME_VERSION", "embedded") }
   static var nativeBuild: Int { Int(str("CFBundleVersion", "0")) ?? 0 }
+  /// Fail closed (refuse a software-key fallback) if the Secure Enclave is unavailable. Default false.
+  static var requireHardwareKey: Bool { str("OTA_REQUIRE_HARDWARE_KEY", "false") == "true" }
+  /// Comma-separated base64 SPKI-SHA256 pins for the bundle download; empty disables pinning (default).
+  static var tlsPinsB64: String { str("OTA_TLS_PINS", "") }
 }

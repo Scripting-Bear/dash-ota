@@ -48,6 +48,8 @@ export interface EnrollRequest {
   enrollToken?: string;
   /** optional device/app integrity attestation (Play Integrity / App Attest) for the backend to verify. */
   attestationToken?: string;
+  /** whether the device signing key is hardware-backed (StrongBox/TEE/Secure Enclave). */
+  keyHardwareBacked?: boolean;
 }
 export interface EnrollResponse {
   ok: true;

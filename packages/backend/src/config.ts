@@ -29,6 +29,8 @@ export interface EnrollPrincipal {
   buildNumber?: number;
   /** device/app integrity attestation token the client attached, for `verifyEnrollToken` to check. */
   attestationToken?: string;
+  /** whether the device signing key is hardware-backed (StrongBox/TEE/Secure Enclave). */
+  keyHardwareBacked?: boolean;
 }
 
 /** A `/confirm` outcome, surfaced to {@link BackendHooks.onConfirm} for analytics. */

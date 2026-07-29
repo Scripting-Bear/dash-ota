@@ -41,6 +41,7 @@ public class DashOtaImpl: NSObject {
   // --- Hardware-backed device identity (asymmetric; no shared secret) ---
   @objc public func getDevicePublicKeyB64() -> String { DashOtaDeviceKey.publicKeyB64() }
   @objc public func signWithDeviceKey(_ message: String) -> String { DashOtaDeviceKey.signB64(message) }
+  @objc public func isDeviceKeyHardwareBacked() -> Bool { DashOtaDeviceKey.isHardwareBacked() }
 
   @objc public func sha256Hex(_ message: String) -> String { DashOtaCrypto.sha256Hex(Data(message.utf8)) }
 

@@ -107,6 +107,7 @@ async function enrollAuthorized(body: EnrollRequest, config: BackendConfig): Pro
       appVersion: body.appVersion,
       buildNumber: body.buildNumber,
       attestationToken: body.attestationToken,
+      keyHardwareBacked: body.keyHardwareBacked,
     });
   }
   return !config.requireEnrollAuth || !!body.enrollToken;

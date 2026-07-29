@@ -245,6 +245,8 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
     return Base64.encodeToString(bytes, Base64.NO_WRAP or Base64.URL_SAFE or Base64.NO_PADDING)
   }
 
+  override fun isDeviceKeyHardwareBacked(): Boolean = DashOtaDeviceKey.isHardwareBacked()
+
   companion object {
     const val NAME = NativeDashOtaSpec.NAME
   }

@@ -71,6 +71,12 @@ export interface Spec extends TurboModule {
    * JS-side `Math.random`.
    */
   generateNonce(): string;
+  /**
+   * Whether the device signing key lives in secure hardware (Android StrongBox/TEE, iOS Secure
+   * Enclave) vs a software fallback. Reported at enrollment so the backend can gate on genuine
+   * hardware; the iOS software fallback can also be refused via `OTA_REQUIRE_HARDWARE_KEY`.
+   */
+  isDeviceKeyHardwareBacked(): boolean;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('DashOta');

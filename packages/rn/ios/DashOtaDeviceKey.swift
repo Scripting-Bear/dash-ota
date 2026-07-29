@@ -12,6 +12,16 @@ import Security
 /// `node:crypto` verify path expects.
 enum DashOtaDeviceKey {
   private static let tag = "dash-ota-device-key".data(using: .utf8)!
+  /// Persisted provenance of the device key: true iff it was created in the Secure Enclave.
+  private static let hwFlagKey = "dash-ota-device-key-hw"
+
+  /// Whether the device key is hardware-backed (Secure Enclave). Reported to the backend at
+  /// enrollment so a host can gate on genuine hardware. Conservative: keys created before this
+  /// flag existed, and the Simulator, report false.
+  static func isHardwareBacked() -> Bool {
+    _ = try? loadOrCreate() // ensure the key (and its flag) exist
+    return UserDefaults.standard.bool(forKey: hwFlagKey)
+  }
   /// 26-byte ASN.1 SPKI prefix for an EC P-256 (prime256v1) public key, before the 65-byte point.
   private static let p256SpkiHeader = Data([
     0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
@@ -78,6 +88,7 @@ enum DashOtaDeviceKey {
     ]
 
     // Use the Secure Enclave on real hardware; it is unavailable on the Simulator.
+    var usingSecureEnclave = false
     #if !targetEnvironment(simulator)
     if let access = SecAccessControlCreateWithFlags(
       kCFAllocatorDefault,
@@ -87,21 +98,33 @@ enum DashOtaDeviceKey {
     ) {
       attrs[kSecAttrTokenID as String] = kSecAttrTokenIDSecureEnclave
       privAttrs[kSecAttrAccessControl as String] = access
+      usingSecureEnclave = true
     }
     #endif
     attrs[kSecPrivateKeyAttrs as String] = privAttrs
 
     var error: Unmanaged<CFError>?
     if let key = SecKeyCreateRandomKey(attrs as CFDictionary, &error) {
+      UserDefaults.standard.set(usingSecureEnclave, forKey: hwFlagKey)
       return key
     }
-    // Secure-Enclave creation can fail on some configurations; fall back to a software key so
-    // the device still gets a stable identity rather than failing closed on enrollment.
+    // Secure-Enclave creation can fail on some configurations. By default we fall back to a
+    // software key so the device still gets a stable identity; a host that sets
+    // OTA_REQUIRE_HARDWARE_KEY instead fails closed rather than silently downgrading.
     #if !targetEnvironment(simulator)
+    if DashOtaConfig.requireHardwareKey {
+      let reason = error?.takeRetainedValue().localizedDescription ?? "unknown"
+      throw NSError(
+        domain: "DashOtaDeviceKey",
+        code: -2,
+        userInfo: [NSLocalizedDescriptionKey: "Secure Enclave required (OTA_REQUIRE_HARDWARE_KEY) but unavailable: \(reason)"]
+      )
+    }
     attrs.removeValue(forKey: kSecAttrTokenID as String)
     privAttrs.removeValue(forKey: kSecAttrAccessControl as String)
     attrs[kSecPrivateKeyAttrs as String] = privAttrs
     if let key = SecKeyCreateRandomKey(attrs as CFDictionary, &error) {
+      UserDefaults.standard.set(false, forKey: hwFlagKey)
       return key
     }
     #endif

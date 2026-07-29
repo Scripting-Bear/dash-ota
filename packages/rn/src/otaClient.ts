@@ -89,6 +89,14 @@ export async function createClientContext(config: OtaConfig, logger: OtaLogger):
   // Register (or re-register, for key rotation) the device's hardware public key, gated by an
   // authenticated session token. The private key never leaves the device.
   const devicePublicKeyB64 = DashOta.getDevicePublicKeyB64();
+  // Report whether the signing key is hardware-backed (StrongBox/TEE/Secure Enclave), so the
+  // backend can gate on genuine hardware. Guarded for older native binaries without the method.
+  let keyHardwareBacked: boolean | undefined;
+  try {
+    keyHardwareBacked = DashOta.isDeviceKeyHardwareBacked();
+  } catch {
+    keyHardwareBacked = undefined;
+  }
   const enrollToken = (await config.getEnrollToken?.()) ?? undefined;
   // Device/app integrity attestation (Play Integrity / App Attest), attached at enrollment so the
   // backend's verifyEnrollToken hook can gate registration on a genuine device. Null when the host
@@ -106,6 +114,7 @@ export async function createClientContext(config: OtaConfig, logger: OtaLogger):
       devicePublicKeyB64,
       enrollToken,
       attestationToken,
+      keyHardwareBacked,
     }),
   });
   if (!res.ok) throw new Error(`enroll failed: ${res.status}`);

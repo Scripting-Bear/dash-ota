@@ -14,6 +14,7 @@ jest.mock('../NativeDashOta', () => ({
     getRuntimeVersion: jest.fn(() => 'R2'),
     getNativeBuildNumber: jest.fn(() => 10),
     getDevicePublicKeyB64: jest.fn(() => 'PUBKEY'),
+    isDeviceKeyHardwareBacked: jest.fn(() => true),
     generateNonce: jest.fn(() => 'NATIVE_NONCE'),
     sha256Hex: jest.fn(() => 'BODYHASH'),
     signWithDeviceKey: jest.fn(() => 'SIG'),
@@ -76,6 +77,7 @@ describe('createClientContext', () => {
     expect(fetchImpl).toHaveBeenCalledWith('https://ota.example.com/ota/v1/enroll', expect.objectContaining({ method: 'POST' }));
     expect(sentBody.attestationToken).toBe('attest-123');
     expect(sentBody.devicePublicKeyB64).toBe('PUBKEY');
+    expect(sentBody.keyHardwareBacked).toBe(true);
     expect(typeof sentBody.installId).toBe('string');
   });
 
