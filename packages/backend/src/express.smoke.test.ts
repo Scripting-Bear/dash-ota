@@ -27,6 +27,7 @@ import {
   signManifest,
 } from '@dash-ota/shared';
 import { rawBodySaver, dashOtaMiddleware } from './index.js';
+import type { EnrollPrincipal } from './config.js';
 
 const ADMIN = 'smoke-admin-token';
 let passed = 0;
@@ -43,6 +44,7 @@ function deviceSign(privateKey: KeyObject, signingStr: string): string {
 async function main(): Promise<void> {
   const tmp = mkdtempSync(join(tmpdir(), 'dash-ota-express-'));
   const onConfirm: string[] = [];
+  let lastPrincipal: EnrollPrincipal | undefined;
 
   const app = express();
   // A global JSON parser runs BEFORE the OTA middleware — rawBodySaver keeps the exact bytes
@@ -55,7 +57,10 @@ async function main(): Promise<void> {
       storageDir: join(tmp, 'storage'),
       dataDir: join(tmp, 'data'),
       requireRequestSignature: true,
-      verifyEnrollToken: (token) => token === 'good-session',
+      verifyEnrollToken: (token, principal) => {
+        lastPrincipal = principal;
+        return token === 'good-session';
+      },
       onConfirm: (e) => onConfirm.push(`${e.bundleId}:${e.status}`),
     }),
   );
@@ -82,7 +87,11 @@ async function main(): Promise<void> {
     id: string;
     privateKey: KeyObject;
   }
-  async function enroll(id: string, enrollToken: string): Promise<Response & { install?: Install }> {
+  async function enroll(
+    id: string,
+    enrollToken: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<Response & { install?: Install }> {
     const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const devicePublicKeyB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
     const res = await fetch(`${base}/ota/v1/enroll`, {
@@ -96,6 +105,7 @@ async function main(): Promise<void> {
         buildNumber: 10,
         devicePublicKeyB64,
         enrollToken,
+        ...extra,
       }),
     });
     return Object.assign(res, res.ok ? { install: { id, privateKey } } : {});
@@ -154,6 +164,13 @@ async function main(): Promise<void> {
   await check('verifyEnrollToken hook rejects a bad session token (401)', async () => {
     const res = await enroll('inst-bad', 'nope');
     assert.equal(res.status, 401);
+  });
+
+  await check('enroll principal carries attestationToken + keyHardwareBacked', async () => {
+    const res = await enroll('inst-attest', 'good-session', { attestationToken: 'att-xyz', keyHardwareBacked: true });
+    assert.equal(res.status, 200);
+    assert.equal(lastPrincipal?.attestationToken, 'att-xyz');
+    assert.equal(lastPrincipal?.keyHardwareBacked, true);
   });
 
   let device: Install;
