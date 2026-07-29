@@ -39,8 +39,16 @@ export { dashOtaMiddleware, rawBodySaver } from './express.js';
 export type { OtaMiddleware } from './express.js';
 export {
   Store,
+  DiskDatabaseProvider,
+  DiskBlobStore,
+  MemoryCacheProvider,
   type ReleaseRecord,
   type AdoptionStats,
+  type InstallRecord,
+  type DatabaseProvider,
+  type BlobStore,
+  type CacheProvider,
+  type StoreProviders,
 } from './store.js';
 
 /** Everything you need to serve OTA, assembled once from a single config. */
@@ -89,7 +97,7 @@ export interface OtaBackend {
  */
 export function createOtaBackend(options: OtaBackendOptions = {}): OtaBackend {
   const config = resolveBackendConfig(options);
-  const store = options.store ?? new Store(config);
+  const store = options.store ?? new Store(config, options.providers);
   const routes = createOtaRoutes(store, config);
   return {
     config,

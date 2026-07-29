@@ -119,13 +119,18 @@ export function loadConfig(): BackendConfig {
   };
 }
 
-/** Options accepted by the library entry points — a partial config plus a bring-your-own store. */
+/** Options accepted by the library entry points — a partial config plus bring-your-own storage. */
 export type OtaBackendOptions = Partial<BackendConfig> & {
   /**
    * Provide a pre-constructed (or custom-backed) {@link import('./store.js').Store}. When
-   * omitted, a disk-backed store is created from `storageDir`/`dataDir`.
+   * omitted, a Store is created from `providers` (or the disk/in-memory defaults).
    */
   store?: import('./store.js').Store;
+  /**
+   * Swap in your own persistence without subclassing the Store: supply any of
+   * `{ db, blob, cache }` (Postgres / Redis / S3 adapters). Ignored if `store` is given.
+   */
+  providers?: Partial<import('./providers.js').StoreProviders>;
 };
 
 /**
@@ -138,6 +143,6 @@ export type OtaBackendOptions = Partial<BackendConfig> & {
  * @returns a fully-resolved backend config
  */
 export function resolveBackendConfig(options: OtaBackendOptions = {}): BackendConfig {
-  const { store: _store, ...overrides } = options;
+  const { store: _store, providers: _providers, ...overrides } = options;
   return { ...loadConfig(), ...overrides };
 }

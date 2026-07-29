@@ -122,7 +122,7 @@ function middlewareFromRoutes(routes: readonly OtaRoute[]): OtaMiddleware {
  */
 export function dashOtaMiddleware(options: OtaBackendOptions = {}): OtaMiddleware {
   const config = resolveBackendConfig(options);
-  const store = options.store ?? new Store(config);
+  const store = options.store ?? new Store(config, options.providers);
   return middlewareFromRoutes(createOtaRoutes(store, config));
 }
 
