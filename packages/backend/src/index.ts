@@ -54,6 +54,7 @@ export {
 export { RedisCacheProvider, type RedisCacheOptions, type RedisLike } from './adapters/redis-cache.js';
 export { PostgresDatabaseProvider, type PostgresDbOptions, type PgLike } from './adapters/postgres-db.js';
 export { S3BlobStore, type S3BlobOptions, type S3Like } from './adapters/s3-blob.js';
+export { SqliteDatabaseProvider, type SqliteDbOptions, type SqliteLike, type SqliteStatement } from './adapters/sqlite-db.js';
 
 /** Everything you need to serve OTA, assembled once from a single config. */
 export interface OtaBackend {

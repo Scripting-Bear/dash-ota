@@ -10,11 +10,12 @@
     "packages/cli"
   ],
   "scripts": {
-    "test": "npm run test:core && npm run test:e2e && npm run test:express && npm run test:redis && npm run test:postgres && npm run test:s3",
+    "test": "npm run test:core && npm run test:e2e && npm run test:express && npm run test:sqlite && npm run test:redis && npm run test:postgres && npm run test:s3",
     "test:core": "tsx --conditions source packages/shared/src/selftest.ts",
     "test:e2e": "tsx --conditions source packages/backend/src/e2e.test.ts",
     "test:express": "tsx --conditions source packages/backend/src/express.smoke.test.ts",
     "test:redis": "tsx --conditions source packages/backend/src/adapters/redis-cache.test.ts",
+    "test:sqlite": "tsx --conditions source packages/backend/src/adapters/sqlite-db.test.ts",
     "test:postgres": "tsx --conditions source packages/backend/src/adapters/postgres-db.test.ts",
     "test:s3": "tsx --conditions source packages/backend/src/adapters/s3-blob.test.ts",
     "backend": "tsx --conditions source packages/backend/src/server.ts",

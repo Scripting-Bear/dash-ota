@@ -26,6 +26,7 @@ import type { Readable } from 'node:stream';
 import { PostgresDatabaseProvider } from './adapters/postgres-db.js';
 import { RedisCacheProvider } from './adapters/redis-cache.js';
 import { S3BlobStore } from './adapters/s3-blob.js';
+import { SqliteDatabaseProvider } from './adapters/sqlite-db.js';
 import type { BackendConfig } from './config.js';
 import {
   type BlobStore,
@@ -61,10 +62,14 @@ export class Store {
     private readonly config: BackendConfig,
     providers?: Partial<StoreProviders>,
   ) {
-    // DB: explicit provider wins; else the one-line `databaseUrl` upgrade; else disk JSON (single node).
+    // DB: explicit provider wins; else Postgres (`databaseUrl`); else SQLite (`sqlitePath`); else disk JSON.
     this.db =
       providers?.db ??
-      (config.databaseUrl ? new PostgresDatabaseProvider({ url: config.databaseUrl }) : new DiskDatabaseProvider(config.dataDir));
+      (config.databaseUrl
+        ? new PostgresDatabaseProvider({ url: config.databaseUrl })
+        : config.sqlitePath
+          ? new SqliteDatabaseProvider({ path: config.sqlitePath })
+          : new DiskDatabaseProvider(config.dataDir));
     // Blob: explicit provider wins; else the one-line `s3Bucket` upgrade; else local disk.
     this.blob =
       providers?.blob ??

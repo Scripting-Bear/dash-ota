@@ -118,6 +118,13 @@ export interface BackendConfig extends BackendHooks {
    */
   databaseUrl?: string;
   /**
+   * One-line upgrade to a durable single-file store: a SQLite file path (or `OTA_SQLITE_PATH`).
+   * When set — and neither an explicit `db` provider nor {@link databaseUrl} is given — the backend
+   * wires the SQLite {@link DatabaseProvider} (ACID, no server). Requires the optional native
+   * `better-sqlite3` peer; the file + schema are created on first use.
+   */
+  sqlitePath?: string;
+  /**
    * One-line upgrade to object storage: an S3-compatible bucket name (or `OTA_S3_BUCKET`). When set
    * — and no explicit `blob` provider is passed — the backend stores ciphertext in S3/R2/MinIO
    * instead of on disk. Requires the optional `@aws-sdk/client-s3` peer. Pair with
@@ -162,6 +169,7 @@ export function loadConfig(): BackendConfig {
     requireEnrollAuth: process.env.OTA_REQUIRE_ENROLL_AUTH !== 'false',
     redisUrl: process.env.OTA_REDIS_URL,
     databaseUrl: process.env.OTA_DATABASE_URL,
+    sqlitePath: process.env.OTA_SQLITE_PATH,
     s3Bucket: process.env.OTA_S3_BUCKET,
     s3Region: process.env.OTA_S3_REGION,
     s3Endpoint: process.env.OTA_S3_ENDPOINT,
