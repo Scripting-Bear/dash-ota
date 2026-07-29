@@ -25,8 +25,12 @@ any client that honours it interoperates.
 - **MUST** serve ciphertext only via a one-time, short-TTL download token — never expose a
   storage (S3) URL to the client.
 - Integrity is guaranteed by the client's **native Ed25519 verification** against an embedded
-  key; a fully-compromised backend can at worst serve a validly-signed *older* bundle, which the
-  client's downgrade guard rejects.
+  key: a fully-compromised backend can never forge a bundle. It **can**, however, re-serve any
+  previously-published *validly-signed* bundle whose `bundleVersion` is higher than a given
+  device's current one — the downgrade guard only stops **older** versions. `paused` / `rolledBack`
+  are **server-side-only** mutable state, not signed, so they are not a revocation guarantee against
+  a rogue backend. A signed minimum-acceptable-version / revocation channel is a planned addition;
+  today the crash-loop breaker is the client-side backstop for a re-served bad bundle.
 
 ---
 
@@ -111,6 +115,14 @@ No auth. Use this for load-balancer / orchestrator rotation.
 ### `POST /ota/v1/enroll`
 Register the device's **public** key (called once; re-call to rotate). Auth: `enrollToken`
 (the app's authenticated session), validated by the backend's `verifyEnrollToken` hook.
+
+:::warning Enrollment MUST be gated
+`installId` is a **non-secret, client-chosen** value, and enroll overwrites the stored device key.
+A production backend **MUST** wire `verifyEnrollToken` to bind enrollment to an authenticated user
+session — otherwise anyone who knows a victim's `installId` can re-enroll it with their own key and
+impersonate the device. The presence-only default (`requireEnrollAuth` without a hook) is for local
+dev only. `attestationToken` + `keyHardwareBacked` are surfaced to the hook for stronger gating.
+:::
 
 ```jsonc
 // request (EnrollRequest)
