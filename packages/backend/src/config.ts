@@ -110,6 +110,13 @@ export interface BackendConfig extends BackendHooks {
    * for correct multi-instance anti-replay + rate-limiting. Requires the optional `ioredis` peer.
    */
   redisUrl?: string;
+  /**
+   * One-line upgrade to a durable database: a Postgres connection string (or `OTA_DATABASE_URL`).
+   * When set — and no explicit `db` provider is passed — the backend wires the Postgres
+   * {@link DatabaseProvider} (ACID, concurrency-safe) instead of the Disk default. Requires the
+   * optional `pg` peer; the schema is created automatically on first use.
+   */
+  databaseUrl?: string;
 }
 
 /** Read a number env var with a fallback. */
@@ -139,6 +146,7 @@ export function loadConfig(): BackendConfig {
     requireRequestSignature: process.env.OTA_REQUIRE_SIG !== 'false',
     requireEnrollAuth: process.env.OTA_REQUIRE_ENROLL_AUTH !== 'false',
     redisUrl: process.env.OTA_REDIS_URL,
+    databaseUrl: process.env.OTA_DATABASE_URL,
   };
 }
 

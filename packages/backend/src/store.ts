@@ -23,6 +23,7 @@ import {
   sha256Hex,
 } from '@dash-ota/shared';
 import type { Readable } from 'node:stream';
+import { PostgresDatabaseProvider } from './adapters/postgres-db.js';
 import { RedisCacheProvider } from './adapters/redis-cache.js';
 import type { BackendConfig } from './config.js';
 import {
@@ -59,7 +60,10 @@ export class Store {
     private readonly config: BackendConfig,
     providers?: Partial<StoreProviders>,
   ) {
-    this.db = providers?.db ?? new DiskDatabaseProvider(config.dataDir);
+    // DB: explicit provider wins; else the one-line `databaseUrl` upgrade; else disk JSON (single node).
+    this.db =
+      providers?.db ??
+      (config.databaseUrl ? new PostgresDatabaseProvider({ url: config.databaseUrl }) : new DiskDatabaseProvider(config.dataDir));
     this.blob = providers?.blob ?? new DiskBlobStore(config.storageDir);
     // Cache: explicit provider wins; else the one-line `redisUrl` upgrade; else in-memory (single node).
     this.cache =

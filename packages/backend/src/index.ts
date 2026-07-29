@@ -52,6 +52,7 @@ export {
   type StoreProviders,
 } from './store.js';
 export { RedisCacheProvider, type RedisCacheOptions, type RedisLike } from './adapters/redis-cache.js';
+export { PostgresDatabaseProvider, type PostgresDbOptions, type PgLike } from './adapters/postgres-db.js';
 
 /** Everything you need to serve OTA, assembled once from a single config. */
 export interface OtaBackend {

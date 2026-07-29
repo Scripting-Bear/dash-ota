@@ -28,17 +28,23 @@
     "@dash-ota/shared": "^0.1.0"
   },
   "peerDependencies": {
-    "ioredis": "^5"
+    "ioredis": "^5",
+    "pg": "^8"
   },
   "peerDependenciesMeta": {
     "ioredis": {
+      "optional": true
+    },
+    "pg": {
       "optional": true
     }
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
+    "@types/pg": "^8.20.0",
     "express": "^4.21.2",
-    "ioredis": "^5.11.1"
+    "ioredis": "^5.11.1",
+    "pg": "^8.22.0"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
