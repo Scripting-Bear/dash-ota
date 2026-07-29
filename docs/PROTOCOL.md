@@ -77,7 +77,9 @@ backend verifies against the public key registered at `/enroll`.
 ```
 
 - `<METHOD>` upper-case (`POST`).
-- `<path>` the request path **including** any query string (e.g. `/ota/v1/check`).
+- `<path>` the request **pathname** — exactly what the backend verifies (`ctx.path`, no query
+  string). The signed endpoints (`/ota/v1/check`, `/ota/v1/confirm`) carry no query; `/download`
+  is token-authenticated, not signed.
 - `<bodySha256>` lowercase hex SHA-256 of the **raw** request body bytes (the SHA-256 of the empty
   buffer for an empty body). The backend MUST hash the raw bytes it received — if a JSON body
   parser runs first, the raw bytes must be preserved (the Node adapter uses `rawBodySaver`).

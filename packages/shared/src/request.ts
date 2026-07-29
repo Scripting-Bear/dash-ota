@@ -17,7 +17,7 @@ import { ecdsaP256VerifyB64 } from './crypto.js';
 /** The fields covered by a request signature. */
 export interface SignedRequestParts {
   method: string;
-  /** request path including any query string, e.g. "/ota/v1/check". */
+  /** request pathname — no query string; the signed endpoints carry none. e.g. "/ota/v1/check". */
   path: string;
   installId: string;
   nonce: string;
