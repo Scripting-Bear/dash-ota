@@ -117,6 +117,21 @@ export interface BackendConfig extends BackendHooks {
    * optional `pg` peer; the schema is created automatically on first use.
    */
   databaseUrl?: string;
+  /**
+   * One-line upgrade to object storage: an S3-compatible bucket name (or `OTA_S3_BUCKET`). When set
+   * — and no explicit `blob` provider is passed — the backend stores ciphertext in S3/R2/MinIO
+   * instead of on disk. Requires the optional `@aws-sdk/client-s3` peer. Pair with
+   * {@link s3Endpoint} + {@link s3ForcePathStyle} for R2/MinIO; credentials use the AWS env chain.
+   */
+  s3Bucket?: string;
+  /** region for the S3 blob store (or `OTA_S3_REGION`). */
+  s3Region?: string;
+  /** custom endpoint for the S3 blob store, e.g. an R2/MinIO URL (or `OTA_S3_ENDPOINT`). */
+  s3Endpoint?: string;
+  /** path-style addressing for the S3 blob store — needed by MinIO / some R2 setups (or `OTA_S3_FORCE_PATH_STYLE=true`). */
+  s3ForcePathStyle?: boolean;
+  /** key prefix inside the bucket for the S3 blob store, e.g. `bundles/` (or `OTA_S3_PREFIX`). */
+  s3Prefix?: string;
 }
 
 /** Read a number env var with a fallback. */
@@ -147,6 +162,11 @@ export function loadConfig(): BackendConfig {
     requireEnrollAuth: process.env.OTA_REQUIRE_ENROLL_AUTH !== 'false',
     redisUrl: process.env.OTA_REDIS_URL,
     databaseUrl: process.env.OTA_DATABASE_URL,
+    s3Bucket: process.env.OTA_S3_BUCKET,
+    s3Region: process.env.OTA_S3_REGION,
+    s3Endpoint: process.env.OTA_S3_ENDPOINT,
+    s3ForcePathStyle: process.env.OTA_S3_FORCE_PATH_STYLE === 'true',
+    s3Prefix: process.env.OTA_S3_PREFIX,
   };
 }
 

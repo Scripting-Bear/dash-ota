@@ -25,6 +25,7 @@ import {
 import type { Readable } from 'node:stream';
 import { PostgresDatabaseProvider } from './adapters/postgres-db.js';
 import { RedisCacheProvider } from './adapters/redis-cache.js';
+import { S3BlobStore } from './adapters/s3-blob.js';
 import type { BackendConfig } from './config.js';
 import {
   type BlobStore,
@@ -64,7 +65,18 @@ export class Store {
     this.db =
       providers?.db ??
       (config.databaseUrl ? new PostgresDatabaseProvider({ url: config.databaseUrl }) : new DiskDatabaseProvider(config.dataDir));
-    this.blob = providers?.blob ?? new DiskBlobStore(config.storageDir);
+    // Blob: explicit provider wins; else the one-line `s3Bucket` upgrade; else local disk.
+    this.blob =
+      providers?.blob ??
+      (config.s3Bucket
+        ? new S3BlobStore({
+            bucket: config.s3Bucket,
+            region: config.s3Region,
+            endpoint: config.s3Endpoint,
+            forcePathStyle: config.s3ForcePathStyle,
+            prefix: config.s3Prefix,
+          })
+        : new DiskBlobStore(config.storageDir));
     // Cache: explicit provider wins; else the one-line `redisUrl` upgrade; else in-memory (single node).
     this.cache =
       providers?.cache ?? (config.redisUrl ? new RedisCacheProvider({ url: config.redisUrl }) : new MemoryCacheProvider());
