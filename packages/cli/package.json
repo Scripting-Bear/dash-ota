@@ -4,7 +4,7 @@
   "description": "Release tooling for dash-ota: keygen, fingerprint, bundle, encrypt+sign, publish, and rollout ops. Holds the Ed25519 signing key (CI/release only). npx-executable.",
   "type": "module",
   "bin": {
-    "dash-ota": "./dist/index.mjs"
+    "dash-ota": "dist/index.mjs"
   },
   "files": [
     "dist"
