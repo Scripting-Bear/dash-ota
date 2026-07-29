@@ -94,6 +94,12 @@ export interface BackendConfig extends BackendHooks {
   autoPauseMinSamples: number;
   /** hard cap (bytes) on a published ciphertext — rejects oversized bundles at ingest (abuse / memory guard). */
   maxBundleBytes: number;
+  /** max `/enroll` requests per install per {@link rateLimitWindowMs} window; `0` disables. */
+  enrollRateLimit: number;
+  /** max `/check` requests per authenticated install per {@link rateLimitWindowMs} window; `0` disables. */
+  checkRateLimit: number;
+  /** fixed rate-limit window in ms, shared by `/enroll` + `/check`. */
+  rateLimitWindowMs: number;
   /** require a valid device-key signature on /check + /confirm (POC can disable for quick tests). */
   requireRequestSignature: boolean;
   /** require an authenticated session token (enrollToken) on /enroll. */
@@ -121,6 +127,9 @@ export function loadConfig(): BackendConfig {
     autoPauseFailureRate: envNum('OTA_AUTOPAUSE_RATE', 0.2),
     autoPauseMinSamples: envNum('OTA_AUTOPAUSE_MIN', 5),
     maxBundleBytes: envNum('OTA_MAX_BUNDLE_BYTES', 100 * 1024 * 1024),
+    enrollRateLimit: envNum('OTA_ENROLL_RATE', 10),
+    checkRateLimit: envNum('OTA_CHECK_RATE', 60),
+    rateLimitWindowMs: envNum('OTA_RATE_WINDOW_MS', 60 * 1000),
     requireRequestSignature: process.env.OTA_REQUIRE_SIG !== 'false',
     requireEnrollAuth: process.env.OTA_REQUIRE_ENROLL_AUTH !== 'false',
   };

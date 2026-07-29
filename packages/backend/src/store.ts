@@ -31,12 +31,13 @@ import {
   DiskBlobStore,
   DiskDatabaseProvider,
   MemoryCacheProvider,
+  type RateLimitResult,
   type ReleaseRecord,
   type StoreProviders,
 } from './providers.js';
 
 export type { AdoptionStats, ReleaseRecord, InstallRecord } from './providers.js';
-export type { BlobStore, CacheProvider, DatabaseProvider, StoreProviders } from './providers.js';
+export type { BlobStore, CacheProvider, DatabaseProvider, RateLimitResult, StoreProviders } from './providers.js';
 export { DiskBlobStore, DiskDatabaseProvider, MemoryCacheProvider } from './providers.js';
 
 /**
@@ -199,6 +200,21 @@ export class Store {
    */
   async registerNonce(nonce: string): Promise<boolean> {
     return this.cache.registerNonce(nonce, this.config.nonceTtlMs);
+  }
+
+  // ---- rate limiting -----------------------------------------------------
+
+  /**
+   * Fixed-window rate-limit check for a `scope` + `identity`. A `limit <= 0` disables the check
+   * (always allowed). Keys are namespaced per scope so `/enroll` and `/check` budgets are separate.
+   * @param scope the endpoint bucket (e.g. `enroll`, `check`)
+   * @param identity the install/principal the limit applies to
+   * @param limit max requests per window (`<= 0` disables)
+   * @param windowMs the fixed window length
+   */
+  async rateLimit(scope: string, identity: string, limit: number, windowMs: number): Promise<RateLimitResult> {
+    if (limit <= 0) return { allowed: true, remaining: Number.MAX_SAFE_INTEGER, resetMs: 0 };
+    return this.cache.rateLimit(`rl:${scope}:${identity}`, limit, windowMs);
   }
 
   // ---- one-time download tokens -----------------------------------------

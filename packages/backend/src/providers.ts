@@ -90,10 +90,20 @@ export interface BlobStore {
   openReadStream(bundleId: string): Promise<Readable | null>;
 }
 
+/** The outcome of a {@link CacheProvider.rateLimit} check for one key in the current window. */
+export interface RateLimitResult {
+  /** whether this request is within the limit. */
+  allowed: boolean;
+  /** requests still allowed in the current window (never negative). */
+  remaining: number;
+  /** milliseconds until the current window resets. */
+  resetMs: number;
+}
+
 /**
  * Ephemeral, TTL'd single-use state. **Must be shared across instances** (e.g. Redis) for the
- * anti-replay and one-time-token guarantees to hold when running more than one replica; the
- * in-memory default only protects a single process.
+ * anti-replay, one-time-token, and rate-limit guarantees to hold when running more than one
+ * replica; the in-memory default only protects a single process.
  */
 export interface CacheProvider {
   /** Record a client nonce; resolve `true` if fresh, `false` if seen within `ttlMs` (replay). */
@@ -102,6 +112,12 @@ export interface CacheProvider {
   putToken(token: string, value: string, ttlMs: number): Promise<void>;
   /** Atomically consume a single-use token, returning its value exactly once (else `null`). */
   consumeToken(token: string): Promise<string | null>;
+  /**
+   * Fixed-window rate limit: atomically increment the counter for `key` within the current
+   * `windowMs` window and report whether it is still within `limit`. Map onto Redis as
+   * `INCR` + `PEXPIRE` (first hit sets the TTL) so the window is shared across instances.
+   */
+  rateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult>;
 }
 
 /** The three providers the {@link Store} composes. */
@@ -225,12 +241,24 @@ export class DiskBlobStore implements BlobStore {
 export class MemoryCacheProvider implements CacheProvider {
   private readonly nonces = new Map<string, number>();
   private readonly tokens = new Map<string, { value: string; expiresAt: number }>();
+  private readonly rateWindows = new Map<string, { count: number; resetAt: number }>();
 
   async registerNonce(nonce: string, ttlMs: number): Promise<boolean> {
     this.sweep();
     if (this.nonces.has(nonce)) return false;
     this.nonces.set(nonce, Date.now() + ttlMs);
     return true;
+  }
+
+  async rateLimit(key: string, limit: number, windowMs: number): Promise<RateLimitResult> {
+    const now = Date.now();
+    let w = this.rateWindows.get(key);
+    if (!w || w.resetAt <= now) {
+      w = { count: 0, resetAt: now + windowMs };
+      this.rateWindows.set(key, w);
+    }
+    w.count += 1;
+    return { allowed: w.count <= limit, remaining: Math.max(0, limit - w.count), resetMs: w.resetAt - now };
   }
 
   async putToken(token: string, value: string, ttlMs: number): Promise<void> {
@@ -248,5 +276,6 @@ export class MemoryCacheProvider implements CacheProvider {
     const now = Date.now();
     for (const [n, exp] of this.nonces) if (exp < now) this.nonces.delete(n);
     for (const [t, rec] of this.tokens) if (rec.expiresAt < now) this.tokens.delete(t);
+    for (const [k, w] of this.rateWindows) if (w.resetAt <= now) this.rateWindows.delete(k);
   }
 }

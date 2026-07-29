@@ -113,9 +113,14 @@ Register the device's **public** key (called once; re-call to rotate). Auth: `en
   "devicePublicKeyB64": "<SPKI-DER base64 of the EC P-256 public key>",
   "enrollToken": "<app session token>" }
 // response 200 → { "ok": true }
-// 400 invalid body · 401 unauthenticated (enroll session rejected)
+// 400 invalid body · 401 unauthenticated (enroll session rejected) · 429 rate_limited
 ```
-No secret is issued or returned — nothing to intercept at enrollment.
+No secret is issued or returned — nothing to intercept at enrollment. `/enroll` (by `installId`)
+and `/check` (by the authenticated `installId`) are rate-limited with a fixed window
+(`enrollRateLimit` / `checkRateLimit` per `rateLimitWindowMs`; `0` disables). The limiter is
+backed by the `CacheProvider`, so a shared cache (Redis) enforces it across instances; the
+in-memory default is per-process. Over-limit responses are `429` with a `Retry-After` header.
+Cross-install / IP-based flood protection is out of scope here — put it at the reverse proxy.
 
 ### `POST /ota/v1/check`  *(signed, §4)*
 Ask for an eligible update.
@@ -277,6 +282,7 @@ Errors are `{ "error": "<message>", "code": "<code>" }` with an HTTP status.
 | `hash_mismatch` | 400 | ciphertext hash ≠ manifest.encryption.ciphertextSha256 |
 | `size_mismatch` | 400 | ciphertext size ≠ manifest.encryption.ciphertextSize |
 | `too_large` | 413 | ciphertext exceeds the configured `maxBundleBytes` cap |
+| `rate_limited` | 429 | per-install rate limit exceeded on `/enroll` or `/check` (see `Retry-After`) |
 | `internal` | 500 | unexpected server error |
 
 ---

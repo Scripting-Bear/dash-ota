@@ -60,6 +60,10 @@ async function main(): Promise<void> {
     autoPauseFailureRate: 0.2,
     requireRequestSignature: true,
     maxBundleBytes: 2048, // small cap so the size-guard test can trip with a modest bundle
+    // low limits so the rate-limit tests trip deterministically; per-install isolation keeps the
+    // other checks (≤ 3 requests per install) well under these.
+    enrollRateLimit: 5,
+    checkRateLimit: 5,
   };
   const store = new Store(config);
   const router = createRouter(store, config);
@@ -411,6 +415,52 @@ async function main(): Promise<void> {
   await check('admin rejects a wrong token (403, constant-time compare)', async () => {
     const res = await fetch(`${base}/admin/releases`, { headers: { 'x-ota-admin-token': 'not-the-admin-token' } });
     assert.equal(res.status, 403);
+  });
+
+  await check('enroll is rate-limited per install (429 + Retry-After)', async () => {
+    const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const devicePublicKeyB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
+    const enrollOnce = (): Promise<Response> =>
+      fetch(`${base}/ota/v1/enroll`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          installId: 'install-rl-enroll',
+          platform: 'android',
+          channel: 'dev',
+          devicePublicKeyB64,
+          enrollToken: 'test-session',
+        }),
+      });
+    for (let i = 0; i < 5; i++) assert.equal((await enrollOnce()).status, 200);
+    const limited = await enrollOnce();
+    const body = (await limited.json()) as { code: string };
+    assert.equal(limited.status, 429, JSON.stringify(body));
+    assert.equal(body.code, 'rate_limited');
+    assert.ok(limited.headers.get('retry-after'), 'expected a Retry-After header');
+  });
+
+  await check('check is rate-limited per authenticated install (429)', async () => {
+    const dev = await enroll('install-rl-check', 'R2');
+    const doCheck = (): Promise<Response> =>
+      signedPost(
+        '/ota/v1/check',
+        {
+          installId: dev.id,
+          platform: 'android',
+          channel: 'dev',
+          runtimeVersion: 'R2',
+          appVersion: '1.2.0',
+          buildNumber: 10,
+          currentBundleVersion: 0,
+        },
+        dev,
+      );
+    for (let i = 0; i < 5; i++) assert.equal((await doCheck()).status, 200);
+    const limited = await doCheck();
+    const body = (await limited.json()) as { code: string };
+    assert.equal(limited.status, 429, JSON.stringify(body));
+    assert.equal(body.code, 'rate_limited');
   });
 
   server.close();

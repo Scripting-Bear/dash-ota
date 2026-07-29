@@ -71,6 +71,24 @@ async function authenticate(ctx: ReqCtx, store: Store, config: BackendConfig): P
   return { installId };
 }
 
+/**
+ * Enforce a fixed-window rate limit for `scope`/`identity`. Returns a `429` result (with a
+ * `Retry-After` header) when the limit is exceeded, else `null` to continue.
+ */
+async function rateLimited(
+  store: Store,
+  config: BackendConfig,
+  scope: string,
+  identity: string,
+  limit: number,
+): Promise<HandlerResult | null> {
+  const r = await store.rateLimit(scope, identity, limit, config.rateLimitWindowMs);
+  if (r.allowed) return null;
+  return json({ error: 'rate limit exceeded', code: 'rate_limited' }, 429, {
+    'retry-after': String(Math.ceil(r.resetMs / 1000)),
+  });
+}
+
 /** Require the admin token (CLI publish / console), compared in constant time. */
 function requireAdmin(ctx: ReqCtx, config: BackendConfig): HandlerResult | null {
   if (!config.adminToken) return httpError(503, 'admin endpoints disabled: set OTA_ADMIN_TOKEN', 'admin_disabled');
@@ -121,6 +139,8 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
       if (!body?.installId || !body.platform || !body.channel || !body.devicePublicKeyB64) {
         return httpError(400, 'invalid enroll body');
       }
+      const limited = await rateLimited(store, config, 'enroll', body.installId, config.enrollRateLimit);
+      if (limited) return limited;
       // Authenticated enrollment ties the device key to a real user session. The host wires
       // its auth via `verifyEnrollToken`; the default just requires a token's presence.
       if (!(await enrollAuthorized(body, config))) {
@@ -139,6 +159,10 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
     handler: async (ctx) => {
       const auth = await authenticate(ctx, store, config);
       if (isError(auth)) return auth;
+      // Rate-limit the authenticated install (not the raw header) so a spoofed installId can't
+      // burn a victim's budget; cross-install / CPU-flood protection belongs at the proxy.
+      const limited = await rateLimited(store, config, 'check', auth.installId, config.checkRateLimit);
+      if (limited) return limited;
       const body = ctx.json<CheckRequest>();
       if (!body?.runtimeVersion || !body.platform || !body.channel) return httpError(400, 'invalid check body');
 
