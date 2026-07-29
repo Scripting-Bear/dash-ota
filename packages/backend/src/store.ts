@@ -22,6 +22,7 @@ import {
   randomSecretB64,
   sha256Hex,
 } from '@dash-ota/shared';
+import type { Readable } from 'node:stream';
 import type { BackendConfig } from './config.js';
 import {
   type BlobStore,
@@ -162,9 +163,14 @@ export class Store {
     return true;
   }
 
-  /** Read the ciphertext bytes for a bundle (from the blob store). */
-  async readCiphertext(bundleId: string): Promise<Buffer | null> {
-    return this.blob.get(bundleId);
+  /** Stat a bundle's ciphertext (size for `Content-Length` + the size cap), or null if absent. */
+  async statCiphertext(bundleId: string): Promise<{ size: number } | null> {
+    return this.blob.stat(bundleId);
+  }
+
+  /** Open a streaming reader over a bundle's ciphertext (never buffers it whole), or null if absent. */
+  async openCiphertextStream(bundleId: string): Promise<Readable | null> {
+    return this.blob.openReadStream(bundleId);
   }
 
   /**

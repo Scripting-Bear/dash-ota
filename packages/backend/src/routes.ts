@@ -24,7 +24,7 @@ import {
   verifyRequestEcdsa,
 } from '@dash-ota/shared';
 import type { BackendConfig } from './config.js';
-import { binary, type HandlerResult, httpError, json, type OtaRoute, type ReqCtx } from './http.js';
+import { binaryStream, type HandlerResult, httpError, json, type OtaRoute, type ReqCtx } from './http.js';
 import { Store } from './store.js';
 
 /** Read a single header as a string. */
@@ -176,9 +176,12 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
       const token = header(ctx, OTA_HEADERS.downloadToken) ?? ctx.query.get('token') ?? '';
       const bundleId = await store.consumeDownloadToken(token);
       if (!bundleId) return httpError(403, 'invalid or used download token', 'bad_token');
-      const ciphertext = await store.readCiphertext(bundleId);
-      if (!ciphertext) return httpError(404, 'ciphertext missing', 'not_found');
-      return binary(ciphertext);
+      const stat = await store.statCiphertext(bundleId);
+      if (!stat) return httpError(404, 'ciphertext missing', 'not_found');
+      const stream = await store.openCiphertextStream(bundleId);
+      if (!stream) return httpError(404, 'ciphertext missing', 'not_found');
+      // Stream the ciphertext (never buffered whole) with a Content-Length for client progress + size pre-check.
+      return binaryStream(stream, stat.size);
     },
   });
 
@@ -238,9 +241,15 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
         return httpError(400, 'manifest signature does not verify', 'bad_signature');
       }
       const ciphertext = Buffer.from(body.ciphertextB64, 'base64');
+      if (ciphertext.byteLength > config.maxBundleBytes) {
+        return httpError(413, `ciphertext exceeds the ${config.maxBundleBytes}-byte size cap`, 'too_large');
+      }
       const ciphertextSha = sha256Hex(ciphertext);
       if (ciphertextSha !== signedManifest.manifest.encryption.ciphertextSha256) {
         return httpError(400, 'ciphertext hash does not match manifest', 'hash_mismatch');
+      }
+      if (ciphertext.byteLength !== signedManifest.manifest.encryption.ciphertextSize) {
+        return httpError(400, 'ciphertext size does not match manifest', 'size_mismatch');
       }
       const record = await store.addRelease(
         signedManifest,

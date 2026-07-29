@@ -18,8 +18,9 @@
  * @module providers
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import type { NativeVersionPolicy, SignedManifest } from '@dash-ota/shared';
 
 /** Per-release adoption / health counters accumulated from `/confirm`. */
@@ -81,8 +82,12 @@ export interface DatabaseProvider {
 /** The encrypted bundle byte store, keyed by `bundleId`. */
 export interface BlobStore {
   put(bundleId: string, data: Buffer): Promise<void>;
-  /** The ciphertext bytes, or `null` if absent. */
+  /** The ciphertext bytes, or `null` if absent. Buffers the whole blob — prefer {@link openReadStream} to serve downloads. */
   get(bundleId: string): Promise<Buffer | null>;
+  /** Byte length of the stored blob, or `null` if absent (drives `Content-Length` + the client size pre-check). */
+  stat(bundleId: string): Promise<{ size: number } | null>;
+  /** Open a streaming reader over the blob, or `null` if absent — the download path never buffers the ciphertext whole. */
+  openReadStream(bundleId: string): Promise<Readable | null>;
 }
 
 /**
@@ -201,6 +206,14 @@ export class DiskBlobStore implements BlobStore {
   async get(bundleId: string): Promise<Buffer | null> {
     const p = this.path(bundleId);
     return existsSync(p) ? readFileSync(p) : null;
+  }
+  async stat(bundleId: string): Promise<{ size: number } | null> {
+    const p = this.path(bundleId);
+    return existsSync(p) ? { size: statSync(p).size } : null;
+  }
+  async openReadStream(bundleId: string): Promise<Readable | null> {
+    const p = this.path(bundleId);
+    return existsSync(p) ? createReadStream(p) : null;
   }
 }
 

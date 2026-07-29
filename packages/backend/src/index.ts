@@ -33,7 +33,7 @@ import type { OtaRoute } from './http.js';
 export * from './config.js';
 export { createOtaRoutes } from './routes.js';
 export { createRouter } from './server.js';
-export { Router, json, binary, httpError, writeNodeResult } from './http.js';
+export { Router, json, binary, binaryStream, httpError, writeNodeResult } from './http.js';
 export type { OtaRoute, ReqCtx, HandlerResult, JsonResult, BinaryResult, Handler } from './http.js';
 export { dashOtaMiddleware, rawBodySaver } from './express.js';
 export type { OtaMiddleware } from './express.js';

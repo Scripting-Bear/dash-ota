@@ -59,6 +59,7 @@ async function main(): Promise<void> {
     autoPauseMinSamples: 2,
     autoPauseFailureRate: 0.2,
     requireRequestSignature: true,
+    maxBundleBytes: 2048, // small cap so the size-guard test can trip with a modest bundle
   };
   const store = new Store(config);
   const router = createRouter(store, config);
@@ -177,6 +178,28 @@ async function main(): Promise<void> {
     assert.equal(res.status, 400);
   });
 
+  await check('publish rejects an oversized ciphertext (size cap)', async () => {
+    const built = buildRelease({
+      bundleId: 'bnd_R2_huge',
+      runtimeVersion: 'R2',
+      bundleVersion: 3,
+      platform: 'android',
+      channel: 'dev',
+      mandatory: false,
+      files: [{ path: 'index.android.bundle', data: Buffer.alloc(4096, 0x61) }], // 4 KiB > 2 KiB cap
+      keyId,
+    });
+    const signed = signManifest(built.manifest, keys.privateKeyPem);
+    const res = await adminPost('/admin/publish', {
+      signedManifest: signed,
+      ciphertextB64: built.ciphertext.toString('base64'),
+      rolloutPercentage: 100,
+    });
+    const body = (await res.json()) as { code: string };
+    assert.equal(res.status, 413, JSON.stringify(body));
+    assert.equal(body.code, 'too_large');
+  });
+
   const r2Device = await enroll('install-R2', 'R2');
   let serverNonce = '';
 
@@ -201,10 +224,11 @@ async function main(): Promise<void> {
     assert.equal(data.update?.manifest.bundleId, 'bnd_R2_v1');
     serverNonce = data.serverNonce;
 
-    // download + open exactly as native will
+    // download + open exactly as native will (streamed, with a Content-Length for the size pre-check)
     const dl = await fetch(`${base}/ota/v1/download`, { headers: { [OTA_HEADERS.downloadToken]: data.downloadToken ?? '' } });
     assert.equal(dl.status, 200);
     const ciphertext = Buffer.from(await dl.arrayBuffer());
+    assert.equal(Number(dl.headers.get('content-length')), ciphertext.byteLength, 'Content-Length matches ciphertext size');
     const files = openRelease(data.update!, ciphertext, embeddedPublicKey);
     const bundle = files.find((f) => f.path === 'index.android.bundle');
     assert.match(bundle?.data.toString('utf8') ?? '', /OTA bundle for R2/);

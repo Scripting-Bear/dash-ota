@@ -138,11 +138,14 @@ The backend applies §6 eligibility + rollout and returns the highest-`bundleVer
 Stream the ciphertext archive. Token via `x-ota-download-token` header or `?token=`.
 
 ```
-200 application/octet-stream  <ciphertext bytes>
+200 application/octet-stream  <ciphertext bytes>   (Content-Length set)
 403 bad_token   (missing / expired / already used)
 404 not_found   (ciphertext missing)
 ```
-The token is single-use and short-TTL (`downloadTokenTtlMs`, default 2 min). The client verifies
+The response is **streamed** (the backend never buffers the whole ciphertext) and carries a
+`Content-Length` equal to the signed `encryption.ciphertextSize`, so the client can pre-check the
+size before reading the body. The token is single-use and short-TTL (`downloadTokenTtlMs`, default
+2 min). The client verifies
 `ciphertextSha256`, the Ed25519 signature, then per-file hashes **natively** before applying.
 
 ### `POST /ota/v1/confirm`  *(signed, §4)*
@@ -170,7 +173,9 @@ Report the apply outcome (drives adoption + server-side auto-pause).
 | `POST /admin/native-policy` | `{ channel, minSupportedNativeVersion, severity, storeUrl? }` → set the force-update gate |
 
 `/admin/publish` MUST reject: unknown `keyId` (`400 unknown_key`), bad manifest signature
-(`400 bad_signature`), ciphertext hash ≠ manifest (`400 hash_mismatch`).
+(`400 bad_signature`), ciphertext hash ≠ manifest (`400 hash_mismatch`), ciphertext size ≠
+manifest `encryption.ciphertextSize` (`400 size_mismatch`), and ciphertext larger than the
+configured cap `maxBundleBytes` (`413 too_large`).
 
 ---
 
@@ -270,6 +275,8 @@ Errors are `{ "error": "<message>", "code": "<code>" }` with an HTTP status.
 | `not_found` | 404 | ciphertext missing |
 | `unknown_key` | 400 | publish referenced an unregistered signing keyId |
 | `hash_mismatch` | 400 | ciphertext hash ≠ manifest.encryption.ciphertextSha256 |
+| `size_mismatch` | 400 | ciphertext size ≠ manifest.encryption.ciphertextSize |
+| `too_large` | 413 | ciphertext exceeds the configured `maxBundleBytes` cap |
 | `internal` | 500 | unexpected server error |
 
 ---

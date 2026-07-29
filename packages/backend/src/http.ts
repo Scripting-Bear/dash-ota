@@ -7,6 +7,7 @@
  */
 
 import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import { pipeline, type Readable } from 'node:stream';
 import { URL } from 'node:url';
 
 /** Per-request context passed to handlers. */
@@ -28,12 +29,19 @@ export interface JsonResult {
   headers?: Record<string, string>;
 }
 
-/** A binary response (used to stream the encrypted bundle). */
+/**
+ * A binary response (used to serve the encrypted bundle). The body may be a fully-buffered
+ * `Buffer` or a `Readable` stream — the download path uses a stream so it never holds the whole
+ * ciphertext in memory. Set {@link contentLength} so the client receives a `Content-Length`
+ * header (drives download progress + the native size pre-check).
+ */
 export interface BinaryResult {
   kind: 'binary';
   status?: number;
   contentType: string;
-  body: Buffer;
+  body: Buffer | Readable;
+  /** byte length of the body; emitted as `Content-Length` when set. */
+  contentLength?: number;
   headers?: Record<string, string>;
 }
 
@@ -52,9 +60,19 @@ export function json(body: unknown, status = 200, headers?: Record<string, strin
   return { kind: 'json', status, body, headers };
 }
 
-/** Build a binary response. */
+/** Build a buffered binary response (whole body in memory). Prefer {@link binaryStream} for large payloads. */
 export function binary(body: Buffer, contentType = 'application/octet-stream', status = 200): BinaryResult {
-  return { kind: 'binary', status, contentType, body };
+  return { kind: 'binary', status, contentType, body, contentLength: body.byteLength };
+}
+
+/** Build a streaming binary response with a known content length (the bundle is never buffered whole). */
+export function binaryStream(
+  body: Readable,
+  contentLength: number,
+  contentType = 'application/octet-stream',
+  status = 200,
+): BinaryResult {
+  return { kind: 'binary', status, contentType, body, contentLength };
 }
 
 /** Build a JSON error response. */
@@ -66,8 +84,17 @@ export function httpError(status: number, error: string, code?: string): JsonRes
 export function writeNodeResult(res: import('node:http').ServerResponse, result: HandlerResult): void {
   const status = result.status ?? 200;
   if (result.kind === 'binary') {
-    res.writeHead(status, { 'content-type': result.contentType, ...(result.headers ?? {}) });
-    res.end(result.body);
+    const headers: Record<string, string> = { 'content-type': result.contentType, ...(result.headers ?? {}) };
+    if (result.contentLength !== undefined) headers['content-length'] = String(result.contentLength);
+    res.writeHead(status, headers);
+    if (Buffer.isBuffer(result.body)) {
+      res.end(result.body);
+    } else {
+      // Streaming body: `pipeline` destroys BOTH ends on any error or a client abort — so the
+      // file descriptor is always released (no leak under aborted downloads). The status/headers
+      // are already sent, so on a mid-transfer error we can only tear the socket down.
+      pipeline(result.body, res, () => {});
+    }
     return;
   }
   res.writeHead(status, { 'content-type': 'application/json', ...(result.headers ?? {}) });

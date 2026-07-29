@@ -92,6 +92,8 @@ export interface BackendConfig extends BackendHooks {
   autoPauseFailureRate: number;
   /** minimum confirm samples before auto-pause can trigger. */
   autoPauseMinSamples: number;
+  /** hard cap (bytes) on a published ciphertext — rejects oversized bundles at ingest (abuse / memory guard). */
+  maxBundleBytes: number;
   /** require a valid device-key signature on /check + /confirm (POC can disable for quick tests). */
   requireRequestSignature: boolean;
   /** require an authenticated session token (enrollToken) on /enroll. */
@@ -118,6 +120,7 @@ export function loadConfig(): BackendConfig {
     nonceTtlMs: envNum('OTA_NONCE_TTL_MS', 10 * 60 * 1000),
     autoPauseFailureRate: envNum('OTA_AUTOPAUSE_RATE', 0.2),
     autoPauseMinSamples: envNum('OTA_AUTOPAUSE_MIN', 5),
+    maxBundleBytes: envNum('OTA_MAX_BUNDLE_BYTES', 100 * 1024 * 1024),
     requireRequestSignature: process.env.OTA_REQUIRE_SIG !== 'false',
     requireEnrollAuth: process.env.OTA_REQUIRE_ENROLL_AUTH !== 'false',
   };
