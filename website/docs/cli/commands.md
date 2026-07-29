@@ -17,9 +17,12 @@ dash-ota keygen --key-id key_prod_1 --out .keys
 |---|---|---|
 | `--out` | `.keys` | output directory |
 | `--key-id` | `key_dev_1` | key identifier (becomes the filename + manifest `keyId`) |
+| `--passphrase <p>` | prompt | encrypt the private key at rest (or `OTA_KEY_PASSPHRASE`) |
+| `--no-encrypt` | — | store the private key unencrypted (warns) |
 | `--server` / `--admin-token` | — | optionally register the new key immediately |
 
-Writes `<key-id>.private.pem`, `.public.pem`, `.public.json`; prints `publicKeyRawB64`.
+Writes `<key-id>.private.pem` (**encrypted** by default), `.public.pem`, `.public.json`; prints
+`publicKeyRawB64`. See [Key custody](/docs/cli/key-custody).
 
 ## `register-key`
 Tell the backend to trust a public key.
@@ -38,9 +41,10 @@ dash-ota fingerprint --project .
 ## `bundle`
 Wrap `react-native bundle` into a payload dir (bundle + assets).
 ```bash
-dash-ota bundle --project . --platform android --out ./out [--dev] [--entry index.js]
+dash-ota bundle --project . --platform android --out ./out --hermes [--dev] [--entry index.js]
 ```
-> For Hermes builds, compile the output to **HBC** with the binary's own `hermesc` before publish.
+> `--hermes` compiles the output to **HBC** with the binary's own `hermesc` (fails loud if missing).
+> See [Hermes & HBC](/docs/cli/hermes).
 
 ## `publish`
 AES-256-GCM encrypt → per-file SHA-256 → **Ed25519-sign** the manifest → upload.
@@ -61,8 +65,14 @@ dash-ota publish --bundle-dir ./out --platform android --channel prod \
 | `--mandatory` | blocking update |
 | `--release-note <txt>` | "What's New" note (or `--interactive` for `$EDITOR`) |
 | `--key-id <id>` / `--key <pem>` | signing key (default `.keys/<key-id>.private.pem`) |
+| `--passphrase <p>` | decrypt an encrypted signing key (or `OTA_KEY_PASSPHRASE`) |
+| `--verify-pub <rawB64>` | public key to self-verify the signature against before upload |
 | `--no-upload` | write the signed artifact locally instead of uploading |
 | `--interactive` | prompt for the fields above |
+
+`publish` **self-verifies** the signature before upload (aborts on a key mismatch). Server access is
+fail-closed: set `--admin-token`/`OTA_ADMIN_TOKEN`, and `http://` to a remote host is refused unless
+`--allow-insecure`.
 
 ## `list`
 ```bash

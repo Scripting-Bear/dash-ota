@@ -25,6 +25,17 @@ are security-relevant**, which is exactly why they live in native, not JS.
 
 > Generate `ota_public_keys` with [`dash-ota keygen`](/docs/cli/overview) (the `publicKeyRawB64`).
 
+### Optional hardening keys
+
+```groovy
+// Certificate pinning for the bundle download (off unless set). Comma-separated
+// base64(SHA-256(DER server cert)) — see Security → Pinning & attestation.
+resValue "string", "ota_tls_pins", "PIN_A_BASE64,PIN_B_BASE64"
+```
+
+StrongBox/TEE hardware backing for the device key is used automatically (with a graceful fallback);
+its status is reported to the backend as `keyHardwareBacked` at enrollment.
+
 ## 2. Wire the bundle loader
 
 Release builds must boot from the active OTA slot; debug keeps Metro. In `MainApplication.kt`:

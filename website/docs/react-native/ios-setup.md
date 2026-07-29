@@ -30,6 +30,19 @@ Write URLs as `https:/$()/host` — the empty `$()` interpolation breaks up the 
 treated as a comment. The native `DashOtaConfig` reads `OTA_*` from `Bundle.main`.
 :::
 
+### Optional hardening keys
+
+```xml
+<!-- Certificate pinning for the bundle download (off unless set). Comma-separated
+     base64(SHA-256(DER server cert)) — see Security → Pinning & attestation. -->
+<key>OTA_TLS_PINS</key>            <string>$(OTA_TLS_PINS)</string>
+<!-- Fail closed if the Secure Enclave is unavailable (default false = software fallback). -->
+<key>OTA_REQUIRE_HARDWARE_KEY</key> <string>true</string>
+```
+
+The Secure Enclave is used for the device key when available; `keyHardwareBacked` is reported to the
+backend at enrollment so you can gate on genuine hardware.
+
 ## 2. Wire the bundle URL
 
 In `AppDelegate.swift`, in the **release** branch only:

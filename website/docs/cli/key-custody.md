@@ -16,6 +16,37 @@ update. Treat it like a production signing secret.
 - **Leak** = an attacker can forge updates **until you rotate** — so rotate immediately on
   suspicion.
 
+## Encryption at rest
+
+`keygen` encrypts the private key with a passphrase by default (AES-256-CBC / PKCS#8) — the file on
+disk is a `BEGIN ENCRYPTED PRIVATE KEY`. `publish` decrypts it **in memory only** to sign.
+
+```bash
+# passphrase from a prompt (masked), a flag, or the environment
+dash-ota keygen --key-id key_prod_1                 # prompts (input hidden)
+OTA_KEY_PASSPHRASE=… dash-ota keygen --key-id key_prod_1   # CI / non-interactive
+dash-ota keygen --key-id key_prod_1 --no-encrypt    # opt out (warns loudly)
+
+# publishing an encrypted key:
+OTA_KEY_PASSPHRASE=… dash-ota publish …             # or --passphrase, or a prompt
+```
+
+Prefer `OTA_KEY_PASSPHRASE` (or the masked prompt) over `--passphrase`, which is visible in process
+listings / shell history.
+
+## Self-verify before upload
+
+`publish` verifies the freshly-signed manifest against the public key the app embeds — `--verify-pub
+<rawB64>`, else the sibling `<keyId>.public.json`, else a consistency check against the signing key —
+and **aborts on mismatch**. This catches a wrong-key / `keyId` mismatch *before* shipping an update
+that every device would reject.
+
+## Fail-closed admin & transport
+
+Server commands (`register-key`, `publish`, `list`, rollout ops) require an admin token — there is
+**no default**; set `--admin-token` or `OTA_ADMIN_TOKEN` or the command errors. Plaintext `http://`
+to a non-local host is refused (use `https://`, or `--allow-insecure` on a trusted network).
+
 ## Key ring & rotation
 
 The app trusts a **set** of public keys (a key ring), and each manifest carries a `keyId`. This
