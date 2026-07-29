@@ -46,6 +46,8 @@ export interface EnrollRequest {
   devicePublicKeyB64: string;
   /** app session token proving an authenticated user. */
   enrollToken?: string;
+  /** optional device/app integrity attestation (Play Integrity / App Attest) for the backend to verify. */
+  attestationToken?: string;
 }
 export interface EnrollResponse {
   ok: true;

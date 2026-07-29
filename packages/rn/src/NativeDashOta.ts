@@ -65,6 +65,12 @@ export interface Spec extends TurboModule {
   signWithDeviceKey(message: string): string;
   /** SHA-256 of a UTF-8 string, hex output (request body hashing). */
   sha256Hex(message: string): string;
+  /**
+   * Cryptographically-secure random nonce (base64url of 16 bytes) for request anti-replay, from
+   * the platform CSPRNG (Android `SecureRandom` / iOS `SecRandomCopyBytes`). Preferred over any
+   * JS-side `Math.random`.
+   */
+  generateNonce(): string;
 }
 
 export default TurboModuleRegistry.getEnforcing<Spec>('DashOta');

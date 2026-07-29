@@ -20,14 +20,29 @@ const OTA_HEADERS = {
 
 let nonceCounter = 0;
 
-/** Generate a unique-enough request nonce (POC; a CSPRNG via native is preferable in prod). */
-function makeNonce(): string {
+/**
+ * A request nonce, preferring the native CSPRNG ({@link DashOta.generateNonce}) and falling back to
+ * a JS construction only if the native method is unavailable (e.g. an older native binary). The
+ * native path is the real anti-replay guarantee; the fallback keeps enroll/check working rather
+ * than hard-failing on a version skew.
+ * @internal exported for tests
+ */
+export function makeNonce(): string {
+  try {
+    const native = DashOta.generateNonce();
+    if (native) return native;
+  } catch {
+    // native generateNonce not available on this binary — use the JS fallback below.
+  }
   nonceCounter += 1;
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${nonceCounter}`;
 }
 
-/** Build the canonical request-signing string — must match `@dash-ota/shared`'s `requestSigningString`. */
-function signingString(
+/**
+ * Build the canonical request-signing string — must match `@dash-ota/shared`'s `requestSigningString`.
+ * @internal exported for the CLI↔native round-trip guard test
+ */
+export function signingString(
   method: string,
   path: string,
   installId: string,
@@ -75,6 +90,10 @@ export async function createClientContext(config: OtaConfig, logger: OtaLogger):
   // authenticated session token. The private key never leaves the device.
   const devicePublicKeyB64 = DashOta.getDevicePublicKeyB64();
   const enrollToken = (await config.getEnrollToken?.()) ?? undefined;
+  // Device/app integrity attestation (Play Integrity / App Attest), attached at enrollment so the
+  // backend's verifyEnrollToken hook can gate registration on a genuine device. Null when the host
+  // wires no attestor (the default) — the field is simply omitted.
+  const attestationToken = (await config.attestor?.getAttestationToken()) ?? undefined;
   const res = await fetchImpl(`${serverUrl}/ota/v1/enroll`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -86,6 +105,7 @@ export async function createClientContext(config: OtaConfig, logger: OtaLogger):
       buildNumber,
       devicePublicKeyB64,
       enrollToken,
+      attestationToken,
     }),
   });
   if (!res.ok) throw new Error(`enroll failed: ${res.status}`);

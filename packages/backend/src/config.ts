@@ -27,6 +27,8 @@ export interface EnrollPrincipal {
   channel: string;
   appVersion?: string;
   buildNumber?: number;
+  /** device/app integrity attestation token the client attached, for `verifyEnrollToken` to check. */
+  attestationToken?: string;
 }
 
 /** A `/confirm` outcome, surfaced to {@link BackendHooks.onConfirm} for analytics. */
