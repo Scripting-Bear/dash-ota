@@ -22,11 +22,12 @@ public class DashOtaImpl: NSObject {
     let s = DashOtaStore.shared.loadState()
     let pending = (s["pending"] as? [String: Any])?["bundleId"] as? String
     let lkg = (s["lastKnownGood"] as? [String: Any])?["version"] as? Int ?? 0
+    let currentId = (DashOtaStore.shared.currentMeta()["bundleId"] as? String) ?? ""
     return [
       "currentBundleVersion": DashOtaStore.shared.currentBundleVersion(),
       "pendingBundleId": pending as Any,
       "lastKnownGoodVersion": lkg,
-      "otaDisabled": false,
+      "otaDisabled": !currentId.isEmpty && DashOtaStore.shared.isDisabled(currentId),
     ] as NSDictionary
   }
 

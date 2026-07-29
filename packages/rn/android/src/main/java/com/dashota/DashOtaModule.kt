@@ -52,7 +52,8 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
       if (pending != null) map.putString("pendingBundleId", pending) else map.putNull("pendingBundleId")
       val lkgVersion = if (state.has("lastKnownGood") && !state.isNull("lastKnownGood")) state.getJSONObject("lastKnownGood").optInt("version", 0) else 0
       map.putDouble("lastKnownGoodVersion", lkgVersion.toDouble())
-      map.putBoolean("otaDisabled", false)
+      val currentBundleId = DashOtaStore.currentMeta(reactContext).optString("bundleId", "")
+      map.putBoolean("otaDisabled", currentBundleId.isNotEmpty() && DashOtaStore.isDisabled(reactContext, currentBundleId))
       promise.resolve(map)
     } catch (e: Exception) {
       promise.reject("state_error", e.message, e)
