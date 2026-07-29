@@ -72,7 +72,11 @@ export interface BackendHooks {
 /** Resolved backend configuration. */
 export interface BackendConfig extends BackendHooks {
   port: number;
-  /** shared secret the CLI presents to publish/admin endpoints. */
+  /**
+   * Secret the CLI presents to publish/admin endpoints, compared in constant time. **Empty
+   * disables all admin endpoints (fail-closed)** — set it via `OTA_ADMIN_TOKEN` or the
+   * `adminToken` option. Never commit it, and serve `/admin/*` only over TLS.
+   */
   adminToken: string;
   /** directory where encrypted bundle archives are stored. */
   storageDir: string;
@@ -106,7 +110,7 @@ function envNum(name: string, fallback: number): number {
 export function loadConfig(): BackendConfig {
   return {
     port: envNum('OTA_PORT', 4455),
-    adminToken: process.env.OTA_ADMIN_TOKEN ?? 'dev-admin-token',
+    adminToken: process.env.OTA_ADMIN_TOKEN ?? '',
     storageDir: process.env.OTA_STORAGE_DIR ?? join(pkgRoot, 'storage'),
     dataDir: process.env.OTA_DATA_DIR ?? join(pkgRoot, '.data'),
     timestampSkewMs: envNum('OTA_TS_SKEW_MS', 5 * 60 * 1000),

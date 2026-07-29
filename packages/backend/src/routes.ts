@@ -15,6 +15,7 @@ import {
   type ConfirmRequest,
   type DeviceContext,
   type EnrollRequest,
+  constantTimeEqualStr,
   OTA_HEADERS,
   publicKeyFromRawB64,
   sha256Hex,
@@ -70,9 +71,11 @@ async function authenticate(ctx: ReqCtx, store: Store, config: BackendConfig): P
   return { installId };
 }
 
-/** Require the admin token (CLI publish / console). */
+/** Require the admin token (CLI publish / console), compared in constant time. */
 function requireAdmin(ctx: ReqCtx, config: BackendConfig): HandlerResult | null {
-  if (header(ctx, 'x-ota-admin-token') !== config.adminToken) return httpError(403, 'admin token required', 'forbidden');
+  if (!config.adminToken) return httpError(503, 'admin endpoints disabled: set OTA_ADMIN_TOKEN', 'admin_disabled');
+  const provided = header(ctx, 'x-ota-admin-token') ?? '';
+  if (!constantTimeEqualStr(provided, config.adminToken)) return httpError(403, 'admin token required', 'forbidden');
   return null;
 }
 

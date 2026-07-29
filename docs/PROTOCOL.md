@@ -265,6 +265,7 @@ Errors are `{ "error": "<message>", "code": "<code>" }` with an HTTP status.
 | `bad_signature` | 401 / 400 | bad request signature (401) or bad manifest signature on publish (400) |
 | `bad_nonce` | 401 | server nonce not issued to this install / already used |
 | `forbidden` | 403 | missing / wrong admin token |
+| `admin_disabled` | 503 | admin endpoints disabled — no admin token configured (fail-closed) |
 | `bad_token` | 403 | download token missing / expired / already used |
 | `not_found` | 404 | ciphertext missing |
 | `unknown_key` | 400 | publish referenced an unregistered signing keyId |

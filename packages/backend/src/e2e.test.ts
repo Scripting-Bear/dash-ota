@@ -384,6 +384,11 @@ async function main(): Promise<void> {
     assert.equal(releases.releases.find((r) => r.bundleId === 'bnd_R2_bad')?.paused, true);
   });
 
+  await check('admin rejects a wrong token (403, constant-time compare)', async () => {
+    const res = await fetch(`${base}/admin/releases`, { headers: { 'x-ota-admin-token': 'not-the-admin-token' } });
+    assert.equal(res.status, 403);
+  });
+
   server.close();
   console.log(`\n${passed} e2e checks passed.`);
 }

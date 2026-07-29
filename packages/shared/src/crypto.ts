@@ -182,6 +182,22 @@ export function constantTimeEqualHex(a: string, b: string): boolean {
 }
 
 /**
+ * Constant-time comparison of two arbitrary UTF-8 strings (e.g. an admin token). Both inputs are
+ * SHA-256-hashed first, so the compare is fixed-length and leaks neither length nor content
+ * through timing. Empty-vs-empty is treated as **not** equal to avoid a "no token configured"
+ * accidentally matching an empty presented token.
+ * @param a first string
+ * @param b second string
+ * @returns true if equal and non-empty
+ */
+export function constantTimeEqualStr(a: string, b: string): boolean {
+  if (a.length === 0 || b.length === 0) return false;
+  const ah = createHash('sha256').update(a, 'utf8').digest();
+  const bh = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(ah, bh);
+}
+
+/**
  * Verify an ECDSA-P256-SHA256 signature made by a device's hardware key.
  * @param publicKeySpkiB64 the device public key as SPKI-DER, base64 (stored at enroll)
  * @param message the signed bytes (the canonical request string)
