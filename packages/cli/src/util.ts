@@ -183,19 +183,44 @@ export function readBundleDir(dir: string): ArchiveFile[] {
   }));
 }
 
-/** Cheap, deterministic hash of a native source tree (relpath + size; content-hash in prod). */
+/** Build-output / tooling dirs excluded from the native fingerprint (non-deterministic noise). */
+const NATIVE_FINGERPRINT_IGNORE = new Set(['build', '.gradle', '.cxx', 'Pods', 'DerivedData', 'node_modules', '.idea']);
+
+/** Recursively list files under a native dir, skipping build-output / tooling subdirs. */
+function walkNative(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (!NATIVE_FINGERPRINT_IGNORE.has(entry.name)) out.push(...walkNative(join(dir, entry.name)));
+    } else if (entry.isFile()) {
+      out.push(join(dir, entry.name));
+    }
+  }
+  return out;
+}
+
+/**
+ * Content-hash a native source tree: sha256 of each file's **bytes** (keyed by relative path),
+ * sorted then hashed together. Build-output/tooling dirs are excluded for determinism. Unlike a
+ * path+size hash, this flips when native source actually changes — the runtimeVersion gate depends
+ * on it, so a same-size edit must not slip through.
+ */
 function hashNativeDir(dir: string): string {
   if (!existsSync(dir)) return 'absent';
-  const entries = walk(dir)
-    .map((abs) => `${relative(dir, abs).split(sep).join('/')}:${statSync(abs).size}`)
+  const entries = walkNative(dir)
+    .map((abs) => {
+      const rel = relative(dir, abs).split(sep).join('/');
+      return `${rel}:${createHash('sha256').update(readFileSync(abs)).digest('hex')}`;
+    })
     .sort();
   return createHash('sha256').update(entries.join('\n')).digest('hex').slice(0, 16);
 }
 
 /**
- * Compute a project's runtimeVersion from its native inputs. Best-effort for the POC:
- * hashes all dependencies + RN version + native dir shapes + Hermes version. A production
- * version should use a curated native-dependency allowlist and content-hash native trees.
+ * Compute a project's runtimeVersion from its native inputs: all dependencies + RN version +
+ * Hermes version + **content-hashed** native trees ({@link hashNativeDir}). Conservative by
+ * design — any dependency change flips the runtimeVersion (safe over churny). A future refinement
+ * is a curated native-dependency allowlist so JS-only bumps don't churn the gate.
  * @param projectPath path to the React Native app
  * @returns the runtimeVersion string
  */
