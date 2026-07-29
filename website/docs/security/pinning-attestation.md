@@ -1,48 +1,67 @@
 ---
 sidebar_position: 3
-title: Pinning & attestation (plug-ins)
+title: Pinning & attestation
 ---
 
-# Pinning & attestation (plug-ins)
+# Pinning & attestation
 
-Two defense-in-depth controls are **deferred but modular** — the core never depends on them, so you
-add them later without touching it.
+Two defense-in-depth controls, both now implemented and **customizable** — off by default so an
+existing app is unaffected until it opts in.
 
-## TransportSecurity (TLS pinning)
+## TLS certificate pinning (native download)
 
-Closes **active-MITM confidentiality** (the AES content key rides the TLS channel). The client
-exposes a `TransportSecurity` interface; inject a `fetch` that pins your server's certificate or
-public key:
+The trust-critical bundle download is pinned **natively** (Android + iOS), closing active-MITM on
+the ciphertext transport. It's **off by default**; enable it by embedding one or more pins per build
+flavour:
 
-```ts
-const transport: TransportSecurity = {
-  fetch: pinnedFetch, // e.g. react-native-ssl-pinning / a TrustKit-backed fetch
-};
-<DashOtaProvider config={{ /* ... */ transport }} />
+- **Android:** the `ota_tls_pins` string resource.
+- **iOS:** the `OTA_TLS_PINS` Info.plist key.
+
+A pin is `base64( SHA-256( DER-encoded server certificate ) )`, comma-separated for a set. The format
+is **identical across platforms** (both hash the full DER cert). Empty ⇒ no pinning.
+
+```sh
+# Compute a pin from the live server certificate:
+openssl s_client -connect ota.example.com:443 </dev/null 2>/dev/null \
+  | openssl x509 -outform der | openssl dgst -sha256 -binary | base64
 ```
 
-When omitted, dash-ota uses the platform `fetch` (still over HTTPS) — integrity is unaffected
-either way, since that's guaranteed by native Ed25519 verification.
+:::warning Pin before you enable
+A wrong pin **bricks OTA updates**. Pin more than one certificate (e.g. current + next), or pin your
+CA, and roll pins out ahead of a rotation. Verify on a device before shipping — this is exactly why
+it ships off by default.
+:::
 
-## IntegrityAttestor (Play Integrity / App Attest)
+The JS `TransportSecurity` hook still exists to pin the small JSON `/enroll` `/check` `/confirm`
+calls (inject a pinned `fetch`); the native pin above covers the bundle bytes.
 
-Raises the bar against **cloned or modified apps** calling your backend. The client exposes an
-`IntegrityAttestor` interface; produce an attestation token your backend can verify before honoring
-sensitive operations:
+## Device/app integrity attestation
+
+Wired end-to-end. Provide an `IntegrityAttestor` and its token is attached at enrollment, where your
+backend's `verifyEnrollToken` hook can verify it before registering the device key:
 
 ```ts
 const attestor: IntegrityAttestor = {
-  attest: async () => getPlayIntegrityToken(), // or App Attest on iOS
+  getAttestationToken: async () => getPlayIntegrityToken(), // or App Attest on iOS
 };
 <DashOtaProvider config={{ /* ... */ attestor }} />
 ```
 
-## Why they're deferred, not skipped
+```ts
+// backend
+dashOtaMiddleware({
+  verifyEnrollToken: (token, principal) => {
+    // principal.attestationToken + principal.keyHardwareBacked are available here
+    return verifySession(token) && verifyPlayIntegrity(principal.attestationToken);
+  },
+});
+```
 
-- **Pinning** needs a per-app certificate-rotation strategy (a real operational phase), so it's
-  intentionally pluggable rather than baked in.
-- **Attestation** requires the app to be on the Play Store / App Store to exercise the services
-  end-to-end. Until then, the [hardware device-key enrollment](/docs/concepts/security-model) is the
-  chosen non-attestation control.
+When no attestor is configured (the default) the field is simply omitted.
 
-Both are first-class interfaces, so adopting them is a config change, not a refactor.
+## Hardware-key provenance
+
+The client reports whether its signing key is hardware-backed (Android StrongBox/TEE, iOS Secure
+Enclave) as `keyHardwareBacked` at enrollment, so the backend can require genuine hardware. On iOS,
+`OTA_REQUIRE_HARDWARE_KEY=true` makes key creation **fail closed** rather than silently falling back
+to a software key.
