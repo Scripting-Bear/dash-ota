@@ -334,6 +334,78 @@ async function main(): Promise<void> {
     assert.equal(res.status, 401);
   });
 
+  await check('a stale timestamp is rejected (skew window)', async () => {
+    const body = {
+      installId: r2Device.id,
+      platform: 'android',
+      channel: 'dev',
+      runtimeVersion: 'R2',
+      appVersion: '1.2.0',
+      buildNumber: 10,
+      currentBundleVersion: 0,
+    };
+    const raw = Buffer.from(JSON.stringify(body), 'utf8');
+    const nonce = randomNonceB64();
+    const staleTs = String(Date.now() - 10 * 60 * 1000); // 10 min old, beyond the 5 min default skew
+    const signature = deviceSign(
+      r2Device.privateKey,
+      requestSigningString({
+        method: 'POST',
+        path: '/ota/v1/check',
+        installId: r2Device.id,
+        nonce,
+        timestamp: staleTs,
+        bodySha256: sha256Hex(raw),
+      }),
+    );
+    const res = await fetch(`${base}/ota/v1/check`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        [OTA_HEADERS.installId]: r2Device.id,
+        [OTA_HEADERS.nonce]: nonce,
+        [OTA_HEADERS.timestamp]: staleTs,
+        [OTA_HEADERS.signature]: signature,
+      },
+      body: raw,
+    });
+    assert.equal(res.status, 401);
+    assert.equal(((await res.json()) as { code: string }).code, 'stale_timestamp');
+  });
+
+  await check('a hostile devicePublicKeyB64 fails closed (401, not a 500 crash)', async () => {
+    // Enroll an install with a garbage public key, then sign a request — the malformed key must
+    // make verification fail closed, not throw a 500.
+    const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const enrollRes = await fetch(`${base}/ota/v1/enroll`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        installId: 'install-hostile-key',
+        platform: 'android',
+        channel: 'dev',
+        devicePublicKeyB64: Buffer.from('not-a-real-spki-der-key').toString('base64'),
+        enrollToken: 'test-session',
+      }),
+    });
+    assert.equal(enrollRes.status, 200);
+    const hostile: Install = { id: 'install-hostile-key', privateKey };
+    const res = await signedPost(
+      '/ota/v1/check',
+      {
+        installId: hostile.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R2',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        currentBundleVersion: 0,
+      },
+      hostile,
+    );
+    assert.equal(res.status, 401);
+  });
+
   await check('confirm healthy is recorded (bound to the server nonce)', async () => {
     const res = await signedPost(
       '/ota/v1/confirm',
