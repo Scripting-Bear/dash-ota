@@ -8,7 +8,9 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.security.SecureRandom
+import javax.net.ssl.HttpsURLConnection
 
 /**
  * The DashOta TurboModule. JS orchestrates; this implements the trust-critical native work:
@@ -167,6 +169,8 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
     conn.connectTimeout = 15000
     conn.readTimeout = 30000
     try {
+      // Optional certificate pinning (off unless ota_tls_pins is configured). Verify before any body.
+      verifyPins(conn)
       if (conn.responseCode != 200) throw RuntimeException("download HTTP ${conn.responseCode}")
       // Reject a Content-Length that disagrees with the signed size before reading a single byte.
       val declared = conn.contentLengthLong
@@ -191,6 +195,19 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
     } finally {
       conn.disconnect()
     }
+  }
+
+  /** Optional certificate pinning: reject the download unless a server cert matches a configured pin. */
+  private fun verifyPins(conn: HttpURLConnection) {
+    val pins = DashOtaConfig.tlsPins(reactContext).split(",").map { it.trim() }.filter { it.isNotEmpty() }
+    if (pins.isEmpty()) return
+    if (conn !is HttpsURLConnection) throw RuntimeException("TLS pinning is enabled but the download URL is not https")
+    conn.connect()
+    val md = MessageDigest.getInstance("SHA-256")
+    val matched = conn.serverCertificates.any { cert ->
+      pins.contains(Base64.encodeToString(md.digest(cert.encoded), Base64.NO_WRAP))
+    }
+    if (!matched) throw RuntimeException("TLS pin mismatch: server certificate not in the configured pin set")
   }
 
   override fun isBundleDisabled(bundleId: String): Boolean = DashOtaStore.isDisabled(reactContext, bundleId)

@@ -21,6 +21,13 @@ object DashOtaConfig {
   fun publicKeysB64(ctx: Context): String = str(ctx, "ota_public_keys", "")
   fun runtimeVersion(ctx: Context): String = str(ctx, "ota_runtime_version", "embedded")
 
+  /**
+   * Comma-separated certificate pins for the bundle download: each is base64 of the SHA-256 of the
+   * server's DER-encoded X.509 certificate. Empty (default) disables pinning. Cross-platform
+   * identical to the iOS `OTA_TLS_PINS` format.
+   */
+  fun tlsPins(ctx: Context): String = str(ctx, "ota_tls_pins", "")
+
   fun nativeBuild(ctx: Context): Int {
     val id = ctx.resources.getIdentifier("ota_native_build", "integer", ctx.packageName)
     return if (id != 0) ctx.resources.getInteger(id) else 0

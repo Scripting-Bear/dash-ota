@@ -1,5 +1,44 @@
+import CryptoKit
 import Foundation
 import Security
+
+/// URLSession delegate that pins the server certificate for the bundle download: the request is
+/// rejected unless a certificate in the chain matches a configured `base64(SHA-256(DER cert))` pin.
+/// Only installed when `OTA_TLS_PINS` is non-empty (pinning is off by default). Cross-platform
+/// identical to the Android `ota_tls_pins` format.
+private final class DashOtaPinningDelegate: NSObject, URLSessionDelegate {
+  private let pins: Set<String>
+  init(pins: Set<String>) { self.pins = pins }
+
+  func urlSession(
+    _ session: URLSession,
+    didReceive challenge: URLAuthenticationChallenge,
+    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+  ) {
+    guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+          let trust = challenge.protectionSpace.serverTrust else {
+      completionHandler(.performDefaultHandling, nil)
+      return
+    }
+    // Require the OS chain validation to pass first, then require a pin match (belt and braces).
+    var error: CFError?
+    guard SecTrustEvaluateWithError(trust, &error) else {
+      completionHandler(.cancelAuthenticationChallenge, nil)
+      return
+    }
+    let count = SecTrustGetCertificateCount(trust)
+    for i in 0..<count {
+      guard let cert = SecTrustGetCertificateAtIndex(trust, i) else { continue }
+      let der = SecCertificateCopyData(cert) as Data
+      let pin = Data(SHA256.hash(data: der)).base64EncodedString()
+      if pins.contains(pin) {
+        completionHandler(.useCredential, URLCredential(trust: trust))
+        return
+      }
+    }
+    completionHandler(.cancelAuthenticationChallenge, nil)
+  }
+}
 
 /// @objc bridge the Obj-C++ TurboModule (`DashOta.mm`) forwards to. Holds the trust-critical
 /// pipeline (verify → decrypt → unpack → per-file hash → stage) so the heavy/secret work stays
@@ -120,11 +159,25 @@ public class DashOtaImpl: NSObject {
     req.httpMethod = "GET"
     req.setValue(token, forHTTPHeaderField: "x-ota-download-token")
     req.timeoutInterval = 30
+
+    // Optional certificate pinning (off unless OTA_TLS_PINS is set): install a pinning delegate.
+    let pins = Set(
+      DashOtaConfig.tlsPinsB64
+        .split(separator: ",")
+        .map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty }
+    )
+    let session: URLSession =
+      pins.isEmpty
+      ? URLSession.shared
+      : URLSession(configuration: .default, delegate: DashOtaPinningDelegate(pins: pins), delegateQueue: nil)
+    defer { if session !== URLSession.shared { session.finishTasksAndInvalidate() } }
+
     let sem = DispatchSemaphore(value: 0)
     var result: Data?
     var taskError: Error?
     var status = 0
-    URLSession.shared.dataTask(with: req) { data, resp, err in
+    session.dataTask(with: req) { data, resp, err in
       if let http = resp as? HTTPURLResponse { status = http.statusCode }
       result = data
       taskError = err
