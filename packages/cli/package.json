@@ -1,6 +1,6 @@
 {
   "name": "@dash-ota/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Release tooling for dash-ota: keygen, fingerprint, bundle, encrypt+sign, publish, and rollout ops. Holds the Ed25519 signing key (CI/release only). npx-executable.",
   "type": "module",
   "bin": {

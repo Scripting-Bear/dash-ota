@@ -1,6 +1,6 @@
 {
   "name": "@dash-ota/shared",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shared crypto + protocol core for dash-ota (Ed25519, AES-256-GCM, ECDSA device-key auth, canonical JSON, manifest schema).",
   "type": "module",
   "main": "./dist/index.js",
