@@ -5,11 +5,12 @@
  * @module util
  */
 
-import { createHash, createPrivateKey } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import * as readline from 'node:readline/promises';
-import { type ArchiveFile, computeRuntimeVersion, type FingerprintInputs } from '@dash-ota/shared';
+import { Writable } from 'node:stream';
+import { type ArchiveFile, computeRuntimeVersion, type FingerprintInputs, publicKeyFromRawB64 } from '@dash-ota/shared';
 
 /** Parsed CLI args: positional `_` plus `--flag value` / `--bool` flags. */
 export interface ParsedArgs {
@@ -33,6 +34,25 @@ export function encryptPrivateKeyPem(pem: string, passphrase: string): string {
  */
 export function decryptPrivateKeyPem(pem: string, passphrase: string): string {
   return createPrivateKey({ key: pem, passphrase }).export({ type: 'pkcs8', format: 'pem' }).toString();
+}
+
+/**
+ * Resolve the public key to self-verify a freshly-signed manifest against, preferring the key the
+ * app actually embeds: `--verify-pub <rawB64>`, else the sibling `<keyId>.public.json` next to the
+ * signing key, else derive from the signing key (a consistency check only — can't catch a
+ * wrong-key-vs-app mismatch). The sibling is only used when the key path actually ends in
+ * `.private.pem` (so a custom `--key path.pem` never JSON-parses the private key by mistake).
+ * @param privateKeyPem the **decrypted** signing key PEM (used for the fallback derivation)
+ */
+export function resolveVerifyKey(args: ParsedArgs, keyPath: string, privateKeyPem: string): { key: KeyObject; source: string } {
+  const pubFlag = flagStr(args, 'verify-pub');
+  if (pubFlag) return { key: publicKeyFromRawB64(pubFlag), source: '--verify-pub' };
+  const sibling = keyPath.replace(/\.private\.pem$/, '.public.json');
+  if (sibling !== keyPath && existsSync(sibling)) {
+    const raw = (JSON.parse(readFileSync(sibling, 'utf8')) as { publicKeyRawB64: string }).publicKeyRawB64;
+    return { key: publicKeyFromRawB64(raw), source: sibling };
+  }
+  return { key: createPublicKey(createPrivateKey(privateKeyPem)), source: 'signing key (consistency check only)' };
 }
 
 /** Parse argv into positionals + flags (`--k v`, `--k=v`, `--bool`). */
@@ -79,6 +99,31 @@ export async function ask(question: string, fallback?: string): Promise<string> 
     const answer = await rl.question(fallback ? `${question} [${fallback}]: ` : `${question}: `);
     return answer.trim() || fallback || '';
   } finally {
+    rl.close();
+  }
+}
+
+/**
+ * Prompt for a secret (e.g. a signing-key passphrase) **without echoing** it to the terminal.
+ * Falls back to a normal echoed read when stdin isn't a TTY (piped / CI input), where masking is moot.
+ */
+export async function askSecret(question: string): Promise<string> {
+  if (!process.stdin.isTTY) return ask(question);
+  const state = { muted: false };
+  const muted = new Writable({
+    write(chunk, _enc, cb) {
+      if (!state.muted) process.stdout.write(chunk as Buffer);
+      cb();
+    },
+  });
+  const rl = readline.createInterface({ input: process.stdin, output: muted, terminal: true });
+  process.stdout.write(`${question}: `);
+  state.muted = true; // suppress echo of the typed secret
+  try {
+    return (await rl.question('')).trim();
+  } finally {
+    state.muted = false;
+    process.stdout.write('\n');
     rl.close();
   }
 }

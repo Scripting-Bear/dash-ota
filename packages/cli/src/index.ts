@@ -15,7 +15,6 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -23,7 +22,6 @@ import {
   type Channel,
   generateSigningKeyPair,
   type Platform,
-  publicKeyFromRawB64,
   signManifest,
   verifyManifest,
 } from '@dash-ota/shared';
@@ -32,6 +30,7 @@ import {
   adminPost,
   ask,
   askMultiline,
+  askSecret,
   askYesNo,
   decryptPrivateKeyPem,
   encryptPrivateKeyPem,
@@ -43,6 +42,7 @@ import {
   parseArgs,
   readBundleDir,
   resolveServer,
+  resolveVerifyKey,
 } from './util.js';
 
 function asPlatform(v: string): Platform {
@@ -66,7 +66,7 @@ async function cmdKeygen(args: ParsedArgs): Promise<void> {
   let passphrase = flagStr(args, 'passphrase') || process.env.OTA_KEY_PASSPHRASE || '';
   const noEncrypt = flagBool(args, 'no-encrypt');
   if (!passphrase && !noEncrypt) {
-    passphrase = await ask('Passphrase to encrypt the signing key at rest (blank = store UNENCRYPTED)');
+    passphrase = await askSecret('Passphrase to encrypt the signing key at rest (blank = store UNENCRYPTED)');
   }
   const privatePem = passphrase ? encryptPrivateKeyPem(kp.privateKeyPem, passphrase) : kp.privateKeyPem;
 
@@ -171,22 +171,6 @@ function cmdBundle(args: ParsedArgs): void {
   console.log(`  next: dash-ota publish --bundle-dir ${out} --platform ${platform} ...`);
 }
 
-/**
- * Resolve the public key to self-verify a freshly-signed manifest against, preferring the key the
- * app actually embeds: `--verify-pub <rawB64>`, else the sibling `<keyId>.public.json`, else derive
- * from the signing key (a consistency check only — can't catch a wrong-key-vs-app mismatch).
- */
-function resolveVerifyKey(args: ParsedArgs, keyPath: string, privateKeyPem: string): { key: KeyObject; source: string } {
-  const pubFlag = flagStr(args, 'verify-pub');
-  if (pubFlag) return { key: publicKeyFromRawB64(pubFlag), source: '--verify-pub' };
-  const sibling = keyPath.replace(/\.private\.pem$/, '.public.json');
-  if (existsSync(sibling)) {
-    const raw = (JSON.parse(readFileSync(sibling, 'utf8')) as { publicKeyRawB64: string }).publicKeyRawB64;
-    return { key: publicKeyFromRawB64(raw), source: sibling };
-  }
-  return { key: createPublicKey(createPrivateKey(privateKeyPem)), source: 'signing key (consistency check only)' };
-}
-
 /** Build, sign, and upload a release. */
 async function cmdPublish(args: ParsedArgs): Promise<void> {
   const interactive = flagBool(args, 'interactive');
@@ -228,7 +212,9 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
   let privateKeyPem = readFileSync(keyPath, 'utf8');
   if (isEncryptedPem(privateKeyPem)) {
     const passphrase =
-      flagStr(args, 'passphrase') || process.env.OTA_KEY_PASSPHRASE || (interactive ? await ask('Signing key passphrase') : '');
+      flagStr(args, 'passphrase') ||
+      process.env.OTA_KEY_PASSPHRASE ||
+      (interactive ? await askSecret('Signing key passphrase') : '');
     if (!passphrase) throw new Error('signing key is encrypted — provide --passphrase or OTA_KEY_PASSPHRASE');
     try {
       privateKeyPem = decryptPrivateKeyPem(privateKeyPem, passphrase);
@@ -372,7 +358,8 @@ function printHelp(): void {
 
   Trust root: --admin-token (or OTA_ADMIN_TOKEN) is required for server calls — no default.
   Plaintext http:// to a remote host is refused (use https://, or --allow-insecure on a
-  trusted network). Encrypted signing keys need --passphrase or OTA_KEY_PASSPHRASE.
+  trusted network). Encrypted signing keys need a passphrase — prefer OTA_KEY_PASSPHRASE or the
+  masked prompt over --passphrase (a CLI flag is visible in process listings / shell history).
   list            [--server --admin-token]
   rollout         --bundle-id <id> --pct <0-100>
   pause           --bundle-id <id> [--resume]
