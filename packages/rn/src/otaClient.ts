@@ -27,7 +27,14 @@ function makeNonce(): string {
 }
 
 /** Build the canonical request-signing string — must match `@dash-ota/shared`'s `requestSigningString`. */
-function signingString(method: string, path: string, installId: string, nonce: string, timestamp: string, bodySha256: string): string {
+function signingString(
+  method: string,
+  path: string,
+  installId: string,
+  nonce: string,
+  timestamp: string,
+  bodySha256: string,
+): string {
   return [method.toUpperCase(), path, installId, nonce, timestamp, bodySha256].join('\n');
 }
 
@@ -71,7 +78,15 @@ export async function createClientContext(config: OtaConfig, logger: OtaLogger):
   const res = await fetchImpl(`${serverUrl}/ota/v1/enroll`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ installId, platform: Platform.OS, channel, appVersion: config.appVersion, buildNumber, devicePublicKeyB64, enrollToken }),
+    body: JSON.stringify({
+      installId,
+      platform: Platform.OS,
+      channel,
+      appVersion: config.appVersion,
+      buildNumber,
+      devicePublicKeyB64,
+      enrollToken,
+    }),
   });
   if (!res.ok) throw new Error(`enroll failed: ${res.status}`);
   logger.info('enrolled device key');
@@ -102,7 +117,11 @@ async function signedPost<T>(ctx: OtaClientContext, path: string, body: unknown)
 }
 
 /** Ask the backend for an eligible update for this device. */
-export async function checkForUpdate(ctx: OtaClientContext, currentBundleVersion: number, appVersion: string): Promise<CheckResponse> {
+export async function checkForUpdate(
+  ctx: OtaClientContext,
+  currentBundleVersion: number,
+  appVersion: string,
+): Promise<CheckResponse> {
   return signedPost<CheckResponse>(ctx, '/ota/v1/check', {
     installId: ctx.installId,
     platform: Platform.OS,
@@ -120,9 +139,16 @@ export async function confirm(
   bundleId: string,
   status: 'applied' | 'healthy' | 'failed' | 'rolled_back',
   serverNonce: string,
-  reason?: string
+  reason?: string,
 ): Promise<void> {
-  await signedPost(ctx, '/ota/v1/confirm', { installId: ctx.installId, bundleId, runtimeVersion: ctx.runtimeVersion, status, serverNonce, reason });
+  await signedPost(ctx, '/ota/v1/confirm', {
+    installId: ctx.installId,
+    bundleId,
+    runtimeVersion: ctx.runtimeVersion,
+    status,
+    serverNonce,
+    reason,
+  });
 }
 
 /** The URL the native side downloads ciphertext from (no S3 URL on the JS side). */

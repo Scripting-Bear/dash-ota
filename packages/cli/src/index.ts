@@ -17,13 +17,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  buildRelease,
-  type Channel,
-  generateSigningKeyPair,
-  type Platform,
-  signManifest,
-} from '@dash-ota/shared';
+import { buildRelease, type Channel, generateSigningKeyPair, type Platform, signManifest } from '@dash-ota/shared';
 import {
   adminGet,
   adminPost,
@@ -126,7 +120,9 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
   const files = readBundleDir(bundleDir);
   if (files.length === 0) throw new Error(`no files in ${bundleDir}`);
 
-  const platform = asPlatform(flagStr(args, 'platform') || (interactive ? await ask('platform (ios|android)', 'android') : 'android'));
+  const platform = asPlatform(
+    flagStr(args, 'platform') || (interactive ? await ask('platform (ios|android)', 'android') : 'android'),
+  );
   const channel = asChannel(flagStr(args, 'channel') || (interactive ? await ask('channel (dev|uat|prod)', 'dev') : 'dev'));
 
   // runtimeVersion: explicit, or auto-fingerprint the project (hybrid policy).
@@ -137,11 +133,15 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
     console.log(`runtimeVersion (auto): ${runtimeVersion}`);
   }
 
-  const bundleVersion = Number.parseInt(flagStr(args, 'bundle-version') || (interactive ? await ask('bundleVersion (integer)', '1') : '1'), 10);
+  const bundleVersion = Number.parseInt(
+    flagStr(args, 'bundle-version') || (interactive ? await ask('bundleVersion (integer)', '1') : '1'),
+    10,
+  );
   if (!Number.isInteger(bundleVersion)) throw new Error('--bundle-version must be an integer');
 
   const mandatory = flagBool(args, 'mandatory') || (interactive ? await askYesNo('mandatory update?', false) : false);
-  const targetAppVersions = flagStr(args, 'target-app-versions') || (interactive ? await ask('targetAppVersions (blank = any)', '') : '');
+  const targetAppVersions =
+    flagStr(args, 'target-app-versions') || (interactive ? await ask('targetAppVersions (blank = any)', '') : '');
   const rollout = Number.parseInt(flagStr(args, 'rollout') || (interactive ? await ask('rollout %', '100') : '100'), 10);
 
   let releaseNotes = flagStr(args, 'release-note');
@@ -174,12 +174,20 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
 
   if (flagBool(args, 'no-upload')) {
     const outFile = join(bundleDir, '..', `${bundleId}.signed.json`);
-    writeFileSync(outFile, JSON.stringify({ signedManifest: signed, ciphertextB64: built.ciphertext.toString('base64') }, null, 2));
+    writeFileSync(
+      outFile,
+      JSON.stringify({ signedManifest: signed, ciphertextB64: built.ciphertext.toString('base64') }, null, 2),
+    );
     console.log(`✓ wrote artifact (not uploaded): ${outFile}`);
     return;
   }
   const { server, adminToken } = resolveServer(args);
-  const res = await adminPost(server, '/admin/publish', { signedManifest: signed, ciphertextB64: built.ciphertext.toString('base64'), rolloutPercentage: rollout }, adminToken);
+  const res = await adminPost(
+    server,
+    '/admin/publish',
+    { signedManifest: signed, ciphertextB64: built.ciphertext.toString('base64'), rolloutPercentage: rollout },
+    adminToken,
+  );
   console.log(`✓ published to ${server}:`, JSON.stringify(res));
 }
 
@@ -187,7 +195,17 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
 async function cmdList(args: ParsedArgs): Promise<void> {
   const { server, adminToken } = resolveServer(args);
   const data = (await adminGet(server, '/admin/releases', adminToken)) as {
-    releases: { bundleId: string; channel: string; platform: string; runtimeVersion: string; bundleVersion: number; rolloutPercentage: number; paused: boolean; rolledBack: boolean; adoption: Record<string, number> }[];
+    releases: {
+      bundleId: string;
+      channel: string;
+      platform: string;
+      runtimeVersion: string;
+      bundleVersion: number;
+      rolloutPercentage: number;
+      paused: boolean;
+      rolledBack: boolean;
+      adoption: Record<string, number>;
+    }[];
   };
   if (data.releases.length === 0) {
     console.log('(no releases)');
@@ -195,18 +213,30 @@ async function cmdList(args: ParsedArgs): Promise<void> {
   }
   for (const r of data.releases) {
     const state = r.rolledBack ? 'ROLLED_BACK' : r.paused ? 'PAUSED' : `${r.rolloutPercentage}%`;
-    console.log(`${r.bundleId}  [${r.platform}/${r.channel}]  rt=${r.runtimeVersion} v${r.bundleVersion}  ${state}  adoption=${JSON.stringify(r.adoption)}`);
+    console.log(
+      `${r.bundleId}  [${r.platform}/${r.channel}]  rt=${r.runtimeVersion} v${r.bundleVersion}  ${state}  adoption=${JSON.stringify(r.adoption)}`,
+    );
   }
 }
 
 async function cmdRollout(args: ParsedArgs): Promise<void> {
   const { server, adminToken } = resolveServer(args);
-  await adminPost(server, '/admin/rollout', { bundleId: flagStr(args, 'bundle-id'), rolloutPercentage: Number.parseInt(flagStr(args, 'pct', '100'), 10) }, adminToken);
+  await adminPost(
+    server,
+    '/admin/rollout',
+    { bundleId: flagStr(args, 'bundle-id'), rolloutPercentage: Number.parseInt(flagStr(args, 'pct', '100'), 10) },
+    adminToken,
+  );
   console.log('✓ rollout updated');
 }
 async function cmdPause(args: ParsedArgs): Promise<void> {
   const { server, adminToken } = resolveServer(args);
-  await adminPost(server, '/admin/pause', { bundleId: flagStr(args, 'bundle-id'), paused: !flagBool(args, 'resume') }, adminToken);
+  await adminPost(
+    server,
+    '/admin/pause',
+    { bundleId: flagStr(args, 'bundle-id'), paused: !flagBool(args, 'resume') },
+    adminToken,
+  );
   console.log('✓ pause state updated');
 }
 async function cmdRollback(args: ParsedArgs): Promise<void> {
@@ -216,12 +246,17 @@ async function cmdRollback(args: ParsedArgs): Promise<void> {
 }
 async function cmdNativePolicy(args: ParsedArgs): Promise<void> {
   const { server, adminToken } = resolveServer(args);
-  await adminPost(server, '/admin/native-policy', {
-    channel: asChannel(flagStr(args, 'channel', 'dev')),
-    minSupportedNativeVersion: Number.parseInt(flagStr(args, 'min', '0'), 10),
-    severity: flagStr(args, 'severity', 'hard'),
-    storeUrl: flagStr(args, 'store-url') || undefined,
-  }, adminToken);
+  await adminPost(
+    server,
+    '/admin/native-policy',
+    {
+      channel: asChannel(flagStr(args, 'channel', 'dev')),
+      minSupportedNativeVersion: Number.parseInt(flagStr(args, 'min', '0'), 10),
+      severity: flagStr(args, 'severity', 'hard'),
+      storeUrl: flagStr(args, 'store-url') || undefined,
+    },
+    adminToken,
+  );
   console.log('✓ native policy updated');
 }
 
@@ -248,16 +283,26 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0];
   switch (command) {
-    case 'keygen': return cmdKeygen(args);
-    case 'register-key': return cmdRegisterKey(args);
-    case 'fingerprint': return cmdFingerprint(args);
-    case 'bundle': return cmdBundle(args);
-    case 'publish': return cmdPublish(args);
-    case 'list': return cmdList(args);
-    case 'rollout': return cmdRollout(args);
-    case 'pause': return cmdPause(args);
-    case 'rollback': return cmdRollback(args);
-    case 'native-policy': return cmdNativePolicy(args);
+    case 'keygen':
+      return cmdKeygen(args);
+    case 'register-key':
+      return cmdRegisterKey(args);
+    case 'fingerprint':
+      return cmdFingerprint(args);
+    case 'bundle':
+      return cmdBundle(args);
+    case 'publish':
+      return cmdPublish(args);
+    case 'list':
+      return cmdList(args);
+    case 'rollout':
+      return cmdRollout(args);
+    case 'pause':
+      return cmdPause(args);
+    case 'rollback':
+      return cmdRollback(args);
+    case 'native-policy':
+      return cmdNativePolicy(args);
     default:
       printHelp();
       if (command && command !== 'help') process.exitCode = 1;

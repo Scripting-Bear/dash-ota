@@ -8,14 +8,7 @@ export type Channel = 'dev' | 'uat' | 'prod';
 export type Platform = 'ios' | 'android';
 
 /** Lifecycle status surfaced by {@link useOtaUpdate}. */
-export type OtaStatus =
-  | 'idle'
-  | 'checking'
-  | 'up-to-date'
-  | 'downloading'
-  | 'staged'
-  | 'apply-pending'
-  | 'error';
+export type OtaStatus = 'idle' | 'checking' | 'up-to-date' | 'downloading' | 'staged' | 'apply-pending' | 'error';
 
 /** Metadata for a bundle (embedded or applied). */
 export interface BundleMeta {

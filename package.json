@@ -10,6 +10,7 @@
     "packages/cli"
   ],
   "scripts": {
+    "test": "npm run test:core && npm run test:e2e && npm run test:express",
     "test:core": "tsx packages/shared/src/selftest.ts",
     "test:e2e": "tsx packages/backend/src/e2e.test.ts",
     "test:express": "tsx packages/backend/src/express.smoke.test.ts",
@@ -17,11 +18,21 @@
     "backend:express": "tsx packages/backend/examples/express-server.ts",
     "cli": "tsx packages/cli/src/index.ts",
     "build": "npm -w @dash-ota/cli run build",
-    "typecheck": "tsc -p packages/shared && tsc -p packages/backend && tsc -p packages/cli"
+    "typecheck": "tsc -p packages/shared && tsc -p packages/backend && tsc -p packages/cli",
+    "lint": "eslint packages/shared packages/backend packages/cli",
+    "lint:fix": "eslint packages/shared packages/backend packages/cli --fix",
+    "format": "prettier --write \"packages/*/src/**/*.{ts,tsx,mjs,js}\"",
+    "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx,mjs,js}\"",
+    "ci": "npm run typecheck && npm run lint && npm run format:check && npm run test"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.2",
+    "eslint": "^10.8.0",
+    "globals": "^17.8.0",
+    "prettier": "^3.9.6",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.65.0"
   }
 }

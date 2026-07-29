@@ -88,7 +88,15 @@ async function main(): Promise<void> {
     const res = await fetch(`${base}/ota/v1/enroll`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ installId: id, platform: 'android', channel: 'dev', appVersion: '1.0.0', buildNumber: 10, devicePublicKeyB64, enrollToken }),
+      body: JSON.stringify({
+        installId: id,
+        platform: 'android',
+        channel: 'dev',
+        appVersion: '1.0.0',
+        buildNumber: 10,
+        devicePublicKeyB64,
+        enrollToken,
+      }),
     });
     return Object.assign(res, res.ok ? { install: { id, privateKey } } : {});
   }
@@ -135,7 +143,11 @@ async function main(): Promise<void> {
       keyId,
     });
     const signed = signManifest(built.manifest, keys.privateKeyPem);
-    const res = await adminPost('/admin/publish', { signedManifest: signed, ciphertextB64: built.ciphertext.toString('base64'), rolloutPercentage: 100 });
+    const res = await adminPost('/admin/publish', {
+      signedManifest: signed,
+      ciphertextB64: built.ciphertext.toString('base64'),
+      rolloutPercentage: 100,
+    });
     assert.equal(res.status, 200, await res.text());
   });
 
@@ -156,7 +168,15 @@ async function main(): Promise<void> {
   await check('signed /check verifies over raw bytes (behind express.json) and returns the update', async () => {
     const res = await signedPost(
       '/ota/v1/check',
-      { installId: device.id, platform: 'android', channel: 'dev', runtimeVersion: 'R1', appVersion: '1.0.0', buildNumber: 10, currentBundleVersion: 0 },
+      {
+        installId: device.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R1',
+        appVersion: '1.0.0',
+        buildNumber: 10,
+        currentBundleVersion: 0,
+      },
       device,
     );
     const data = (await res.json()) as CheckResponse;
@@ -166,7 +186,17 @@ async function main(): Promise<void> {
   });
 
   await check('forged signature is rejected through the Express path (401)', async () => {
-    const raw = Buffer.from(JSON.stringify({ installId: device.id, platform: 'android', channel: 'dev', runtimeVersion: 'R1', buildNumber: 10, currentBundleVersion: 0 }), 'utf8');
+    const raw = Buffer.from(
+      JSON.stringify({
+        installId: device.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R1',
+        buildNumber: 10,
+        currentBundleVersion: 0,
+      }),
+      'utf8',
+    );
     const res = await fetch(`${base}/ota/v1/check`, {
       method: 'POST',
       headers: {
@@ -182,7 +212,11 @@ async function main(): Promise<void> {
   });
 
   await check('confirm fires the onConfirm hook', async () => {
-    const res = await signedPost('/ota/v1/confirm', { installId: device.id, bundleId: 'bnd_x_v1', runtimeVersion: 'R1', status: 'healthy', serverNonce }, device);
+    const res = await signedPost(
+      '/ota/v1/confirm',
+      { installId: device.id, bundleId: 'bnd_x_v1', runtimeVersion: 'R1', status: 'healthy', serverNonce },
+      device,
+    );
     assert.equal(res.status, 200, await res.text());
     assert.ok(onConfirm.includes('bnd_x_v1:healthy'), 'expected onConfirm hook to record the event');
   });

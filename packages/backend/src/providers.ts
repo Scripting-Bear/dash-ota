@@ -138,9 +138,13 @@ export class DiskDatabaseProvider implements DatabaseProvider {
     if (existsSync(this.installsFile))
       for (const i of JSON.parse(readFileSync(this.installsFile, 'utf8')) as InstallRecord[]) this.installs.set(i.installId, i);
     if (existsSync(this.keysFile))
-      for (const [k, v] of Object.entries(JSON.parse(readFileSync(this.keysFile, 'utf8')) as Record<string, string>)) this.trustedKeys.set(k, v);
+      for (const [k, v] of Object.entries(JSON.parse(readFileSync(this.keysFile, 'utf8')) as Record<string, string>))
+        this.trustedKeys.set(k, v);
     if (existsSync(this.policiesFile))
-      for (const [k, v] of Object.entries(JSON.parse(readFileSync(this.policiesFile, 'utf8')) as Record<string, NativeVersionPolicy>)) this.nativePolicies.set(k, v);
+      for (const [k, v] of Object.entries(
+        JSON.parse(readFileSync(this.policiesFile, 'utf8')) as Record<string, NativeVersionPolicy>,
+      ))
+        this.nativePolicies.set(k, v);
   }
 
   private write(file: string, data: unknown): void {

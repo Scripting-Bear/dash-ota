@@ -42,11 +42,7 @@ function isError(v: { installId: string } | HandlerResult): v is HandlerResult {
  * and a nonce replay-guard (backed by the {@link CacheProvider}). No shared secret is involved —
  * we verify the signature against the public key registered at enrollment.
  */
-async function authenticate(
-  ctx: ReqCtx,
-  store: Store,
-  config: BackendConfig,
-): Promise<{ installId: string } | HandlerResult> {
+async function authenticate(ctx: ReqCtx, store: Store, config: BackendConfig): Promise<{ installId: string } | HandlerResult> {
   const installId = header(ctx, OTA_HEADERS.installId);
   if (!installId) return httpError(401, 'missing install id', 'unauthenticated');
   if (!config.requireRequestSignature) return { installId };
@@ -196,7 +192,13 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
         return httpError(401, 'invalid server nonce', 'bad_nonce');
       }
       const autoPaused = await store.recordConfirm(body.bundleId, body.status);
-      config.onConfirm?.({ installId: auth.installId, bundleId: body.bundleId, status: body.status, reason: body.reason, autoPaused });
+      config.onConfirm?.({
+        installId: auth.installId,
+        bundleId: body.bundleId,
+        status: body.status,
+        reason: body.reason,
+        autoPaused,
+      });
       return json({ ok: true, autoPaused });
     },
   });
@@ -237,7 +239,11 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
       if (ciphertextSha !== signedManifest.manifest.encryption.ciphertextSha256) {
         return httpError(400, 'ciphertext hash does not match manifest', 'hash_mismatch');
       }
-      const record = await store.addRelease(signedManifest, ciphertext, Math.max(0, Math.min(100, body.rolloutPercentage ?? 100)));
+      const record = await store.addRelease(
+        signedManifest,
+        ciphertext,
+        Math.max(0, Math.min(100, body.rolloutPercentage ?? 100)),
+      );
       config.onPublish?.({
         bundleId: record.bundleId,
         platform: record.platform,
@@ -246,7 +252,9 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
         runtimeVersion: record.runtimeVersion,
         rolloutPercentage: record.rolloutPercentage,
       });
-      log?.info(`published ${record.bundleId} (${record.platform}/${record.channel} v${record.bundleVersion} @ ${record.rolloutPercentage}%)`);
+      log?.info(
+        `published ${record.bundleId} (${record.platform}/${record.channel} v${record.bundleVersion} @ ${record.rolloutPercentage}%)`,
+      );
       return json({ ok: true, bundleId: record.bundleId, rolloutPercentage: record.rolloutPercentage });
     },
   });
@@ -284,7 +292,9 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
       const denied = requireAdmin(ctx, config);
       if (denied) return denied;
       const body = ctx.json<{ bundleId: string; rolloutPercentage: number }>();
-      return (await store.setRollout(body.bundleId, body.rolloutPercentage)) ? json({ ok: true }) : httpError(404, 'release not found');
+      return (await store.setRollout(body.bundleId, body.rolloutPercentage))
+        ? json({ ok: true })
+        : httpError(404, 'release not found');
     },
   });
 
@@ -316,7 +326,12 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
     handler: async (ctx) => {
       const denied = requireAdmin(ctx, config);
       if (denied) return denied;
-      const body = ctx.json<{ channel: string; minSupportedNativeVersion: number; severity: 'soft' | 'hard'; storeUrl?: string }>();
+      const body = ctx.json<{
+        channel: string;
+        minSupportedNativeVersion: number;
+        severity: 'soft' | 'hard';
+        storeUrl?: string;
+      }>();
       if (!body?.channel) return httpError(400, 'channel required');
       await store.setNativePolicy(body.channel, {
         minSupportedNativeVersion: body.minSupportedNativeVersion,

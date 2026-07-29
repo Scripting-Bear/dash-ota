@@ -9,10 +9,7 @@ export { useOtaUpdate } from './useOtaUpdate';
 export { consoleLogger, STORAGE_KEYS } from './config';
 export type { OtaConfig, OtaStorage } from './config';
 
-export {
-  noopTransportSecurity,
-  noopIntegrityAttestor,
-} from './verifiers';
+export { noopTransportSecurity, noopIntegrityAttestor } from './verifiers';
 export type { TransportSecurity, IntegrityAttestor } from './verifiers';
 
 export type {

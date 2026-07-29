@@ -109,7 +109,15 @@ async function main(): Promise<void> {
     const res = await fetch(`${base}/ota/v1/enroll`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ installId: id, platform: 'android', channel: 'dev', appVersion: '1.2.0', buildNumber: 10, devicePublicKeyB64, enrollToken: 'test-session' }),
+      body: JSON.stringify({
+        installId: id,
+        platform: 'android',
+        channel: 'dev',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        devicePublicKeyB64,
+        enrollToken: 'test-session',
+      }),
     });
     if (!res.ok) throw new Error(`enroll failed: ${res.status}`);
     return { id, privateKey };
@@ -175,7 +183,15 @@ async function main(): Promise<void> {
   await check('R2 device: check returns the update + download token + server nonce', async () => {
     const res = await signedPost(
       '/ota/v1/check',
-      { installId: r2Device.id, platform: 'android', channel: 'dev', runtimeVersion: 'R2', appVersion: '1.2.0', buildNumber: 10, currentBundleVersion: 0 },
+      {
+        installId: r2Device.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R2',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        currentBundleVersion: 0,
+      },
       r2Device,
     );
     assert.equal(res.status, 200);
@@ -202,7 +218,15 @@ async function main(): Promise<void> {
     const r1 = await enroll('install-R1', 'R1');
     const res = await signedPost(
       '/ota/v1/check',
-      { installId: r1.id, platform: 'android', channel: 'dev', runtimeVersion: 'R1', appVersion: '1.2.0', buildNumber: 10, currentBundleVersion: 0 },
+      {
+        installId: r1.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R1',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        currentBundleVersion: 0,
+      },
       r1,
     );
     const data = (await res.json()) as CheckResponse;
@@ -210,11 +234,29 @@ async function main(): Promise<void> {
   });
 
   await check('replayed request nonce is rejected', async () => {
-    const body = { installId: r2Device.id, platform: 'android', channel: 'dev', runtimeVersion: 'R2', appVersion: '1.2.0', buildNumber: 10, currentBundleVersion: 0 };
+    const body = {
+      installId: r2Device.id,
+      platform: 'android',
+      channel: 'dev',
+      runtimeVersion: 'R2',
+      appVersion: '1.2.0',
+      buildNumber: 10,
+      currentBundleVersion: 0,
+    };
     const raw = Buffer.from(JSON.stringify(body), 'utf8');
     const nonce = randomNonceB64();
     const timestamp = String(Date.now());
-    const signature = deviceSign(r2Device.privateKey, requestSigningString({ method: 'POST', path: '/ota/v1/check', installId: r2Device.id, nonce, timestamp, bodySha256: sha256Hex(raw) }));
+    const signature = deviceSign(
+      r2Device.privateKey,
+      requestSigningString({
+        method: 'POST',
+        path: '/ota/v1/check',
+        installId: r2Device.id,
+        nonce,
+        timestamp,
+        bodySha256: sha256Hex(raw),
+      }),
+    );
     const headers = {
       'content-type': 'application/json',
       [OTA_HEADERS.installId]: r2Device.id,
@@ -229,7 +271,15 @@ async function main(): Promise<void> {
   });
 
   await check('forged request signature is rejected', async () => {
-    const body = { installId: r2Device.id, platform: 'android', channel: 'dev', runtimeVersion: 'R2', appVersion: '1.2.0', buildNumber: 10, currentBundleVersion: 0 };
+    const body = {
+      installId: r2Device.id,
+      platform: 'android',
+      channel: 'dev',
+      runtimeVersion: 'R2',
+      appVersion: '1.2.0',
+      buildNumber: 10,
+      currentBundleVersion: 0,
+    };
     const raw = Buffer.from(JSON.stringify(body), 'utf8');
     const res = await fetch(`${base}/ota/v1/check`, {
       method: 'POST',
@@ -246,17 +296,34 @@ async function main(): Promise<void> {
   });
 
   await check('confirm healthy is recorded (bound to the server nonce)', async () => {
-    const res = await signedPost('/ota/v1/confirm', { installId: r2Device.id, bundleId: 'bnd_R2_v1', runtimeVersion: 'R2', status: 'healthy', serverNonce }, r2Device);
+    const res = await signedPost(
+      '/ota/v1/confirm',
+      { installId: r2Device.id, bundleId: 'bnd_R2_v1', runtimeVersion: 'R2', status: 'healthy', serverNonce },
+      r2Device,
+    );
     assert.equal(res.status, 200);
     const data = (await res.json()) as { ok: boolean; autoPaused: boolean };
     assert.equal(data.ok, true);
   });
 
   await check('force-update gate: hard severity when build is below minimum', async () => {
-    await adminPost('/admin/native-policy', { channel: 'dev', minSupportedNativeVersion: 99, severity: 'hard', storeUrl: 'market://x' });
+    await adminPost('/admin/native-policy', {
+      channel: 'dev',
+      minSupportedNativeVersion: 99,
+      severity: 'hard',
+      storeUrl: 'market://x',
+    });
     const res = await signedPost(
       '/ota/v1/check',
-      { installId: r2Device.id, platform: 'android', channel: 'dev', runtimeVersion: 'R2', appVersion: '1.2.0', buildNumber: 10, currentBundleVersion: 0 },
+      {
+        installId: r2Device.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R2',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        currentBundleVersion: 0,
+      },
       r2Device,
     );
     const data = (await res.json()) as CheckResponse;
@@ -268,16 +335,37 @@ async function main(): Promise<void> {
 
   await check('rollout auto-pauses after repeated failures', async () => {
     // publish a fresh release to a dedicated install set
-    const built = buildRelease({ bundleId: 'bnd_R2_bad', runtimeVersion: 'R2', bundleVersion: 5, platform: 'android', channel: 'dev', mandatory: false, files: bundleFiles, keyId });
+    const built = buildRelease({
+      bundleId: 'bnd_R2_bad',
+      runtimeVersion: 'R2',
+      bundleVersion: 5,
+      platform: 'android',
+      channel: 'dev',
+      mandatory: false,
+      files: bundleFiles,
+      keyId,
+    });
     const signed = signManifest(built.manifest, keys.privateKeyPem);
-    await adminPost('/admin/publish', { signedManifest: signed, ciphertextB64: built.ciphertext.toString('base64'), rolloutPercentage: 100 });
+    await adminPost('/admin/publish', {
+      signedManifest: signed,
+      ciphertextB64: built.ciphertext.toString('base64'),
+      rolloutPercentage: 100,
+    });
 
     let autoPaused = false;
     for (let i = 0; i < 2; i++) {
       const dev = await enroll(`install-bad-${i}`, 'R2');
       const checkRes = await signedPost(
         '/ota/v1/check',
-        { installId: dev.id, platform: 'android', channel: 'dev', runtimeVersion: 'R2', appVersion: '1.2.0', buildNumber: 10, currentBundleVersion: 4 },
+        {
+          installId: dev.id,
+          platform: 'android',
+          channel: 'dev',
+          runtimeVersion: 'R2',
+          appVersion: '1.2.0',
+          buildNumber: 10,
+          currentBundleVersion: 4,
+        },
         dev,
       );
       const checkData = (await checkRes.json()) as CheckResponse;

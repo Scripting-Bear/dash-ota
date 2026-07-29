@@ -155,7 +155,10 @@ check('eligibility: downgrade guard + app-version range', () => {
   };
   assert.equal(isEligible(signed.manifest, base).reason, 'not-newer');
   assert.equal(isEligible(signed.manifest, { ...base, currentBundleVersion: 2 }).eligible, true);
-  assert.equal(isEligible(signed.manifest, { ...base, currentBundleVersion: 2, appVersion: '1.3.1' }).reason, 'app-version-excluded');
+  assert.equal(
+    isEligible(signed.manifest, { ...base, currentBundleVersion: 2, appVersion: '1.3.1' }).reason,
+    'app-version-excluded',
+  );
 });
 
 check('semver-subset range matching', () => {
@@ -180,7 +183,10 @@ check('runtimeVersion fingerprint: stable + changes on native input change', () 
     hermesVersion: '0.12.0',
     reactNativeVersion: '0.79.2',
   };
-  assert.equal(computeRuntimeVersion(base), computeRuntimeVersion({ ...base, nativeDependencies: [...base.nativeDependencies].reverse() }));
+  assert.equal(
+    computeRuntimeVersion(base),
+    computeRuntimeVersion({ ...base, nativeDependencies: [...base.nativeDependencies].reverse() }),
+  );
   assert.notEqual(computeRuntimeVersion(base), computeRuntimeVersion({ ...base, hermesVersion: '0.13.0' }));
 });
 

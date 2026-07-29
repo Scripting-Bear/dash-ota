@@ -96,7 +96,12 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
         return;
       }
       const m = resp.update.manifest;
-      setAvailableUpdate({ bundleId: m.bundleId, bundleVersion: m.bundleVersion, mandatory: m.mandatory, releaseNotes: m.releaseNotes });
+      setAvailableUpdate({
+        bundleId: m.bundleId,
+        bundleVersion: m.bundleVersion,
+        mandatory: m.mandatory,
+        releaseNotes: m.releaseNotes,
+      });
       setIsMandatory(Boolean(m.mandatory));
 
       // Don't re-download a bundle the crash-loop breaker already disabled on this device.
@@ -115,7 +120,7 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
         downloadUrl(ctx),
         resp.downloadToken,
         canonicalize(m), // canonical bytes the CLI signed; native verifies the Ed25519 sig over these
-        resp.update.signatureB64
+        resp.update.signatureB64,
       )) as unknown as { bundleId: string; bundleVersion: number };
       setProgress(1);
       logger.info(`staged ${staged.bundleId} v${staged.bundleVersion}`);
@@ -196,8 +201,34 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
 
   const channel = DashOta.getChannel();
   const value = useMemo<OtaUpdateState>(
-    () => ({ status, channel, currentBundle, availableUpdate, isMandatory, nativePolicy, progress, error, checkNow, applyUpdate, markHealthy, rollback }),
-    [status, channel, currentBundle, availableUpdate, isMandatory, nativePolicy, progress, error, checkNow, applyUpdate, markHealthy, rollback]
+    () => ({
+      status,
+      channel,
+      currentBundle,
+      availableUpdate,
+      isMandatory,
+      nativePolicy,
+      progress,
+      error,
+      checkNow,
+      applyUpdate,
+      markHealthy,
+      rollback,
+    }),
+    [
+      status,
+      channel,
+      currentBundle,
+      availableUpdate,
+      isMandatory,
+      nativePolicy,
+      progress,
+      error,
+      checkNow,
+      applyUpdate,
+      markHealthy,
+      rollback,
+    ],
   );
 
   return <OtaContext.Provider value={value}>{children}</OtaContext.Provider>;

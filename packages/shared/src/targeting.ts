@@ -33,12 +33,7 @@ export interface DeviceContext {
 export interface EligibilityResult {
   eligible: boolean;
   reason?:
-    | 'platform-mismatch'
-    | 'channel-mismatch'
-    | 'runtime-mismatch'
-    | 'not-newer'
-    | 'native-too-old'
-    | 'app-version-excluded';
+    'platform-mismatch' | 'channel-mismatch' | 'runtime-mismatch' | 'not-newer' | 'native-too-old' | 'app-version-excluded';
 }
 
 /** Parse "1.2.3" → [1,2,3]; missing/"x"/"*" segments become -1 (wildcard). */
