@@ -36,7 +36,7 @@ function memoryStorage() {
   };
 }
 
-function ctxWith(fetchImpl: typeof fetch): OtaClientContext {
+function ctxWith(fetchImpl: typeof fetch, reenroll: () => Promise<void> = async () => {}): OtaClientContext {
   return {
     serverUrl: 'https://ota.example.com',
     channel: 'dev',
@@ -45,6 +45,7 @@ function ctxWith(fetchImpl: typeof fetch): OtaClientContext {
     installId: 'inst',
     fetchImpl,
     logger: noopLogger,
+    reenroll,
   };
 }
 
@@ -108,13 +109,16 @@ describe('createClientContext', () => {
     expect(sentBody.attestationToken).toBeUndefined();
   });
 
-  it('persists and reuses the install id across enrollments', async () => {
+  it('enrolls once and reuses the install id (skips re-enroll on the next launch)', async () => {
     const storage = memoryStorage();
     const fetchImpl = jest.fn(async () => ({ ok: true }) as Response);
     const config: OtaConfig = { storage, appVersion: '1.2.0', transport: { fetch: fetchImpl as unknown as typeof fetch } };
     const c1 = await createClientContext(config, noopLogger);
     const c2 = await createClientContext(config, noopLogger);
     expect(c1.installId).toBe(c2.installId);
+    // The enroll POST happens once; the persisted marker makes the second launch skip it (saves
+    // the attestation round-trip / quota).
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it('throws when enrollment fails', async () => {
@@ -156,5 +160,30 @@ describe('checkForUpdate (signed request path)', () => {
   it('throws on a non-ok response', async () => {
     const fetchImpl = jest.fn(async () => ({ ok: false, status: 401 }) as Response);
     await expect(checkForUpdate(ctxWith(fetchImpl as unknown as typeof fetch), 0, '1.2.0')).rejects.toThrow(/401/);
+  });
+
+  it('re-enrolls once and retries when the server returns not_enrolled', async () => {
+    let call = 0;
+    const fetchImpl = jest.fn(async () => {
+      call += 1;
+      if (call === 1) {
+        return { ok: false, status: 401, text: async () => JSON.stringify({ code: 'not_enrolled' }) } as unknown as Response;
+      }
+      return { ok: true, json: async () => ({ update: null, serverNonce: 's' }) } as unknown as Response;
+    });
+    const reenroll = jest.fn(async () => {});
+    const resp = await checkForUpdate(ctxWith(fetchImpl as unknown as typeof fetch, reenroll), 0, '1.2.0');
+    expect(reenroll).toHaveBeenCalledTimes(1);
+    expect(call).toBe(2); // retried once after re-enrolling
+    expect(resp.serverNonce).toBe('s');
+  });
+
+  it('does not re-enroll on a 401 that is not not_enrolled', async () => {
+    const fetchImpl = jest.fn(
+      async () => ({ ok: false, status: 401, text: async () => JSON.stringify({ code: 'bad_signature' }) }) as unknown as Response,
+    );
+    const reenroll = jest.fn(async () => {});
+    await expect(checkForUpdate(ctxWith(fetchImpl as unknown as typeof fetch, reenroll), 0, '1.2.0')).rejects.toThrow(/401/);
+    expect(reenroll).not.toHaveBeenCalled();
   });
 });

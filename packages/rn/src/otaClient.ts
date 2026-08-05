@@ -71,24 +71,25 @@ export interface OtaClientContext {
   installId: string;
   fetchImpl: typeof fetch;
   logger: OtaLogger;
+  /** Force a re-enroll (clears the once-marker): key rotation, or the server forgot this install. */
+  reenroll: () => Promise<void>;
 }
 
 /**
- * Register the device's hardware public key and build a signed-request client context. There
- * is **no shared secret** — requests are signed with the device's hardware private key, so
- * nothing sensitive is transmitted at enrollment.
+ * Enroll the device's hardware public key — but only when needed. After a successful enroll we
+ * persist a marker (`sha256(installId + devicePublicKey)`) and skip re-POSTing `/enroll` on
+ * subsequent launches, because enrollment attaches a device-attestation token (Play Integrity /
+ * App Attest) whose live round-trip costs quota. `force` re-enrolls regardless — used on key
+ * rotation or when the server returns `not_enrolled`. There is **no shared secret**: requests are
+ * signed with the device's hardware private key, so nothing sensitive is transmitted at enrollment.
  */
-export async function createClientContext(config: OtaConfig, logger: OtaLogger): Promise<OtaClientContext> {
-  const serverUrl = config.serverUrlOverride ?? DashOta.getServerUrl();
-  const channel = DashOta.getChannel();
-  const runtimeVersion = DashOta.getRuntimeVersion();
-  const buildNumber = DashOta.getNativeBuildNumber();
-  const installId = await getInstallId(config);
-  const fetchImpl = config.transport?.fetch ?? fetch;
-
-  // Register (or re-register, for key rotation) the device's hardware public key, gated by an
-  // authenticated session token. The private key never leaves the device.
+async function enrollIfNeeded(config: OtaConfig, ctx: OtaClientContext, force: boolean): Promise<void> {
   const devicePublicKeyB64 = DashOta.getDevicePublicKeyB64();
+  const marker = DashOta.sha256Hex(`${ctx.installId}:${devicePublicKeyB64}`);
+  if (!force) {
+    const stored = await config.storage.getItem(STORAGE_KEYS.enrolled);
+    if (stored === marker) return; // already enrolled with this install + key → skip (saves quota)
+  }
   // Report whether the signing key is hardware-backed (StrongBox/TEE/Secure Enclave), so the
   // backend can gate on genuine hardware. Guarded for older native binaries without the method.
   let keyHardwareBacked: boolean | undefined;
@@ -102,15 +103,15 @@ export async function createClientContext(config: OtaConfig, logger: OtaLogger):
   // backend's verifyEnrollToken hook can gate registration on a genuine device. Null when the host
   // wires no attestor (the default) — the field is simply omitted.
   const attestationToken = (await config.attestor?.getAttestationToken()) ?? undefined;
-  const res = await fetchImpl(`${serverUrl}/ota/v1/enroll`, {
+  const res = await ctx.fetchImpl(`${ctx.serverUrl}/ota/v1/enroll`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      installId,
+      installId: ctx.installId,
       platform: Platform.OS,
-      channel,
+      channel: ctx.channel,
       appVersion: config.appVersion,
-      buildNumber,
+      buildNumber: ctx.buildNumber,
       devicePublicKeyB64,
       enrollToken,
       attestationToken,
@@ -118,13 +119,33 @@ export async function createClientContext(config: OtaConfig, logger: OtaLogger):
     }),
   });
   if (!res.ok) throw new Error(`enroll failed: ${res.status}`);
-  logger.info('enrolled device key');
+  await config.storage.setItem(STORAGE_KEYS.enrolled, marker);
+  ctx.logger.info('enrolled device key');
+}
 
-  return { serverUrl, channel, runtimeVersion, buildNumber, installId, fetchImpl, logger };
+/**
+ * Build a signed-request client context, enrolling the device's hardware public key on first use
+ * (or on key rotation). Enrollment is idempotent and skipped when already done — see
+ * {@link enrollIfNeeded} — so cold starts don't re-attest.
+ */
+export async function createClientContext(config: OtaConfig, logger: OtaLogger): Promise<OtaClientContext> {
+  const ctx: OtaClientContext = {
+    serverUrl: config.serverUrlOverride ?? DashOta.getServerUrl(),
+    channel: DashOta.getChannel(),
+    runtimeVersion: DashOta.getRuntimeVersion(),
+    buildNumber: DashOta.getNativeBuildNumber(),
+    installId: await getInstallId(config),
+    fetchImpl: config.transport?.fetch ?? fetch,
+    logger,
+    reenroll: async () => {},
+  };
+  ctx.reenroll = () => enrollIfNeeded(config, ctx, true);
+  await enrollIfNeeded(config, ctx, false);
+  return ctx;
 }
 
 /** POST a JSON request signed with the device's hardware key (ECDSA). */
-async function signedPost<T>(ctx: OtaClientContext, path: string, body: unknown): Promise<T> {
+async function signedPost<T>(ctx: OtaClientContext, path: string, body: unknown, retried = false): Promise<T> {
   const raw = JSON.stringify(body);
   const nonce = makeNonce();
   const timestamp = String(Date.now());
@@ -141,7 +162,25 @@ async function signedPost<T>(ctx: OtaClientContext, path: string, body: unknown)
     },
     body: raw,
   });
-  if (!res.ok) throw new Error(`${path} failed: ${res.status}`);
+  if (!res.ok) {
+    // The server can forget an install (DB reset / pruning) → `not_enrolled`. Because we enroll
+    // once and cache the marker, recover by re-enrolling a single time and retrying the request.
+    if (res.status === 401 && !retried) {
+      // Defensive: a non-JSON body (or a minimal Response) must not crash the client here.
+      let code: string | undefined;
+      try {
+        code = (JSON.parse(await res.text()) as { code?: string }).code;
+      } catch {
+        code = undefined;
+      }
+      if (code === 'not_enrolled') {
+        ctx.logger.warn(`${path}: not_enrolled — re-enrolling and retrying`);
+        await ctx.reenroll();
+        return signedPost<T>(ctx, path, body, true);
+      }
+    }
+    throw new Error(`${path} failed: ${res.status}`);
+  }
   return (await res.json()) as T;
 }
 

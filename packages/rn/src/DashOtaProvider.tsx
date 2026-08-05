@@ -69,6 +69,10 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
   }, [config, logger]);
 
   const checkNow = useCallback(async (): Promise<void> => {
+    if (config.enabled === false) {
+      setStatus('disabled');
+      return;
+    }
     if (inFlight.current) return;
     inFlight.current = true;
     setError(null);
@@ -138,10 +142,11 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
   }, [config, ensureCtx, logger]);
 
   const applyUpdate = useCallback(async (restart?: boolean): Promise<void> => {
+    if (config.enabled === false) return; // never apply an OTA bundle on a disabled/untrusted runtime
     await DashOta.applyOnNextLaunch();
     setStatus('apply-pending');
     if (restart) DashOta.restart();
-  }, []);
+  }, [config.enabled]);
 
   const markHealthy = useCallback((): void => {
     try {
@@ -168,6 +173,10 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
         setCurrentBundle(meta);
       } catch (e) {
         logger.warn(`getCurrentBundleMeta failed: ${String(e)}`);
+      }
+      if (config.enabled === false) {
+        setStatus('disabled'); // e.g. jailbroken/rooted device — run the store bundle only
+        return;
       }
       if (config.autoCheckOnLaunch !== false) await checkNow();
     })();

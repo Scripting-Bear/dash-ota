@@ -1,4 +1,5 @@
 #import "DashOta.h"
+#import <React/RCTReloadCommand.h>
 // The Swift-generated interface header: angle-bracket form for framework linkage
 // (use_frameworks!), quoted form for the default static-library linkage.
 #if __has_include(<DashOta/DashOta-Swift.h>)
@@ -75,9 +76,13 @@
 }
 
 - (void)restart {
-  // Best-effort only; the recommended path is apply-on-next-cold-start (see plan I3).
+  // Tear down and re-create the React instance, which re-runs the AppDelegate's bundleURL() and so
+  // picks up a pending OTA bundle without waiting for a cold start. Must be RN's own reload command
+  // (`RCTTriggerReloadCommandListeners`): posting a hand-written notification name matches no
+  // listener, so it silently does nothing. RCTHost registers this listener unconditionally, so it
+  // works in release builds too. Main thread only. Cold start remains the recommended path.
   dispatch_async(dispatch_get_main_queue(), ^{
-    [[NSNotificationCenter defaultCenter] postNotificationName:@"RCTReloadNotification" object:nil];
+    RCTTriggerReloadCommandListeners(@"dash-ota: applying update");
   });
 }
 

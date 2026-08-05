@@ -21,7 +21,17 @@ object DashOtaStore {
 
   fun loadState(ctx: Context): JSONObject {
     val f = stateFile(ctx)
-    return if (f.exists()) JSONObject(f.readText()) else JSONObject()
+    if (!f.exists()) return JSONObject()
+    return try {
+      JSONObject(f.readText())
+    } catch (_: Exception) {
+      // Corrupt state.json (torn write / disk pressure). Treat as fresh — the app keeps booting the
+      // embedded bundle and the next check re-stages — instead of throwing on every read, which
+      // silently disables OTA on this install forever. Delete so later writes start clean.
+      // (iOS already behaves this way via `try?` in DashOtaStore.swift.)
+      f.delete()
+      JSONObject()
+    }
   }
 
   fun saveState(ctx: Context, state: JSONObject) {
@@ -103,7 +113,7 @@ object DashOtaStore {
       state.put("trial", true)
       state.put("bootAttempts", 1)
       saveState(ctx, state)
-      return bundlePath(pending)
+      return bundlePath(ctx, pending)
     }
 
     val current = slot(state, "current") ?: return null
@@ -123,13 +133,13 @@ object DashOtaStore {
         state.put("bootAttempts", 0)
         saveState(ctx, state)
         gc(ctx)
-        return lkg?.let { bundlePath(it) }
+        return lkg?.let { bundlePath(ctx, it) }
       }
       state.put("bootAttempts", attempts + 1)
       saveState(ctx, state)
-      return bundlePath(current)
+      return bundlePath(ctx, current)
     }
-    return bundlePath(current)
+    return bundlePath(ctx, current)
   }
 
   fun currentMeta(ctx: Context): JSONObject {
@@ -162,16 +172,25 @@ object DashOtaStore {
     return false
   }
 
-  private fun bundlePath(slot: JSONObject): String = File(slot.getString("dir"), BUNDLE_FILE).absolutePath
+  private fun bundlePath(ctx: Context, slot: JSONObject): String? {
+    // Resolve from the runtime bundles dir + bundleId, mirroring iOS: never trust the stored
+    // absolute `dir` (stale after any container/path migration), and return null when the bundle
+    // file is missing so the loader falls back to the embedded bundle instead of crashing boot.
+    val bundleId = slot.optString("bundleId")
+    if (bundleId.isEmpty()) return null
+    val f = File(File(bundlesDir(ctx), bundleId), BUNDLE_FILE)
+    return if (f.exists()) f.absolutePath else null
+  }
 
   private fun gc(ctx: Context) {
     val state = loadState(ctx)
+    // Keep by bundleId (dir names), not stored absolute paths — parity with iOS.
     val keep = listOfNotNull(
-      slot(state, "current")?.optString("dir"),
-      slot(state, "lastKnownGood")?.optString("dir")
+      slot(state, "current")?.optString("bundleId"),
+      slot(state, "lastKnownGood")?.optString("bundleId")
     ).toSet()
     bundlesDir(ctx).listFiles()?.forEach { dir ->
-      if (dir.absolutePath !in keep) dir.deleteRecursively()
+      if (dir.name !in keep) dir.deleteRecursively()
     }
   }
 }

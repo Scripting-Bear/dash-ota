@@ -1,6 +1,7 @@
 package com.dashota
 
 import android.util.Base64
+import com.facebook.react.ReactApplication
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -238,10 +239,17 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
   }
 
   override fun restart() {
-    // Best-effort only; the recommended path is apply-on-next-cold-start (see plan I3).
+    // Re-create the React instance so the native bundle getter runs again and a pending OTA bundle
+    // is picked up without waiting for a cold start. `Activity.recreate()` is NOT enough: it rebuilds
+    // the Activity while the ReactHost — and the already-loaded bundle — survives, so the update
+    // never applies. Falls back to recreate() only if no ReactHost is reachable. Cold start remains
+    // the recommended path.
     try {
       val activity = reactContext.currentActivity ?: return
-      activity.runOnUiThread { activity.recreate() }
+      val host = (reactContext.applicationContext as? ReactApplication)?.reactHost
+      activity.runOnUiThread {
+        if (host != null) host.reload("dash-ota: applying update") else activity.recreate()
+      }
     } catch (_: Exception) {
     }
   }

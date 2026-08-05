@@ -21,6 +21,13 @@ export interface OtaConfig {
   storage: OtaStorage;
   /** app marketing version (for `targetAppVersions` matching). */
   appVersion: string;
+  /**
+   * Master switch (default `true`). When `false`, the provider mounts but performs **no** OTA
+   * activity — no enroll, check, download, or apply — and reports status `disabled`. Use it to
+   * withhold OTA from a runtime you don't trust (e.g. a jailbroken / rooted device) so it keeps
+   * running only the store-shipped binary.
+   */
+  enabled?: boolean;
   /** check for an update automatically on launch (default true). */
   autoCheckOnLaunch?: boolean;
   /** automatically stage + schedule an apply when an update is found (default true). */
@@ -49,6 +56,12 @@ export interface OtaConfig {
 /** Storage keys used internally. */
 export const STORAGE_KEYS = {
   installId: 'dash-ota.installId',
+  /**
+   * Marker proving this install already enrolled its current device key, so we don't re-POST
+   * `/enroll` (and re-attest, burning attestation quota) on every cold start. Value =
+   * `sha256(installId + ':' + devicePublicKeyB64)`, so a key rotation or reinstall re-enrolls.
+   */
+  enrolled: 'dash-ota.enrolled',
 } as const;
 
 /** Default console logger. */

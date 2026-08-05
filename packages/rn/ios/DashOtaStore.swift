@@ -146,14 +146,27 @@ final class DashOtaStore {
   }
 
   private func bundlePath(_ slot: [String: Any]) -> String? {
-    guard let dir = slot["dir"] as? String else { return nil }
-    return (dir as NSString).appendingPathComponent(bundleFile)
+    // Resolve from the RUNTIME container + bundleId — never from the stored absolute `dir`.
+    // iOS mints a new data-container UUID on every app update/reinstall (files are migrated), so a
+    // stored absolute path goes stale and RN's bundle load would RCTFatal on the first boot after
+    // every store update. The stored `dir` remains for debugging only.
+    guard let bundleId = slot["bundleId"] as? String, !bundleId.isEmpty else { return nil }
+    let path = bundlesDir.appendingPathComponent(bundleId).appendingPathComponent(bundleFile).path
+    // Missing/unreadable bundle file → fall back to the embedded bundle instead of a boot crash
+    // (also covers a lastKnownGood slot whose files vanished — trials are breaker-guarded, LKG is not).
+    guard fm.fileExists(atPath: path) else { return nil }
+    return path
   }
 
   private func gc() {
     let state = loadState()
-    let keep = Set([slot(state, "current")?["dir"] as? String, slot(state, "lastKnownGood")?["dir"] as? String].compactMap { $0 })
+    // Keep-set by bundleId (stable across container migrations) — matching on stored absolute
+    // paths would consider every live dir unknown after a migration and delete current + LKG.
+    let keep = Set(
+      [slot(state, "current")?["bundleId"] as? String, slot(state, "lastKnownGood")?["bundleId"] as? String]
+        .compactMap { $0 }
+    )
     let dirs = (try? fm.contentsOfDirectory(at: bundlesDir, includingPropertiesForKeys: nil)) ?? []
-    for d in dirs where !keep.contains(d.path) { try? fm.removeItem(at: d) }
+    for d in dirs where !keep.contains(d.lastPathComponent) { try? fm.removeItem(at: d) }
   }
 }
