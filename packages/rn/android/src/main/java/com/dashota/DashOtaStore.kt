@@ -59,9 +59,15 @@ object DashOtaStore {
       outFile.writeBytes(data)
     }
     val state = loadState(ctx)
+    // `nativeBuild` stamps the binary this bundle was staged against — see `isCompatible`.
     state.put(
       "staged",
-      JSONObject().put("bundleId", bundleId).put("version", version).put("runtimeVersion", runtimeVersion).put("dir", dir.absolutePath)
+      JSONObject()
+        .put("bundleId", bundleId)
+        .put("version", version)
+        .put("runtimeVersion", runtimeVersion)
+        .put("nativeBuild", DashOtaConfig.nativeBuild(ctx))
+        .put("dir", dir.absolutePath)
     )
     saveState(ctx, state)
   }
@@ -100,11 +106,56 @@ object DashOtaStore {
   }
 
   /**
+   * Whether a stored slot may still be loaded by THIS binary.
+   *
+   * A bundle is only valid for the binary it was staged against. Two things invalidate it:
+   * `runtimeVersion` (the native contract changed, so the JS may call APIs that no longer exist)
+   * and `nativeBuild` (the store shipped a newer build, whose embedded JS is by definition newer
+   * than anything staged before it). Without this, the first launch after a store update loads the
+   * pre-update bundle over the new binary — silently discarding the JS the update just shipped.
+   *
+   * Slots written before this field existed have no `nativeBuild`; they count as incompatible so
+   * the upgrade resets cleanly rather than trusting an unverifiable slot.
+   */
+  private fun isCompatible(ctx: Context, slot: JSONObject): Boolean {
+    if (slot.optString("runtimeVersion") != DashOtaConfig.runtimeVersion(ctx)) return false
+    if (!slot.has("nativeBuild")) return false
+    return slot.optInt("nativeBuild", -1) == DashOtaConfig.nativeBuild(ctx)
+  }
+
+  /**
+   * Drop every slot staged against a different binary so the embedded bundle loads instead.
+   * @return true when something was discarded (state already saved).
+   */
+  private fun dropIncompatibleSlots(ctx: Context, state: JSONObject): Boolean {
+    var dropped = false
+    for (key in listOf("pending", "staged", "current", "lastKnownGood")) {
+      val s = slot(state, key) ?: continue
+      if (!isCompatible(ctx, s)) {
+        state.put(key, JSONObject.NULL)
+        dropped = true
+      }
+    }
+    if (dropped) {
+      // The trial counters belong to a bundle that is no longer loadable.
+      state.put("trial", false)
+      state.put("bootAttempts", 0)
+      saveState(ctx, state)
+      gc(ctx)
+    }
+    return dropped
+  }
+
+  /**
    * Resolve which bundle to load at launch, applying pending and the crash-loop circuit
    * breaker. Returns the bundle file path, or null to fall back to the embedded bundle.
    */
   fun resolveBundleAtLaunch(ctx: Context): String? {
     val state = loadState(ctx)
+
+    // Before anything else: a binary that changed underneath us (store update / sideload) must not
+    // run bundles staged for the previous one.
+    dropIncompatibleSlots(ctx, state)
 
     slot(state, "pending")?.let { pending ->
       // Apply the pending bundle on trial.

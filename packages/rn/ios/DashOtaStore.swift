@@ -50,7 +50,14 @@ final class DashOtaStore {
       try f.data.write(to: out)
     }
     var state = loadState()
-    state["staged"] = ["bundleId": bundleId, "version": version, "runtimeVersion": runtimeVersion, "dir": dir.path]
+    // `nativeBuild` stamps the binary this bundle was staged against — see `isCompatible`.
+    state["staged"] = [
+      "bundleId": bundleId,
+      "version": version,
+      "runtimeVersion": runtimeVersion,
+      "nativeBuild": DashOtaConfig.nativeBuild,
+      "dir": dir.path,
+    ]
     saveState(state)
   }
 
@@ -84,9 +91,55 @@ final class DashOtaStore {
     return true
   }
 
+  /// Whether a stored slot may still be loaded by THIS binary.
+  ///
+  /// A bundle is only valid for the binary it was staged against. Two things invalidate it:
+  /// `runtimeVersion` (native contract changed, so the JS may call APIs that no longer exist) and
+  /// `nativeBuild` (the store shipped a newer build, whose embedded JS is by definition newer than
+  /// anything staged before it). Without this, the first launch after a store update loads the
+  /// pre-update bundle over the new binary — silently discarding the JS the update just shipped.
+  ///
+  /// Slots written before this field existed have no `nativeBuild`; they are treated as
+  /// incompatible so the upgrade resets cleanly rather than trusting an unverifiable slot.
+  private func isCompatible(_ slot: [String: Any]) -> Bool {
+    guard (slot["runtimeVersion"] as? String) == DashOtaConfig.runtimeVersion else { return false }
+    guard let staged = slot["nativeBuild"] as? Int, staged == DashOtaConfig.nativeBuild else { return false }
+    return true
+  }
+
+  /// Drop every slot staged against a different binary, so the embedded bundle loads instead.
+  /// Returns the cleaned state, and whether anything was discarded.
+  private func dropIncompatibleSlots(_ state: [String: Any]) -> (state: [String: Any], dropped: Bool) {
+    var next = state
+    var dropped = false
+    for key in ["pending", "staged", "current", "lastKnownGood"] {
+      guard let s = slot(state, key) else { continue }
+      if !isCompatible(s) {
+        next[key] = nil
+        dropped = true
+      }
+    }
+    if dropped {
+      // The trial counters belong to a bundle that is no longer loadable.
+      next["trial"] = false
+      next["bootAttempts"] = 0
+    }
+    return (next, dropped)
+  }
+
   /// Resolve which bundle to load at launch, applying pending + the crash-loop circuit breaker.
   func resolveBundleAtLaunch() -> String? {
     var state = loadState()
+
+    // Before anything else: a binary that changed underneath us (store update / sideload) must not
+    // run bundles staged for the previous one.
+    let cleaned = dropIncompatibleSlots(state)
+    if cleaned.dropped {
+      state = cleaned.state
+      saveState(state)
+      gc()
+    }
+
     if let pending = slot(state, "pending") {
       state["current"] = pending
       state["pending"] = nil
