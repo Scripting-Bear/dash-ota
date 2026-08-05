@@ -442,6 +442,73 @@ async function main(): Promise<void> {
     assert.equal(((await res.json()) as { code: string }).code, 'bad_nonce');
   });
 
+  // These two use their own installs: `checkRateLimit` is per-install, and r2Device is already
+  // close to its budget above — borrowing it would fail the *next* test, not this one.
+  const healthyDevice = await enroll('install-healthy-uptodate', 'R2');
+
+  await check('healthy confirm works off an up-to-date check (install-only nonce)', async () => {
+    // The real `healthy` sequence: a device already running the newest bundle checks, is told there
+    // is nothing new (so the nonce carries no bundle binding), then confirms the bundle it is
+    // running. Requiring an exact bundle match here rejected every healthy report, pinning the
+    // adoption counter at 0 — the up-to-date nonce must act as an install-scoped wildcard.
+    const checkRes = await signedPost(
+      '/ota/v1/check',
+      {
+        installId: healthyDevice.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R2',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        currentBundleVersion: 999, // newer than anything published → no update offered
+      },
+      healthyDevice,
+    );
+    const data = (await checkRes.json()) as CheckResponse;
+    assert.equal(data.update, null, 'expected an up-to-date check');
+    const res = await signedPost(
+      '/ota/v1/confirm',
+      {
+        installId: healthyDevice.id,
+        bundleId: 'bnd_R2_v1',
+        runtimeVersion: 'R2',
+        status: 'healthy',
+        serverNonce: data.serverNonce,
+      },
+      healthyDevice,
+    );
+    const body = (await res.json()) as { ok?: boolean; code?: string };
+    assert.equal(res.status, 200, JSON.stringify(body));
+    assert.equal(body.ok, true);
+  });
+
+  await check('an install-only nonce is still scoped to its own install', async () => {
+    const victim = await enroll('install-nonce-victim', 'R2');
+    const attacker = await enroll('install-nonce-attacker', 'R2');
+    const checkRes = await signedPost(
+      '/ota/v1/check',
+      {
+        installId: victim.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R2',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        currentBundleVersion: 999,
+      },
+      victim,
+    );
+    const nonce = ((await checkRes.json()) as CheckResponse).serverNonce;
+    // Another enrolled device replaying the victim's nonce must still be rejected.
+    const res = await signedPost(
+      '/ota/v1/confirm',
+      { installId: attacker.id, bundleId: 'bnd_R2_v1', runtimeVersion: 'R2', status: 'healthy', serverNonce: nonce },
+      attacker,
+    );
+    assert.equal(res.status, 401);
+    assert.equal(((await res.json()) as { code: string }).code, 'bad_nonce');
+  });
+
   await check('force-update gate: hard severity when build is below minimum', async () => {
     await adminPost('/admin/native-policy', {
       channel: 'dev',

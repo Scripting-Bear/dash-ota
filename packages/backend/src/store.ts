@@ -261,6 +261,7 @@ export class Store {
    * Issue a server nonce returned from /check and echoed on /confirm, bound to **both** the install
    * and the offered bundle — so a device can only confirm the bundle it was actually offered (an
    * arbitrary-bundle confirm can't poison adoption or trip a targeted rollout's auto-pause).
+   * An up-to-date check offers no bundle and passes `''`, which binds the nonce to the install only.
    */
   async issueServerNonce(installId: string, bundleId: string): Promise<string> {
     const nonce = randomSecretB64(18);
@@ -268,13 +269,23 @@ export class Store {
     return nonce;
   }
 
-  /** Consume a server nonce, asserting it was issued to this install for this exact bundle. */
+  /**
+   * Consume a server nonce, asserting it was issued to this install for this bundle.
+   *
+   * A nonce issued by an **up-to-date** check carries no bundle binding (`''`), but the device still
+   * confirms with the bundle it is actually running — that is how a `healthy` report arrives, since
+   * the launch that runs a bundle to healthy is by definition the launch with nothing newer to
+   * fetch. Requiring an exact match there rejected every healthy confirm (401 `bad_nonce`), so
+   * adoption's `healthy` counter could never leave 0. An install-only binding is therefore accepted
+   * as a wildcard over that install's own bundles; a bundle-bound nonce still has to match exactly.
+   */
   async consumeServerNonce(nonce: string, installId: string, bundleId: string): Promise<boolean> {
     const value = await this.cache.consumeToken(nonce);
     if (value === null) return false;
     try {
       const parsed = JSON.parse(value) as { installId: string; bundleId: string };
-      return parsed.installId === installId && parsed.bundleId === bundleId;
+      if (parsed.installId !== installId) return false;
+      return parsed.bundleId === '' || parsed.bundleId === bundleId;
     } catch {
       return false;
     }

@@ -1,6 +1,6 @@
 {
   "name": "@dash-ota/backend",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Config-driven, plug-and-play OTA distributor for React Native (dash-ota). Mounts into Express/Connect via one middleware or runs standalone. Serves pre-signed manifests + ciphertext; never holds the signing key.",
   "type": "module",
   "main": "./dist/index.js",

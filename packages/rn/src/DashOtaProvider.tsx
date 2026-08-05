@@ -141,12 +141,15 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
     }
   }, [config, ensureCtx, logger]);
 
-  const applyUpdate = useCallback(async (restart?: boolean): Promise<void> => {
-    if (config.enabled === false) return; // never apply an OTA bundle on a disabled/untrusted runtime
-    await DashOta.applyOnNextLaunch();
-    setStatus('apply-pending');
-    if (restart) DashOta.restart();
-  }, [config.enabled]);
+  const applyUpdate = useCallback(
+    async (restart?: boolean): Promise<void> => {
+      if (config.enabled === false) return; // never apply an OTA bundle on a disabled/untrusted runtime
+      await DashOta.applyOnNextLaunch();
+      setStatus('apply-pending');
+      if (restart) DashOta.restart();
+    },
+    [config.enabled],
+  );
 
   const markHealthy = useCallback((): void => {
     try {

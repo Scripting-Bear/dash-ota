@@ -180,7 +180,8 @@ describe('checkForUpdate (signed request path)', () => {
 
   it('does not re-enroll on a 401 that is not not_enrolled', async () => {
     const fetchImpl = jest.fn(
-      async () => ({ ok: false, status: 401, text: async () => JSON.stringify({ code: 'bad_signature' }) }) as unknown as Response,
+      async () =>
+        ({ ok: false, status: 401, text: async () => JSON.stringify({ code: 'bad_signature' }) }) as unknown as Response,
     );
     const reenroll = jest.fn(async () => {});
     await expect(checkForUpdate(ctxWith(fetchImpl as unknown as typeof fetch, reenroll), 0, '1.2.0')).rejects.toThrow(/401/);
