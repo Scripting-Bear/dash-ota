@@ -1,6 +1,8 @@
 package com.dashota
 
+import android.content.Intent
 import android.util.Base64
+import android.util.Log
 import com.facebook.react.ReactApplication
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
@@ -239,19 +241,40 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
   }
 
   override fun restart() {
-    // Re-create the React instance so the native bundle getter runs again and a pending OTA bundle
-    // is picked up without waiting for a cold start. `Activity.recreate()` is NOT enough: it rebuilds
-    // the Activity while the ReactHost — and the already-loaded bundle — survives, so the update
-    // never applies. Falls back to recreate() only if no ReactHost is reachable. Cold start remains
-    // the recommended path.
+    // Relaunch the app in a FRESH PROCESS. Nothing lighter works on Android: `ReactHost.reload()`
+    // rebuilds the React instance but replays the JSBundleLoader that `getDefaultReactHost` built
+    // once at startup, so the pending bundle is recorded as current while the runtime keeps running
+    // the OLD code — the update only appears after the user kills the app themselves. (iOS differs:
+    // RCTHost re-invokes its bundleURLProvider on reload, so there a reload is enough.)
+    // `Activity.recreate()` is weaker still — it rebuilds the Activity and keeps the whole host.
     try {
       val activity = reactContext.currentActivity ?: return
-      val host = (reactContext.applicationContext as? ReactApplication)?.reactHost
       // Flag the coming launch as user-initiated so the crash-loop breaker doesn't charge it a boot
       // attempt (see DashOtaStore.markUserReload).
       DashOtaStore.markUserReload(reactContext)
+      val relaunch =
+        reactContext.packageManager.getLaunchIntentForPackage(reactContext.packageName)?.apply {
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        }
+      if (relaunch == null) {
+        // No launcher intent to come back to — fall back to a reload rather than killing the app
+        // with no way back. The bundle then applies on the next real cold start.
+        (reactContext.applicationContext as? ReactApplication)?.reactHost?.reload("dash-ota: applying update")
+        return
+      }
       activity.runOnUiThread {
-        if (host != null) host.reload("dash-ota: applying update") else activity.recreate()
+        try {
+          Log.w(NAME, "restart: relaunching for OTA apply")
+          reactContext.startActivity(relaunch)
+          activity.finish()
+          // The replacement Activity is already queued, so ending this process is what forces a fresh
+          // one — and with it a fresh getJSBundleFile() that resolves the newly applied bundle.
+          Log.w(NAME, "restart: exiting process")
+          Runtime.getRuntime().exit(0)
+        } catch (e: Exception) {
+          Log.w(NAME, "restart: relaunch failed (${e.message}) — falling back to reload")
+          (reactContext.applicationContext as? ReactApplication)?.reactHost?.reload("dash-ota: applying update")
+        }
       }
     } catch (_: Exception) {
     }
