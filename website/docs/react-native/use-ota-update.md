@@ -1,7 +1,7 @@
 ---
 sidebar_position: 6
 title: useOtaUpdate()
-description: The hook — status, current/available bundles, native policy, and actions.
+description: The hook — a ready-to-render ui view model, plus raw state and actions.
 ---
 
 # `useOtaUpdate()`
@@ -9,29 +9,55 @@ description: The hook — status, current/available bundles, native policy, and 
 The single hook for reading OTA state and driving actions. Must be used within
 [`<DashOtaProvider>`](/docs/react-native/provider-config).
 
+Read **`ota.ui`**. It is the whole announce → download → restart flow, already derived: which phase
+the user is in, the copy for it, whether the button is live, and one `action()` that does the correct
+next thing. Mapping raw statuses yourself is how hosts end up offering "Restart" mid-download.
+
 ```tsx
 import { useOtaUpdate } from 'react-native-dash-ota';
 
-function UpdateControls() {
-  const ota = useOtaUpdate();
+function UpdateRow() {
+  const { ui, markHealthy } = useOtaUpdate();
+  useEffect(() => markHealthy(), []); // once the app is genuinely usable
+
+  if (!ui.visible) return null;
   return (
-    <>
-      <Text>status: {ota.status}</Text>
-      <Button title="Check now" onPress={ota.checkNow} />
-      {ota.availableUpdate && (
-        <Button title="Apply & restart" onPress={() => ota.applyUpdate(true)} />
-      )}
-      <Button title="Roll back" onPress={ota.rollback} />
-    </>
+    <View>
+      <Text>{ui.title}</Text>
+      <Text>{ui.description}</Text>
+      {ui.busy && <ActivityIndicator />}
+      {ui.cta && <Button title={ui.cta} disabled={!ui.ctaEnabled} onPress={ui.action} />}
+    </View>
   );
 }
 ```
 
-## Returned state
+## `ui` — the view model
 
 | Field | Type | Description |
 |---|---|---|
-| `status` | `OtaStatus` | `'idle' \| 'checking' \| 'downloading' \| 'staged' \| 'apply-pending' \| 'up-to-date' \| 'error'` |
+| `phase` | `OtaPhase` | `'none' \| 'available' \| 'working' \| 'ready' \| 'error'` |
+| `visible` | `boolean` | `phase !== 'none'` |
+| `title` / `description` | `string` | copy for the phase; override with [`uiCopy`](/docs/react-native/provider-config) |
+| `cta` | `string \| null` | button label; `null` in a phase with no action (while downloading) |
+| `ctaEnabled` | `boolean` | false while an action is in flight — the double-tap guard lives here |
+| `busy` | `boolean` | an operation is running; show a spinner |
+| `progress` | `number \| null` | `null` means indeterminate (the native download reports no granular progress) |
+| `blocking` | `boolean` | the update is mandatory — do not let the user dismiss this UI |
+| `action` | `() => Promise<void>` | download → restart → retry, whichever the phase calls for |
+
+The phases map to what the user can do, not to internals: `available` waits for a download decision,
+`working` is checking/downloading, `ready` has a verified bundle staged and needs a restart, `error`
+offers a retry. `ready` is **sticky** for the life of the process, so a foreground re-check can't
+downgrade "Restart now" back to "Download" while a bundle is sitting staged.
+
+## Raw state
+
+For diagnostics and non-standard flows.
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | `OtaStatus` | `'idle' \| 'checking' \| 'up-to-date' \| 'update-available' \| 'downloading' \| 'apply-pending' \| 'error' \| 'disabled'` |
 | `channel` | `string` | the build flavour's channel (`dev`/`uat`/`prod`), from native |
 | `currentBundle` | `BundleMeta \| null` | `{ bundleId, bundleVersion, runtimeVersion, isEmbedded }` |
 | `availableUpdate` | `AvailableUpdate \| null` | `{ bundleId, bundleVersion, mandatory, releaseNotes }` when one was found |
@@ -42,18 +68,22 @@ function UpdateControls() {
 
 ## Actions
 
+`ui.action()` covers the standard flow. These stay exported for everything else.
+
 | Action | Signature | What it does |
 |---|---|---|
 | `checkNow` | `() => Promise<void>` | Manually run a check (and auto-download/stage if `autoStage`). Single-flighted. |
-| `applyUpdate` | `(restart?: boolean) => Promise<void>` | Schedule the staged update to apply on next cold start. Pass `true` for a **best-effort** in-process restart (see note). |
+| `downloadUpdate` | `() => Promise<boolean>` | Download + verify + stage what the last check announced. Re-checks once by itself if the one-time download token went stale. |
+| `applyUpdate` | `(restart?: boolean) => Promise<boolean>` | Arm the staged update for the next launch. `true` also restarts now. Resolves `false` when nothing is staged — it will not restart on a promise it can't keep. |
 | `markHealthy` | `() => void` | Promote the running bundle to last-known-good. Call **once your app is genuinely usable**. |
 | `rollback` | `() => Promise<void>` | Force a revert to the last-known-good bundle. |
 
-:::note `restart()` is best-effort
-Under the New Architecture / bridgeless runtime, programmatic reload is unreliable. The
-**recommended** path is apply-on-next-cold-start (`applyUpdate()` with no argument). For
-*mandatory* updates, prefer a blocking "please reopen the app" prompt over betting on
-`applyUpdate(true)`.
+:::note How `restart()` works
+Restarting under the New Architecture is platform-specific: iOS re-triggers the reload command (the
+host re-resolves the bundle URL), Android relaunches the process, because `ReactHost.reload()` replays
+the bundle loader captured at startup and would silently run the *old* bundle. Both paths are
+verified on device; apply-on-next-cold-start (`applyUpdate()` with no argument) remains the most
+conservative option.
 :::
 
 ## Status transitions
@@ -62,8 +92,10 @@ Under the New Architecture / bridgeless runtime, programmatic reload is unreliab
 flowchart LR
   idle --> checking
   checking --> up-to-date
+  checking --> update-available
+  update-available --> downloading
   checking --> downloading
-  downloading --> staged --> apply-pending
+  downloading --> apply-pending
   checking --> error
   downloading --> error
 ```

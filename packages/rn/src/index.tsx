@@ -6,7 +6,7 @@ export { DashOtaProvider } from './DashOtaProvider';
 export type { DashOtaProviderProps } from './DashOtaProvider';
 export { useOtaUpdate } from './useOtaUpdate';
 
-export { consoleLogger, STORAGE_KEYS } from './config';
+export { consoleLogger, DEFAULT_UI_COPY, STORAGE_KEYS } from './config';
 export type { OtaConfig, OtaStorage } from './config';
 
 export { isDeviceKeyHardwareBacked } from './deviceKey';
@@ -18,6 +18,10 @@ export type {
   Channel,
   Platform,
   OtaStatus,
+  OtaPhase,
+  OtaUi,
+  OtaUiCopy,
+  OtaUiPhaseCopy,
   BundleMeta,
   OtaNativeState,
   NativeVersionPolicy,

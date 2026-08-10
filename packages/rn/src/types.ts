@@ -19,7 +19,7 @@ export type OtaStatus =
    */
   | 'update-available'
   | 'downloading'
-  | 'staged'
+  /** verified, staged, and armed to load on the next launch — the app must restart to run it. */
   | 'apply-pending'
   | 'error'
   /** OTA is switched off for this runtime (`config.enabled === false`) — no enroll/check/apply. */
@@ -80,6 +80,53 @@ export interface AvailableUpdate {
   releaseNotes?: string;
 }
 
+/**
+ * What an update UI actually needs to know — the four states a user can be in, derived from
+ * {@link OtaStatus} so hosts never map raw lifecycle statuses themselves.
+ *
+ * - `none` — nothing to show (idle, up-to-date, disabled).
+ * - `available` — an update exists and is waiting for the user to start the download.
+ * - `working` — checking or downloading; show progress and no action.
+ * - `ready` — verified and staged; the app must restart to run it.
+ * - `error` — the last attempt failed; the action retries.
+ */
+export type OtaPhase = 'none' | 'available' | 'working' | 'ready' | 'error';
+
+/** Copy for one {@link OtaPhase}. `{version}` is substituted with the relevant bundle version. */
+export interface OtaUiPhaseCopy {
+  title: string;
+  description: string;
+  /** button label, or `null` for a phase with no action (e.g. while downloading). */
+  cta: string | null;
+}
+
+/** Overridable copy per actionable phase — pass a partial via `OtaConfig.uiCopy`. */
+export type OtaUiCopy = Record<Exclude<OtaPhase, 'none'>, OtaUiPhaseCopy>;
+
+/**
+ * A ready-to-render view model for the update UI. Everything a row/banner/modal needs, so the host
+ * renders it and calls {@link OtaUi.action} — no status mapping, no in-flight guard, no branching
+ * between download and restart.
+ */
+export interface OtaUi {
+  phase: OtaPhase;
+  /** convenience for `phase !== 'none'`. */
+  visible: boolean;
+  title: string;
+  description: string;
+  cta: string | null;
+  /** false while an action is running, or when the phase has no action. */
+  ctaEnabled: boolean;
+  /** an operation is in flight — show a spinner and keep the action inert. */
+  busy: boolean;
+  /** 0..1 when known, `null` when the download reports no granular progress (show indeterminate). */
+  progress: number | null;
+  /** the update is mandatory: the host should not let the user dismiss or defer this UI. */
+  blocking: boolean;
+  /** performs the correct next step for the current phase (download → restart → retry). */
+  action: () => Promise<void>;
+}
+
 /** Host-provided logger (defaults to console). */
 export interface OtaLogger {
   info: (msg: string) => void;
@@ -89,6 +136,12 @@ export interface OtaLogger {
 
 /** What `useOtaUpdate()` returns. */
 export interface OtaUpdateState {
+  /**
+   * The one thing a host UI should read: a derived, ready-to-render view model with a single
+   * {@link OtaUi.action}. Prefer this over `status` — the raw statuses below are for diagnostics
+   * and for hosts that need to build a non-standard flow.
+   */
+  ui: OtaUi;
   status: OtaStatus;
   /** the build flavour's channel (dev/uat/prod), embedded natively. */
   channel: string;
@@ -101,6 +154,8 @@ export interface OtaUpdateState {
   /** manually trigger a check (+ auto-download/stage unless `autoStage: false`). */
   checkNow: () => Promise<void>;
   /**
+   * Escape hatch — {@link OtaUi.action} already does this at the right time.
+   *
    * Download + verify + stage the update announced by the last check. Only needed with
    * `autoStage: false`, where the check stops at `'update-available'` so the host can ask the user
    * before spending bandwidth; a mandatory update downloads itself regardless.
@@ -110,6 +165,8 @@ export interface OtaUpdateState {
    */
   downloadUpdate: () => Promise<boolean>;
   /**
+   * Escape hatch — {@link OtaUi.action} already does this at the right time.
+   *
    * Apply a staged update on next launch (or restart now). Resolves **false** when nothing is
    * staged yet — e.g. the download is still running — in which case no restart happens and the
    * status is left alone, so a host UI can keep waiting instead of promising a restart that would

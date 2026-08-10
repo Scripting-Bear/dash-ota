@@ -7,7 +7,7 @@
  */
 
 import type { IntegrityAttestor, TransportSecurity } from './verifiers';
-import type { OtaLogger, OtaStatus } from './types';
+import type { OtaLogger, OtaStatus, OtaUiCopy, OtaUiPhaseCopy } from './types';
 
 /** Minimal async key/value storage (e.g. AsyncStorage or secure storage). */
 export interface OtaStorage {
@@ -32,6 +32,27 @@ export interface OtaConfig {
   autoCheckOnLaunch?: boolean;
   /** automatically stage + schedule an apply when an update is found (default true). */
   autoStage?: boolean;
+  /**
+   * What to do about a release published with `mandatory: true` (default `'auto-download'`).
+   *
+   * - `'auto-download'` — ignore `autoStage: false` and download it immediately, so the user only
+   *   ever has to press Restart. Combined with {@link OtaUi.blocking} (set for every mandatory
+   *   update) this is the force-update flow: the host refuses to dismiss the UI, the bundle
+   *   arrives on its own.
+   * - `'announce'` — treat it like any optional update; only `blocking` marks it as required.
+   */
+  mandatory?: 'auto-download' | 'announce';
+  /**
+   * Override any of the strings in {@link OtaUi} (per phase: `title`, `description`, `cta`).
+   * Partial and per-phase-partial: anything omitted keeps the built-in copy. `{version}` inside a
+   * string is replaced with the relevant bundle version. Use it for your own tone or localization.
+   *
+   * @example
+   * ```ts
+   * uiCopy: { ready: { title: 'Restart to finish updating', cta: 'Restart now' } }
+   * ```
+   */
+  uiCopy?: Partial<Record<keyof OtaUiCopy, Partial<OtaUiPhaseCopy>>>;
   /**
    * Auto-promote the running bundle to last-known-good this many ms after a successful mount,
    * so hosts don't have to wire `markHealthy()` by hand. Omit (default) to keep it **manual** —
@@ -63,6 +84,33 @@ export const STORAGE_KEYS = {
    */
   enrolled: 'dash-ota.enrolled',
 } as const;
+
+/**
+ * Built-in copy for {@link OtaUi}. Deliberately plain — override per phase with
+ * {@link OtaConfig.uiCopy} to match your product's voice.
+ */
+export const DEFAULT_UI_COPY: OtaUiCopy = {
+  available: {
+    title: 'Update available',
+    description: 'Version {version} is ready to download.',
+    cta: 'Download',
+  },
+  working: {
+    title: 'Downloading update',
+    description: 'Keep the app open while the update downloads.',
+    cta: null,
+  },
+  ready: {
+    title: 'Restart to finish',
+    description: 'Version {version} is ready to apply.',
+    cta: 'Restart now',
+  },
+  error: {
+    title: "Update didn't finish",
+    description: 'Something went wrong. You can try again.',
+    cta: 'Try again',
+  },
+};
 
 /** Default console logger. */
 export const consoleLogger: OtaLogger = {

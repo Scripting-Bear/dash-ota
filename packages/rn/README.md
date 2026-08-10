@@ -45,14 +45,28 @@ export default function Root() {
   );
 }
 
-function UpdateControls() {
-  const ota = useOtaUpdate();
-  // { status, currentBundle, availableUpdate, isMandatory, nativePolicy, progress, error,
-  //   checkNow, applyUpdate, markHealthy, rollback }
-  useEffect(() => ota.markHealthy(), []); // call once the app is genuinely usable
-  return <Button title="Check for updates" onPress={ota.checkNow} />;
+function UpdateRow() {
+  const { ui, markHealthy } = useOtaUpdate();
+  useEffect(() => markHealthy(), []); // call once the app is genuinely usable
+
+  // `ui` is the whole announce → download → restart flow, already derived:
+  // { phase, visible, title, description, cta, ctaEnabled, busy, progress, blocking, action }
+  if (!ui.visible) return null;
+  return (
+    <View>
+      <Text>{ui.title}</Text>
+      <Text>{ui.description}</Text>
+      {ui.busy && <ActivityIndicator />}
+      {ui.cta && <Button title={ui.cta} disabled={!ui.ctaEnabled} onPress={ui.action} />}
+    </View>
+  );
 }
 ```
+
+Override the wording with `uiCopy` (per phase, `{version}` interpolated). `ui.blocking` is true for a
+mandatory release — render the same thing as a non-dismissible modal, and it downloads itself. The raw
+`status` / `availableUpdate` / `checkNow` / `downloadUpdate` / `applyUpdate` / `rollback` surface is
+still there for non-standard flows.
 
 See the [full guide](https://github.com/Scripting-Bear/dash-ota/blob/main/docs/react-native.md)
 for all config options, the lifecycle, mandatory/force-update, and the crash-loop breaker.
