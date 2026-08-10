@@ -18,3 +18,6 @@ packages/backend/.data/
 # never commit emitted declarations that leak into src
 packages/*/src/**/*.d.ts
 packages/*/src/**/*.d.ts.map
+
+# npm pack output — build artifacts, never committed (published via npm publish)
+*.tgz
