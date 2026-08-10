@@ -81,6 +81,9 @@
   // (`RCTTriggerReloadCommandListeners`): posting a hand-written notification name matches no
   // listener, so it silently does nothing. RCTHost registers this listener unconditionally, so it
   // works in release builds too. Main thread only. Cold start remains the recommended path.
+  // Flag the coming launch as user-initiated so the crash-loop breaker doesn't charge it a boot
+  // attempt (see DashOtaStore.markUserReload).
+  [_impl markUserReload];
   dispatch_async(dispatch_get_main_queue(), ^{
     RCTTriggerReloadCommandListeners(@"dash-ota: applying update");
   });

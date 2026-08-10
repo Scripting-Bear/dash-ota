@@ -247,6 +247,9 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
     try {
       val activity = reactContext.currentActivity ?: return
       val host = (reactContext.applicationContext as? ReactApplication)?.reactHost
+      // Flag the coming launch as user-initiated so the crash-loop breaker doesn't charge it a boot
+      // attempt (see DashOtaStore.markUserReload).
+      DashOtaStore.markUserReload(reactContext)
       activity.runOnUiThread {
         if (host != null) host.reload("dash-ota: applying update") else activity.recreate()
       }

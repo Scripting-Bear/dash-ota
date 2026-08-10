@@ -157,6 +157,16 @@ object DashOtaStore {
     // run bundles staged for the previous one.
     dropIncompatibleSlots(ctx, state)
 
+    // A reload the user asked for is not evidence of a crash. Consume the marker and let this launch
+    // pass without spending a boot attempt — otherwise impatient tapping on "restart to apply" walks
+    // a perfectly healthy bundle into the crash-loop breaker and blocklists it. Genuine cold starts
+    // still count, so a bundle that really crashes on boot is still caught.
+    val userReload = state.optBoolean("userReload", false)
+    if (userReload) {
+      state.remove("userReload")
+      saveState(ctx, state)
+    }
+
     slot(state, "pending")?.let { pending ->
       // Apply the pending bundle on trial.
       state.put("current", pending)
@@ -186,11 +196,23 @@ object DashOtaStore {
         gc(ctx)
         return lkg?.let { bundlePath(ctx, it) }
       }
-      state.put("bootAttempts", attempts + 1)
-      saveState(ctx, state)
+      if (!userReload) {
+        state.put("bootAttempts", attempts + 1)
+        saveState(ctx, state)
+      }
       return bundlePath(ctx, current)
     }
     return bundlePath(ctx, current)
+  }
+
+  /**
+   * Record that the NEXT launch is a deliberate in-process reload (the user tapped "restart to
+   * apply"), not a fresh cold start. One-shot: [resolveBundleAtLaunch] consumes it.
+   */
+  fun markUserReload(ctx: Context) {
+    val state = loadState(ctx)
+    state.put("userReload", true)
+    saveState(ctx, state)
   }
 
   fun currentMeta(ctx: Context): JSONObject {

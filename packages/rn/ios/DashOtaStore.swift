@@ -127,6 +127,14 @@ final class DashOtaStore {
     return (next, dropped)
   }
 
+  /// Record that the NEXT launch is a deliberate in-process reload (the user tapped "restart to
+  /// apply"), not a fresh cold start. One-shot: `resolveBundleAtLaunch` consumes it.
+  func markUserReload() {
+    var state = loadState()
+    state["userReload"] = true
+    saveState(state)
+  }
+
   /// Resolve which bundle to load at launch, applying pending + the crash-loop circuit breaker.
   func resolveBundleAtLaunch() -> String? {
     var state = loadState()
@@ -138,6 +146,16 @@ final class DashOtaStore {
       state = cleaned.state
       saveState(state)
       gc()
+    }
+
+    // A reload the user asked for is not evidence of a crash. Consume the marker and let this launch
+    // pass without spending a boot attempt — otherwise impatient tapping on "restart to apply" walks
+    // a perfectly healthy bundle into the crash-loop breaker and blocklists it. Genuine cold starts
+    // still count, so a bundle that really crashes on boot is still caught.
+    let userReload = (state["userReload"] as? Bool) == true
+    if userReload {
+      state["userReload"] = nil
+      saveState(state)
     }
 
     if let pending = slot(state, "pending") {
@@ -166,8 +184,10 @@ final class DashOtaStore {
         gc()
         return lkg.flatMap { bundlePath($0) }
       }
-      state["bootAttempts"] = attempts + 1
-      saveState(state)
+      if !userReload {
+        state["bootAttempts"] = attempts + 1
+        saveState(state)
+      }
       return bundlePath(current)
     }
     return bundlePath(current)

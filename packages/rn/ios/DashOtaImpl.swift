@@ -73,6 +73,7 @@ public class DashOtaImpl: NSObject {
   @objc public func consumeFailedReport() -> String { DashOtaStore.shared.consumeFailedReport() }
 
   @objc public func applyOnNextLaunch() -> Bool { DashOtaStore.shared.promoteStagedToPending() }
+  @objc public func markUserReload() { DashOtaStore.shared.markUserReload() }
   @objc public func markHealthy() { DashOtaStore.shared.markHealthy() }
   @objc public func rollback() -> Bool { DashOtaStore.shared.rollback() }
 

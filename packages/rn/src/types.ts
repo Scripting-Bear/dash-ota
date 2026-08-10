@@ -12,6 +12,12 @@ export type OtaStatus =
   | 'idle'
   | 'checking'
   | 'up-to-date'
+  /**
+   * An eligible update exists but nothing has been downloaded yet — only reachable with
+   * `autoStage: false`, where the host decides when to spend the user's bandwidth. Call
+   * `downloadUpdate()` to proceed.
+   */
+  | 'update-available'
   | 'downloading'
   | 'staged'
   | 'apply-pending'
@@ -92,10 +98,24 @@ export interface OtaUpdateState {
   nativePolicy: NativeVersionPolicy | null;
   progress: number;
   error: string | null;
-  /** manually trigger a check (+ auto-download/stage). */
+  /** manually trigger a check (+ auto-download/stage unless `autoStage: false`). */
   checkNow: () => Promise<void>;
-  /** apply a staged update on next launch (or restart for mandatory). */
-  applyUpdate: (restart?: boolean) => Promise<void>;
+  /**
+   * Download + verify + stage the update announced by the last check. Only needed with
+   * `autoStage: false`, where the check stops at `'update-available'` so the host can ask the user
+   * before spending bandwidth; a mandatory update downloads itself regardless.
+   *
+   * Resolves **false** when there is nothing to download (no announced update, or the download
+   * material has expired — re-run `checkNow()`). On success the status ends at `'apply-pending'`.
+   */
+  downloadUpdate: () => Promise<boolean>;
+  /**
+   * Apply a staged update on next launch (or restart now). Resolves **false** when nothing is
+   * staged yet — e.g. the download is still running — in which case no restart happens and the
+   * status is left alone, so a host UI can keep waiting instead of promising a restart that would
+   * discard the partial download.
+   */
+  applyUpdate: (restart?: boolean) => Promise<boolean>;
   /** mark the running bundle healthy (call once the app is genuinely usable). */
   markHealthy: () => void;
   /** force a rollback to last-known-good. */

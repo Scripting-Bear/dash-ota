@@ -62,11 +62,67 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
   const ctxRef = useRef<OtaClientContext | null>(null);
   const serverNonceRef = useRef<string>('');
   const inFlight = useRef(false);
+  /**
+   * What a deferred download needs: the one-time token plus the exact signed bytes native verifies.
+   * Held only until staged (or until the next check replaces it) so `downloadUpdate()` can run long
+   * after the check that announced the update.
+   */
+  const pendingDownload = useRef<{ downloadToken: string; manifestJson: string; signatureB64: string } | null>(null);
 
   const ensureCtx = useCallback(async (): Promise<OtaClientContext> => {
     if (!ctxRef.current) ctxRef.current = await createClientContext(config, logger);
     return ctxRef.current;
   }, [config, logger]);
+
+  /**
+   * Download → native verify/decrypt → stage → arm for next launch, using whatever the last check
+   * retained. Shared by the auto-stage path and the explicit {@link downloadUpdate}.
+   *
+   * @returns true when a bundle ended up staged and pending.
+   */
+  const stagePendingDownload = useCallback(async (): Promise<boolean> => {
+    const material = pendingDownload.current;
+    const ctx = ctxRef.current;
+    if (!material || !ctx) return false;
+    setStatus('downloading');
+    const staged = (await DashOta.downloadAndStage(
+      downloadUrl(ctx),
+      material.downloadToken,
+      material.manifestJson,
+      material.signatureB64,
+    )) as unknown as { bundleId: string; bundleVersion: number };
+    // The download token is one-time — drop it so a retry re-checks instead of replaying a dead token.
+    pendingDownload.current = null;
+    setProgress(1);
+    logger.info(`staged ${staged.bundleId} v${staged.bundleVersion}`);
+    setStatus('staged');
+    await DashOta.applyOnNextLaunch();
+    setStatus('apply-pending');
+    return true;
+  }, [logger]);
+
+  const downloadUpdate = useCallback(async (): Promise<boolean> => {
+    if (config.enabled === false) return false;
+    if (inFlight.current) return false;
+    if (!pendingDownload.current) {
+      logger.warn('downloadUpdate: nothing announced to download — run checkNow() first');
+      return false;
+    }
+    inFlight.current = true;
+    setError(null);
+    setProgress(0);
+    try {
+      return await stagePendingDownload();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      setStatus('error');
+      logger.error(`downloadUpdate failed: ${msg}`);
+      return false;
+    } finally {
+      inFlight.current = false;
+    }
+  }, [config.enabled, logger, stagePendingDownload]);
 
   const checkNow = useCallback(async (): Promise<void> => {
     if (config.enabled === false) {
@@ -115,22 +171,20 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
         return;
       }
 
-      if (config.autoStage === false) {
-        setStatus('up-to-date');
+      // Keep what a later download needs; canonicalize once, here, while the response is in hand.
+      pendingDownload.current = {
+        downloadToken: resp.downloadToken,
+        manifestJson: canonicalize(m), // canonical bytes the CLI signed; native verifies the Ed25519 sig over these
+        signatureB64: resp.update.signatureB64,
+      };
+
+      // `autoStage: false` hands the bandwidth decision to the host — stop at 'update-available' and
+      // let it call downloadUpdate(). A mandatory update is not optional, so it still self-downloads.
+      if (config.autoStage === false && !m.mandatory) {
+        setStatus('update-available');
         return;
       }
-      setStatus('downloading');
-      const staged = (await DashOta.downloadAndStage(
-        downloadUrl(ctx),
-        resp.downloadToken,
-        canonicalize(m), // canonical bytes the CLI signed; native verifies the Ed25519 sig over these
-        resp.update.signatureB64,
-      )) as unknown as { bundleId: string; bundleVersion: number };
-      setProgress(1);
-      logger.info(`staged ${staged.bundleId} v${staged.bundleVersion}`);
-      setStatus('staged');
-      await DashOta.applyOnNextLaunch();
-      setStatus('apply-pending');
+      await stagePendingDownload();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
@@ -142,13 +196,23 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
   }, [config, ensureCtx, logger]);
 
   const applyUpdate = useCallback(
-    async (restart?: boolean): Promise<void> => {
-      if (config.enabled === false) return; // never apply an OTA bundle on a disabled/untrusted runtime
-      await DashOta.applyOnNextLaunch();
+    async (restart?: boolean): Promise<boolean> => {
+      if (config.enabled === false) return false; // never apply an OTA bundle on a disabled/untrusted runtime
+      // Only claim (and act on) "apply-pending" when a bundle really is pending. `applyOnNextLaunch`
+      // promotes `staged` → `pending` and returns false when there is nothing staged — which is the
+      // normal case mid-download. Reporting success there made the UI invite a restart that could
+      // not apply anything, and restarting mid-download threw the partial download away.
+      const promoted = await DashOta.applyOnNextLaunch();
+      const pending = promoted || Boolean(((await DashOta.getState()) as { pendingBundleId?: string }).pendingBundleId);
+      if (!pending) {
+        logger.warn('applyUpdate: nothing staged yet — not restarting');
+        return false;
+      }
       setStatus('apply-pending');
       if (restart) DashOta.restart();
+      return true;
     },
-    [config.enabled],
+    [config.enabled, logger],
   );
 
   const markHealthy = useCallback((): void => {
@@ -223,6 +287,7 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
       progress,
       error,
       checkNow,
+      downloadUpdate,
       applyUpdate,
       markHealthy,
       rollback,
@@ -237,6 +302,7 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
       progress,
       error,
       checkNow,
+      downloadUpdate,
       applyUpdate,
       markHealthy,
       rollback,
