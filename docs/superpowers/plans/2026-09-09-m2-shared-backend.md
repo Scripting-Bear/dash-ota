@@ -1,5 +1,15 @@
 # dash-ota M2 — shared + backend Implementation Plan
 
+> ## ⚠️ PARTIAL — Tasks 1 to 8 only
+>
+> Drafting was cut off after Task 8. Everything through the v2 `Store` is here; the **routes are
+> not**. After Task 8, build the rest from the spec (§5.3 to §5.5): the `/ota/v2/*` device routes
+> including the ranged blob GET, the admin three-step publish plus `GET /admin/releases/:bundleId`,
+> deletion of `POST /admin/publish`, the v1 tombstone with its retired-client counter, the Express
+> mount-ordering fix, the e2e and smoke test extensions, and the 0.3.0 version bumps.
+>
+> Do not write another long plan for them. Write the code.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the single-blob v1 payload with protocol v2 in `@dash-ota/shared` and `@dash-ota/backend`: manifest schema 2, per-file content-addressed blobs (zstd + optional AES-GCM with AAD), a three-step streamed publish, Range-capable blob downloads behind reusable release-bound tokens, and tombstoned v1 routes.
