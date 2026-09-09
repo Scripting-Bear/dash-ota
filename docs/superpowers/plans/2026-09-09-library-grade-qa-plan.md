@@ -336,3 +336,93 @@ Fold into the waves above rather than treating as a separate programme:
 | 3 | Provider parity against real containers, orphan-blob sweeper, CLI memory (§12, §13) |
 | 3 | Client background-execution and race tests (§14) |
 | 4 | Schema migration, Windows, HTTP conformance |
+
+---
+
+# 16. Adversarial review of this plan, and the response
+
+An outside model was asked to attack this plan, not validate it. Its central charge is worth quoting
+because it is the right one to worry about:
+
+> The most dangerous outcome here isn't another crash-loop bug. It's spending six months turning a
+> one-customer internal system into a beautifully tested public project whose primary competitive
+> advantage is that you are now responsible for operating the part Expo already operates for
+> everyone else.
+
+## Accepted — these change the plan
+
+1. **Replaying model sequences against all three implementations is partly fantasy.** There are not
+   three independent implementations of the *state machine*; the TypeScript model is a specification
+   and the other two are implementations with platform-specific behaviour. A generated sequence
+   cannot model process death, mmap lifetime, Android's process model or filesystem atomicity — and
+   those are precisely what caused the production incident. **Split §4:** keep the model for the
+   logical state machine, where it would have caught the attempt-counting bug, and move the
+   lifecycle class to real device and process tests. Do not let a green model imply platform safety.
+2. **Conformance vectors prove agreement with TypeScript, not correctness.** If TS generates the
+   corpus and the other two are measured against it, a TS misreading becomes the standard.
+   **Add:** a normative protocol specification that exists independently of all three codebases, and
+   generate vectors from that.
+3. **Asserting rejection *reasons* couples implementations to wording.** Either make the error codes
+   normative in that specification, or assert only accept/reject. The typed codes already exist in
+   the design; promoting them is small.
+4. **"No sequence reaches a state where no update can ever apply" is too strong to be meaningful.**
+   Permanently full disk, a revoked key, an obsolete binary and a dead server are all legitimate
+   terminal states. **Replace** with explicit recoverability assumptions and assert against those.
+5. **The AAD test must be constructed so the AAD is independently necessary** — same bytes, valid
+   hash, wrong context — rather than observing that the system as a whole rejects something. This is
+   the general form of the mislabelled test QA already found.
+6. **The support policy must precede the compatibility matrix.** Testing every combination without a
+   published policy is combinatorial theatre. Decide what is supported, then test exactly that. The
+   same applies to Windows: unsupported is a policy, not a defect.
+7. **Perf budgets need device classes.** 40 MB is arbitrary until "low-end device" is defined.
+8. **Providers: make them testable in CI or stop claiming support.** Skipping Postgres, Redis and S3
+   unless an environment variable is set means they are effectively untested while being advertised.
+9. **"Two weeks" is a milestone, not a completion estimate.** Native test infrastructure from zero,
+   plus multi-process Android and filesystem crash semantics, against a regulated production
+   consumer. Say so.
+10. **A Wave 0 exists and was missing.** Who operates the service. Who is paged when an update bricks
+    30% of production. What the security response SLA is. What happens when the maintainer stops.
+    How a customer revokes an update or recovers from a compromised signing key. If those answers
+    are not compelling, the rest is wasted.
+11. **An audit log of who published what, when, is missing entirely** and was never mentioned. For a
+    SEBI-regulated consumer that is not a nice-to-have.
+12. **Signed revocation moves out of Wave 4.** A signature answers "did the key holder authorise
+    this", not "is this still authorised to run". Correct, and for a deployment-control story it
+    belongs early.
+
+## Rejected — the review is wrong on the facts
+
+13. **"No formal native-runtime compatibility gate; the omission I'd fear most."** It exists, in
+    three layers: the backend refuses a mismatch (`isEligible` → `runtime-mismatch`), the native
+    client re-checks as defence in depth, and `isCompatible` discards any stored slot whose
+    `runtimeVersion` *or* `nativeBuild` differs from the running binary. `runtimeVersion` is a signed
+    manifest field, so it is cryptographically bound to the update, and a fingerprint policy
+    (`computeRuntimeVersion`) already exists alongside the manual value.
+    **The kernel that survives:** the consuming app sets it by hand, and that has already misfired
+    once — a store build shipped with `runtimeVersion` 2 while the OTA was published against 3, so
+    the update was invisible to every device. The mechanism is sound and the default is
+    footgun-shaped. **Adopted as:** wire the fingerprint policy and make a hand-set runtime version
+    the exception.
+14. **"Missing: staged rollout, kill switch, rollback, adoption metrics."** All four ship today as
+    admin routes with per-release adoption and health counters driven by `/confirm`.
+15. **"Cut `patches[]` — you are designing a second OTA protocol inside your first."** Rejected on
+    evidence rather than preference: the measurement is on the real app, not a projection, and takes
+    a typical JS-only update from 7.28 MB to roughly 2.4 MB. That is the dominant remaining cost.
+    The discipline in the objection is accepted though — deltas stay in the last phase, and the
+    manifest field costs nothing now while avoiding a format break later.
+16. **"A better OTA implementation is an engineering vanity project."** Too strong. CodePush's
+    shutdown stranded exactly the self-hosting population, and Expo's route still requires either
+    EAS or implementing their protocol server yourself. There is a real gap: bare React Native,
+    self-hosted, signed by default. What the review gets right is that **one customer is not
+    evidence of a market**, and that test stands.
+
+## The publishing gate, adopted verbatim
+
+Publish only if at least two or three independent organisations choose it *specifically* for
+self-hosting, data residency, air-gapped infrastructure, customer-controlled signing keys, or
+regulatory deployment control. If prospective users say "EAS already does this", do not publish, and
+keep dash-ota internal.
+
+Until that gate is met, the correct scope is **Wave 0 plus Wave 1 only** — the work that a
+single regulated production consumer needs regardless of whether the library is ever published.
+Waves 2 and 3 are publishing costs and should not be paid before the decision.
