@@ -226,3 +226,113 @@ pluggable storage, with no vendor to shut it down, which is precisely what happe
 
 **Weaker than the field:** no native tests, no conformance between its own implementations, no
 device matrix, no fuzzing, one consumer's worth of field exposure. Those are the items above.
+
+---
+
+# Per-component deep QA
+
+The sections above are cross-cutting. Each component also has failure modes the shared techniques
+never reach, because they live in that component's own trust boundary.
+
+## 12. Backend — an HTTP server other people will self-host
+
+Consumers will run this on their own infrastructure, exposed to the internet, holding every
+customer's bundles. It is the only component an attacker can reach without a device.
+
+**Authorisation, the questions a pen-tester asks first.** Can a download token issued for release A
+fetch a blob of release B that happens to share a hash? Can install X use install Y's token? Does
+the admin token comparison run in constant time? Does a device signature over `/check` get replayed
+against `/confirm`? Is the nonce store actually consulted, and what happens when it is a cold Redis?
+Each of these is a test, not a code read.
+
+**Resource exhaustion, and this is where the sharp edges are.**
+
+- **Decompression bomb.** Measured: a 12.5 KB blob expands to 400 MB, a ratio over 32,000x. Both the
+  reference implementation and the device decompress *before* comparing against the manifest's
+  declared `size`, so a release with a wrong or malicious `size` OOMs rather than failing cleanly —
+  and on device that OOM then feeds the crash-loop breaker and disables a healthy chain.
+  This requires a valid signature, so it is **not remotely exploitable**; it is a compromised or
+  buggy publisher, which is exactly the case the design claims to fail closed on.
+  **Fix:** bound the decompressor's output at the declared `size` and abort past it — streaming with
+  a byte counter on both platforms. The TypeScript reference cannot do this with the current binding
+  (`@mongodb-js/zstd` exposes no streaming API), so that is a binding decision, not a one-liner.
+  Add a conformance vector for it either way.
+- A manifest with 100,000 file entries, or one 2 GB file. Both need declared caps.
+- A blob `PUT` larger than `maxBlobBytes`, and the same body sent slowly (slowloris).
+- Publishing the same `bundleId` twice concurrently; a `finalize` racing a blob `PUT`.
+- **Orphan blobs.** A release created and never finalised leaves its blobs in storage forever. There
+  is no sweeper. For a self-hoster paying for object storage, that is a slow leak.
+
+**Storage provider parity.** The adapter tests are skipped unless the environment is configured, so
+in practice Postgres, Redis and S3 are untested on every run. Range semantics in particular differ:
+S3 returns 206 with its own `Content-Range`, the disk store synthesises one. Parity has to be
+asserted against real containers in CI, not assumed.
+
+**Schema evolution.** The database adapters have no migration story. A consumer upgrading the
+backend across a `ReleaseRecord` change needs a documented, tested path.
+
+**HTTP correctness.** Suffix ranges, multi-range requests (reject cleanly rather than mis-serve),
+`HEAD`, conditional `GET` against the `ETag`, and what happens behind a proxy that buffers.
+
+## 13. CLI — it holds the signing key
+
+A compromised CLI release compromises every consumer of that channel. It deserves the scrutiny of a
+credential-handling tool, not a build script.
+
+- **Key hygiene.** Never logged, never in an error message, never in a crash dump. File permissions
+  checked on read. The passphrase prompt must not echo, and must not land in shell history — the
+  existing `--passphrase` flag is visible in `ps`, which the help text should say plainly.
+- **Memory.** A release currently holds **every blob in a `Map` in memory**. Fine at go-trade's
+  9.4 MB; a consumer with a 500 MB asset bundle will exhaust the heap. Streaming blobs to a temp
+  directory and uploading from there is the fix, and it needs a large-release test to prove it.
+- **Determinism.** Two runs over identical input produce different manifests, because `createdAt`
+  and every IV are fresh. That is correct cryptographically and awkward for auditing. Either offer a
+  reproducible mode or document the non-determinism explicitly, so nobody builds a "did the bundle
+  change" check on top of a hash that always changes.
+- **Resume and partial failure.** Kill the CLI mid-upload, re-run, and assert it uploads only what is
+  missing and finalises correctly. Then do it with one blob already present but *corrupt* server-side.
+- **Exit codes and machine-readable output.** CI depends on these. Every failure path needs a
+  distinct, documented, tested code.
+- **Windows.** Path separators, line endings, and the `npx` entry point. A public CLI that has never
+  run on Windows will be reported broken within a week.
+- **Node floor.** The zstd binding requires Node 20.19. A consumer on 18 must get a legible message,
+  not a native module load failure.
+
+## 14. Client — beyond the native store
+
+The native slot logic is covered by §3 to §5. What is not covered is everything around it.
+
+- **Multi-process Android.** This is the one to check first. `MainApplication.onCreate` runs in every
+  process, and a headless JS task (a background FCM handler, for instance) creates a React instance
+  in whatever process it runs in — which calls `getJSBundleFile()`. Two consequences, neither
+  currently tested: a background wake could **consume a boot attempt** for a bundle no user ever
+  saw, and two processes read-modify-write `state.json` with a lock that is only process-local.
+  Writes are atomic via rename so corruption is unlikely, but lost updates are not. Verify with a
+  deliberately multi-process test app; if confirmed, the fix is a file lock or restricting resolution
+  to the process that owns the UI.
+- **JS provider races.** A check while a download is in flight; `restart()` called mid-download; the
+  provider unmounting mid-flight; two `checkNow()` calls overlapping; a mandatory update arriving
+  while the user is mid-flow. Each has a defined outcome that should be asserted, not discovered.
+- **Background execution.** iOS suspends network on background entry, so a download interrupted by
+  backgrounding must resume rather than fail permanently. Android's background restrictions and
+  Doze do the same. This is the single most common real-world interruption and is currently untested.
+- **Storage failures.** The MMKV store for the install id is encrypted with a device-derived key.
+  What happens after a device restore, or when that key changes? A new install id means a new device
+  identity and a re-enrolment, which should be graceful rather than a hard failure.
+- **Jailbreak and attestation paths.** `enabled: false` must be a complete, tested no-op: no network,
+  no staging, no state writes.
+- **Locale and clock.** A device with a non-Gregorian locale or a skewed clock must still parse
+  `createdAt` and pass timestamp validation.
+
+## 15. Additions to the sequencing
+
+Fold into the waves above rather than treating as a separate programme:
+
+| Wave | Added |
+|---|---|
+| 1 | Bounded decompression (§12) and its conformance vector — it is a fail-closed violation, and cheap |
+| 1 | Multi-process Android verification (§14) — it may invalidate an assumption the whole store rests on |
+| 2 | CLI resume, exit codes, key hygiene (§13); backend authorisation matrix (§12) |
+| 3 | Provider parity against real containers, orphan-blob sweeper, CLI memory (§12, §13) |
+| 3 | Client background-execution and race tests (§14) |
+| 4 | Schema migration, Windows, HTTP conformance |
