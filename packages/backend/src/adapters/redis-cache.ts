@@ -26,6 +26,7 @@ import type { CacheProvider, RateLimitResult } from '../providers.js';
  */
 export interface RedisLike {
   set(key: string, value: string, ...args: (string | number)[]): Promise<unknown>;
+  get(key: string): Promise<string | null>;
   getdel(key: string): Promise<string | null>;
   eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
 }
@@ -83,6 +84,12 @@ export class RedisCacheProvider implements CacheProvider {
   async putToken(token: string, value: string, ttlMs: number): Promise<void> {
     const client = await this.client();
     await client.set(`${this.prefix}tok:${token}`, value, 'PX', ttlMs);
+  }
+
+  async peekToken(token: string): Promise<string | null> {
+    const client = await this.client();
+    // Read without consuming: a v2 download token authorises many blob requests within its TTL.
+    return client.get(`${this.prefix}tok:${token}`);
   }
 
   async consumeToken(token: string): Promise<string | null> {

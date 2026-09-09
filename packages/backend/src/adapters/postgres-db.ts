@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS ota_trusted_keys (
   key_id     text PRIMARY KEY,
   public_key text NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ota_retired_clients (
+  key TEXT PRIMARY KEY,
+  hits BIGINT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ota_native_policies (
   channel text PRIMARY KEY,
   data    jsonb NOT NULL
@@ -145,6 +149,21 @@ export class PostgresDatabaseProvider implements DatabaseProvider {
     const c = await this.ready();
     const [row] = (await c.query('SELECT data FROM ota_native_policies WHERE channel = $1', [channel])).rows;
     return row ? (row.data as NativeVersionPolicy) : null;
+  }
+
+  async incrementRetiredClient(channel: string, platform: string): Promise<void> {
+    const c = await this.ready();
+    await c.query(
+      `INSERT INTO ota_retired_clients (key, hits) VALUES ($1, 1)
+       ON CONFLICT (key) DO UPDATE SET hits = ota_retired_clients.hits + 1`,
+      [`${channel}/${platform}`],
+    );
+  }
+
+  async getRetiredClients(): Promise<Record<string, number>> {
+    const c = await this.ready();
+    const res = await c.query('SELECT key, hits FROM ota_retired_clients');
+    return Object.fromEntries((res.rows as { key: string; hits: string }[]).map((r) => [r.key, Number(r.hits)]));
   }
 
   async putNativePolicy(channel: string, policy: NativeVersionPolicy): Promise<void> {

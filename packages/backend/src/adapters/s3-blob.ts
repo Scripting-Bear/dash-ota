@@ -89,27 +89,31 @@ export class S3BlobStore implements BlobStore {
     return this.clientInstance;
   }
 
-  private key(bundleId: string): string {
-    return `${this.prefix}${bundleId}.bin`;
+  /** Blob keys already contain `/` separators, so they map onto S3 prefixes directly. */
+  private key(blobKey: string): string {
+    return `${this.prefix}${blobKey}`;
   }
 
-  async put(bundleId: string, data: Buffer): Promise<void> {
+  async put(key: string, data: Buffer | Readable): Promise<void> {
     const mod = await this.sdk();
+    // A stream body needs a known length for a plain PutObject, so a streamed blob is buffered
+    // here; the caller has already capped it at `maxBlobBytes`.
+    const body = Buffer.isBuffer(data) ? data : await streamToBuffer(data);
     await this.client(mod).send(
       new mod.PutObjectCommand({
         Bucket: this.opts.bucket,
-        Key: this.key(bundleId),
-        Body: data,
-        ContentLength: data.byteLength,
+        Key: this.key(key),
+        Body: body,
+        ContentLength: body.byteLength,
         ContentType: 'application/octet-stream',
       }),
     );
   }
 
-  async stat(bundleId: string): Promise<{ size: number } | null> {
+  async stat(key: string): Promise<{ size: number } | null> {
     const mod = await this.sdk();
     try {
-      const res = await this.client(mod).send(new mod.HeadObjectCommand({ Bucket: this.opts.bucket, Key: this.key(bundleId) }));
+      const res = await this.client(mod).send(new mod.HeadObjectCommand({ Bucket: this.opts.bucket, Key: this.key(key) }));
       return { size: Number(res.ContentLength ?? 0) };
     } catch (err) {
       if (isNotFound(err)) return null;
@@ -117,10 +121,17 @@ export class S3BlobStore implements BlobStore {
     }
   }
 
-  async openReadStream(bundleId: string): Promise<Readable | null> {
+  async openReadStream(key: string, range?: { start: number; end: number }): Promise<Readable | null> {
     const mod = await this.sdk();
     try {
-      const res = await this.client(mod).send(new mod.GetObjectCommand({ Bucket: this.opts.bucket, Key: this.key(bundleId) }));
+      const res = await this.client(mod).send(
+        new mod.GetObjectCommand({
+          Bucket: this.opts.bucket,
+          Key: this.key(key),
+          // S3 ranges are inclusive on both ends, matching the HTTP header and our ByteRange.
+          ...(range ? { Range: `bytes=${range.start}-${range.end}` } : {}),
+        }),
+      );
       // In Node the SDK returns a stream.Readable for Body.
       return (res.Body as Readable) ?? null;
     } catch (err) {
@@ -129,8 +140,28 @@ export class S3BlobStore implements BlobStore {
     }
   }
 
-  async get(bundleId: string): Promise<Buffer | null> {
-    const stream = await this.openReadStream(bundleId);
+  async get(key: string): Promise<Buffer | null> {
+    const stream = await this.openReadStream(key);
     return stream ? streamToBuffer(stream) : null;
+  }
+
+  async delete(key: string): Promise<void> {
+    const mod = await this.sdk();
+    await this.client(mod).send(new mod.DeleteObjectCommand({ Bucket: this.opts.bucket, Key: this.key(key) }));
+  }
+
+  async deletePrefix(prefix: string): Promise<void> {
+    const mod = await this.sdk();
+    let token: string | undefined;
+    do {
+      // The SDK is loaded dynamically, so its response types are not statically known here.
+      const listed = (await this.client(mod).send(
+        new mod.ListObjectsV2Command({ Bucket: this.opts.bucket, Prefix: this.key(prefix), ContinuationToken: token }),
+      )) as { Contents?: { Key?: string }[]; IsTruncated?: boolean; NextContinuationToken?: string };
+      for (const obj of listed.Contents ?? []) {
+        if (obj.Key) await this.client(mod).send(new mod.DeleteObjectCommand({ Bucket: this.opts.bucket, Key: obj.Key }));
+      }
+      token = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+    } while (token);
   }
 }

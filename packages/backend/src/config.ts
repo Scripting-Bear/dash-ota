@@ -98,6 +98,8 @@ export interface BackendConfig extends BackendHooks {
   autoPauseMinSamples: number;
   /** hard cap (bytes) on a published ciphertext — rejects oversized bundles at ingest (abuse / memory guard). */
   maxBundleBytes: number;
+  /** Hard cap on one uploaded blob. Enforced as the body arrives, not after. */
+  maxBlobBytes: number;
   /** max `/enroll` requests per install per {@link rateLimitWindowMs} window; `0` disables. */
   enrollRateLimit: number;
   /** max `/check` requests per authenticated install per {@link rateLimitWindowMs} window; `0` disables. */
@@ -161,11 +163,14 @@ export function loadConfig(): BackendConfig {
     storageDir: process.env.OTA_STORAGE_DIR ?? join(pkgRoot, 'storage'),
     dataDir: process.env.OTA_DATA_DIR ?? join(pkgRoot, '.data'),
     timestampSkewMs: envNum('OTA_TS_SKEW_MS', 5 * 60 * 1000),
-    downloadTokenTtlMs: envNum('OTA_DL_TTL_MS', 2 * 60 * 1000),
+    // A v2 update is many blob requests and a resumed download is many more, so the token is
+    // reusable within a longer window rather than one-shot with a two-minute life.
+    downloadTokenTtlMs: envNum('OTA_DL_TTL_MS', 30 * 60 * 1000),
     nonceTtlMs: envNum('OTA_NONCE_TTL_MS', 10 * 60 * 1000),
     autoPauseFailureRate: envNum('OTA_AUTOPAUSE_RATE', 0.2),
     autoPauseMinSamples: envNum('OTA_AUTOPAUSE_MIN', 5),
     maxBundleBytes: envNum('OTA_MAX_BUNDLE_BYTES', 100 * 1024 * 1024),
+    maxBlobBytes: envNum('OTA_MAX_BLOB_BYTES', 64 * 1024 * 1024),
     enrollRateLimit: envNum('OTA_ENROLL_RATE', 10),
     checkRateLimit: envNum('OTA_CHECK_RATE', 60),
     rateLimitWindowMs: envNum('OTA_RATE_WINDOW_MS', 60 * 1000),

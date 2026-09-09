@@ -10,6 +10,9 @@
  */
 
 import {
+  collectBlobShas,
+  findBlobEntry,
+  totalBlobBytes,
   type CheckRequest,
   type CheckResponse,
   type ConfirmRequest,
@@ -25,7 +28,8 @@ import {
   verifyRequestEcdsa,
 } from '@dash-ota/shared';
 import type { BackendConfig } from './config.js';
-import { binaryStream, type HandlerResult, httpError, json, type OtaRoute, type ReqCtx } from './http.js';
+import { binaryStream, type HandlerResult, httpError, json, type OtaRoute, parseRange, type ReqCtx } from './http.js';
+import { drain } from './upload.js';
 import { Store } from './store.js';
 
 /** Read a single header as a string. */
@@ -157,7 +161,7 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
   // --- client: enroll (register the device's hardware public key) -------
   routes.push({
     method: 'POST',
-    path: '/ota/v1/enroll',
+    path: '/ota/v2/enroll',
     handler: async (ctx) => {
       const body = ctx.json<EnrollRequest>();
       if (!body?.installId || !body.platform || !body.channel || !body.devicePublicKeyB64) {
@@ -179,7 +183,7 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
   // --- client: check for update ----------------------------------------
   routes.push({
     method: 'POST',
-    path: '/ota/v1/check',
+    path: '/ota/v2/check',
     handler: async (ctx) => {
       const auth = await authenticate(ctx, store, config);
       if (isError(auth)) return auth;
@@ -208,7 +212,7 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
       }
       const resp: CheckResponse = {
         update: release.signedManifest,
-        downloadToken: await store.issueDownloadToken(release.bundleId),
+        downloadToken: await store.issueDownloadToken(release.bundleId, auth.installId),
         serverNonce: await store.issueServerNonce(auth.installId, release.bundleId),
         nativePolicy,
       };
@@ -219,26 +223,62 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
   // --- client: download ciphertext (one-time token, no S3 URL) ----------
   routes.push({
     method: 'GET',
-    path: '/ota/v1/download',
+    path: '/ota/v2/releases/:bundleId/blobs/:blobSha256',
     handler: async (ctx) => {
-      // Header only — never accept the one-time token via query string (it would leak into proxy
-      // access logs / Referer and could be replayed within its TTL).
+      // Header only — never accept the token via query string, where it would leak into proxy
+      // access logs and Referer headers.
+      //
+      // No device-key signature here, deliberately: the token is short-lived and scoped to one
+      // release, and the payload is independently authenticated by the per-blob hash in the signed
+      // manifest. Signing every blob request would add a round of crypto per file and buy nothing.
       const token = header(ctx, OTA_HEADERS.downloadToken) ?? '';
-      const bundleId = await store.consumeDownloadToken(token);
-      if (!bundleId) return httpError(403, 'invalid or used download token', 'bad_token');
-      const stat = await store.statCiphertext(bundleId);
-      if (!stat) return httpError(404, 'ciphertext missing', 'not_found');
-      const stream = await store.openCiphertextStream(bundleId);
-      if (!stream) return httpError(404, 'ciphertext missing', 'not_found');
-      // Stream the ciphertext (never buffered whole) with a Content-Length for client progress + size pre-check.
-      return binaryStream(stream, stat.size);
+      const grant = await store.peekDownloadToken(token);
+      if (!grant) return httpError(403, 'invalid or expired download token', 'bad_token');
+
+      const bundleId = ctx.params.bundleId ?? '';
+      const blobSha256 = ctx.params.blobSha256 ?? '';
+      if (grant.bundleId !== bundleId) {
+        return httpError(403, 'token is not valid for this release', 'token_scope');
+      }
+
+      const record = await store.getRelease(bundleId);
+      if (!record) return httpError(404, 'unknown release', 'not_found');
+      // A rolled-back release must stop serving even to a device holding a live token.
+      if (record.paused || record.rolledBack) return httpError(410, 'release is no longer available', 'gone');
+      if (!findBlobEntry(record.signedManifest.manifest, blobSha256)) {
+        return httpError(404, 'this release does not reference that blob', 'not_found');
+      }
+
+      const stat = await store.statBlob(bundleId, blobSha256);
+      if (!stat) return httpError(404, 'blob missing', 'not_found');
+
+      // Blobs are content-addressed and therefore immutable, so they are safe to cache forever.
+      const headers: Record<string, string> = {
+        etag: `"${blobSha256}"`,
+        'cache-control': 'public, max-age=31536000, immutable',
+        'accept-ranges': 'bytes',
+      };
+
+      const range = parseRange(header(ctx, 'range'), stat.size);
+      if (range === 'unsatisfiable') {
+        return { kind: 'json', status: 416, body: { error: 'range not satisfiable' }, headers: { ...headers, 'content-range': `bytes */${stat.size}` } };
+      }
+      const stream = await store.openBlobStream(bundleId, blobSha256, range ?? undefined);
+      if (!stream) return httpError(404, 'blob missing', 'not_found');
+      if (range) {
+        return binaryStream(stream, range.end - range.start + 1, 'application/octet-stream', 206, {
+          ...headers,
+          'content-range': `bytes ${range.start}-${range.end}/${stat.size}`,
+        });
+      }
+      return binaryStream(stream, stat.size, 'application/octet-stream', 200, headers);
     },
   });
 
   // --- client: confirm apply result ------------------------------------
   routes.push({
     method: 'POST',
-    path: '/ota/v1/confirm',
+    path: '/ota/v2/confirm',
     handler: async (ctx) => {
       const auth = await authenticate(ctx, store, config);
       if (isError(auth)) return auth;
@@ -274,18 +314,20 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
     },
   });
 
-  // --- admin / CLI: publish a pre-signed release ------------------------
+  // --- admin / CLI: publish, in three steps ----------------------------
+  // Manifest first, then one blob at a time, then finalize. A release is invisible to devices
+  // until every blob has landed, which is what lets an interrupted publish simply be re-run.
   routes.push({
     method: 'POST',
-    path: '/admin/publish',
+    path: '/admin/releases',
     handler: async (ctx) => {
       const denied = requireAdmin(ctx, config);
       if (denied) return denied;
-      const body = ctx.json<{ signedManifest: SignedManifest; ciphertextB64: string; rolloutPercentage?: number }>();
-      if (!body?.signedManifest || !body.ciphertextB64) return httpError(400, 'signedManifest and ciphertextB64 required');
+      const body = ctx.json<{ signedManifest: SignedManifest; rolloutPercentage?: number }>();
+      if (!body?.signedManifest) return httpError(400, 'signedManifest required');
 
       const { signedManifest } = body;
-      // Defense-in-depth: reject a structurally-invalid manifest even if it's validly signed.
+      // Defense-in-depth: reject a structurally-invalid manifest even if it is validly signed.
       const shapeErrors = validateManifestShape(signedManifest.manifest);
       if (shapeErrors.length > 0) return httpError(400, `invalid manifest: ${shapeErrors.join('; ')}`, 'bad_manifest');
       const rawKey = await store.getTrustedKey(signedManifest.keyId);
@@ -293,35 +335,118 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
       if (!verifyManifest(signedManifest, publicKeyFromRawB64(rawKey))) {
         return httpError(400, 'manifest signature does not verify', 'bad_signature');
       }
-      const ciphertext = Buffer.from(body.ciphertextB64, 'base64');
-      if (ciphertext.byteLength > config.maxBundleBytes) {
-        return httpError(413, `ciphertext exceeds the ${config.maxBundleBytes}-byte size cap`, 'too_large');
+      const total = totalBlobBytes(signedManifest.manifest);
+      if (total > config.maxBundleBytes) {
+        return httpError(413, `release exceeds the ${config.maxBundleBytes}-byte size cap`, 'too_large');
       }
-      const ciphertextSha = sha256Hex(ciphertext);
-      if (ciphertextSha !== signedManifest.manifest.encryption.ciphertextSha256) {
-        return httpError(400, 'ciphertext hash does not match manifest', 'hash_mismatch');
-      }
-      if (ciphertext.byteLength !== signedManifest.manifest.encryption.ciphertextSize) {
-        return httpError(400, 'ciphertext size does not match manifest', 'size_mismatch');
-      }
-      const record = await store.addRelease(
+
+      const { record, missing } = await store.createRelease(
         signedManifest,
-        ciphertext,
         Math.max(0, Math.min(100, body.rolloutPercentage ?? 100)),
       );
-      config.onPublish?.({
-        bundleId: record.bundleId,
-        platform: record.platform,
-        channel: record.channel,
-        bundleVersion: record.bundleVersion,
-        runtimeVersion: record.runtimeVersion,
-        rolloutPercentage: record.rolloutPercentage,
-      });
-      log?.info(
-        `published ${record.bundleId} (${record.platform}/${record.channel} v${record.bundleVersion} @ ${record.rolloutPercentage}%)`,
-      );
-      return json({ ok: true, bundleId: record.bundleId, rolloutPercentage: record.rolloutPercentage });
+      log?.info(`created ${record.bundleId} (${missing.length} of ${collectBlobShas(signedManifest.manifest).length} blobs to upload)`);
+      return json({ ok: true, bundleId: record.bundleId, missing });
     },
+  });
+
+  routes.push({
+    method: 'PUT',
+    path: '/admin/releases/:bundleId/blobs/:blobSha256',
+    // Streamed: the cap has to be enforced as the bytes arrive, which is impossible once the body
+    // has already been buffered.
+    streamBody: true,
+    handler: async (ctx) => {
+      const denied = requireAdmin(ctx, config);
+      if (denied) {
+        if (ctx.body) await drain(ctx.body);
+        return denied;
+      }
+      if (!ctx.body) return httpError(400, 'expected a request body');
+      const result = await store.stageBlob(
+        ctx.params.bundleId ?? '',
+        ctx.params.blobSha256 ?? '',
+        ctx.body,
+        config.maxBlobBytes,
+      );
+      if (!result.ok) return httpError(result.status, result.error, result.code);
+      return json({ ok: true, already: result.already });
+    },
+  });
+
+  routes.push({
+    method: 'POST',
+    path: '/admin/releases/:bundleId/finalize',
+    handler: async (ctx) => {
+      const denied = requireAdmin(ctx, config);
+      if (denied) return denied;
+      const result = await store.finalizeRelease(ctx.params.bundleId ?? '');
+      if (!result.ok) {
+        return { kind: 'json', status: result.status, body: { error: result.error, code: result.code, missing: result.missing } };
+      }
+      const { record } = result;
+      if (!result.already) {
+        config.onPublish?.({
+          bundleId: record.bundleId,
+          platform: record.platform,
+          channel: record.channel,
+          bundleVersion: record.bundleVersion,
+          runtimeVersion: record.runtimeVersion,
+          rolloutPercentage: record.rolloutPercentage,
+        });
+        log?.info(
+          `published ${record.bundleId} (${record.platform}/${record.channel} v${record.bundleVersion} @ ${record.rolloutPercentage}%)`,
+        );
+      }
+      return json({ ok: true, bundleId: record.bundleId, rolloutPercentage: record.rolloutPercentage, already: result.already });
+    },
+  });
+
+  // The CLI reads a base release's manifest from here to report what a device could reuse.
+  routes.push({
+    method: 'GET',
+    path: '/admin/releases/:bundleId',
+    handler: async (ctx) => {
+      const denied = requireAdmin(ctx, config);
+      if (denied) return denied;
+      const record = await store.getRelease(ctx.params.bundleId ?? '');
+      if (!record) return httpError(404, 'release not found');
+      return json({ release: record });
+    },
+  });
+
+  // --- retired clients: everything before protocol 2 --------------------
+  // These speak a wire format this backend no longer serves. They get a clean "no update" plus a
+  // hard native policy, so the app shows its store prompt instead of an error the user cannot act
+  // on. Nothing is verified here: an old client cannot be expected to sign correctly, and there is
+  // nothing to protect.
+  const tombstone = (): OtaRoute['handler'] => async (ctx) => {
+    const body = (() => {
+      try {
+        return ctx.json<{ channel?: string; platform?: string }>() ?? {};
+      } catch {
+        return {};
+      }
+    })();
+    const channel = typeof body.channel === 'string' ? body.channel : 'unknown';
+    const platform = typeof body.platform === 'string' ? body.platform : 'unknown';
+    await store.recordRetiredClient(channel, platform);
+    return json({
+      update: null,
+      serverNonce: '',
+      nativePolicy: await store.retiredPolicy(channel),
+    });
+  };
+  routes.push({ method: 'POST', path: '/ota/v1/check', handler: tombstone() });
+  routes.push({ method: 'POST', path: '/ota/v1/enroll', handler: tombstone() });
+  routes.push({
+    method: 'GET',
+    path: '/ota/v1/download',
+    handler: async () => httpError(410, 'this server no longer serves the v1 format; update the app from the store', 'retired'),
+  });
+  routes.push({
+    method: 'POST',
+    path: '/ota/v1/confirm',
+    handler: async () => httpError(410, 'this server no longer serves the v1 format; update the app from the store', 'retired'),
   });
 
   // --- admin / console: operate rollouts --------------------------------
@@ -332,6 +457,7 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
       const denied = requireAdmin(ctx, config);
       if (denied) return denied;
       return json({
+        retiredClients: await store.getRetiredClients(),
         releases: (await store.listReleases()).map((r) => ({
           bundleId: r.bundleId,
           platform: r.platform,
@@ -345,6 +471,9 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
           releaseNotes: r.signedManifest.manifest.releaseNotes,
           adoption: r.adoption,
           createdAt: r.createdAt,
+          schema: r.schema,
+          finalized: r.finalized,
+          totalBytes: r.totalBytes,
         })),
       });
     },

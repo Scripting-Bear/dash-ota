@@ -13,9 +13,14 @@
  */
 
 import {
+  collectBlobShas,
   type ConfirmStatus,
   type DeviceContext,
+  findBlobEntry,
   isEligible,
+  MANIFEST_SCHEMA,
+  type ManifestV2,
+  totalBlobBytes,
   type NativeVersionPolicy,
   type SignedManifest,
   rolloutBucket,
@@ -25,20 +30,34 @@ import {
 import type { Readable } from 'node:stream';
 import { PostgresDatabaseProvider } from './adapters/postgres-db.js';
 import { RedisCacheProvider } from './adapters/redis-cache.js';
+import { createReadStream } from 'node:fs';
 import { S3BlobStore } from './adapters/s3-blob.js';
+import { BlobTooLargeError, drain, type SpooledBlob, spoolToTemp } from './upload.js';
 import { SqliteDatabaseProvider } from './adapters/sqlite-db.js';
 import type { BackendConfig } from './config.js';
 import {
   type BlobStore,
+  blobKey,
+  type ByteRange,
   type CacheProvider,
   type DatabaseProvider,
   DiskBlobStore,
   DiskDatabaseProvider,
   MemoryCacheProvider,
   type RateLimitResult,
+  releasePrefix,
   type ReleaseRecord,
   type StoreProviders,
 } from './providers.js';
+
+/** A refusal a route can turn straight into a response. */
+export interface StoreFailure {
+  ok: false;
+  status: number;
+  code: string;
+  error: string;
+  missing?: string[];
+}
 
 export type { AdoptionStats, ReleaseRecord, InstallRecord } from './providers.js';
 export type { BlobStore, CacheProvider, DatabaseProvider, RateLimitResult, StoreProviders } from './providers.js';
@@ -134,9 +153,32 @@ export class Store {
   // ---- releases ----------------------------------------------------------
 
   /** Store a published release: ciphertext to the blob store, metadata to the database. */
-  async addRelease(signedManifest: SignedManifest, ciphertext: Buffer, rolloutPercentage: number): Promise<ReleaseRecord> {
+  /** One release by id, or null. */
+  async getRelease(bundleId: string): Promise<ReleaseRecord | null> {
+    return this.db.getRelease(bundleId);
+  }
+
+  /** Every release, newest first. */
+  async listReleases(): Promise<ReleaseRecord[]> {
+    return (await this.db.listReleases()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /**
+   * Step one of publishing: record the release and report which blobs are still missing.
+   *
+   * The release is stored unfinalised, so it cannot be served until every blob has arrived. That is
+   * what makes publishing resumable — re-running the CLI after a failure re-reports only the gap.
+   *
+   * @param signedManifest - the signed manifest; the caller has already verified its signature.
+   * @param rolloutPercentage - initial rollout.
+   * @returns the record plus the blob hashes still to upload.
+   */
+  async createRelease(
+    signedManifest: SignedManifest,
+    rolloutPercentage: number,
+  ): Promise<{ record: ReleaseRecord; missing: string[] }> {
     const m = signedManifest.manifest;
-    await this.blob.put(m.bundleId, ciphertext);
+    const existing = await this.db.getRelease(m.bundleId);
     const record: ReleaseRecord = {
       bundleId: m.bundleId,
       platform: m.platform,
@@ -145,24 +187,124 @@ export class Store {
       bundleVersion: m.bundleVersion,
       signedManifest,
       rolloutPercentage,
-      paused: false,
-      rolledBack: false,
-      createdAt: new Date().toISOString(),
-      adoption: { applied: 0, healthy: 0, failed: 0, rolled_back: 0 },
+      paused: existing?.paused ?? false,
+      rolledBack: existing?.rolledBack ?? false,
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
+      adoption: existing?.adoption ?? { applied: 0, healthy: 0, failed: 0, rolled_back: 0 },
+      schema: m.schema,
+      finalized: false,
+      totalBytes: totalBlobBytes(m),
     };
     await this.db.putRelease(record);
-    return record;
+    return { record, missing: await this.missingBlobs(m) };
   }
 
-  /** List all releases (newest first). */
-  async listReleases(): Promise<ReleaseRecord[]> {
-    return (await this.db.listReleases()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  /**
+   * @param manifest - a release manifest.
+   * @returns the hashes of blobs the store does not yet hold at the right size.
+   */
+  async missingBlobs(manifest: ManifestV2): Promise<string[]> {
+    const missing: string[] = [];
+    for (const sha of collectBlobShas(manifest)) {
+      const expected = findBlobEntry(manifest, sha);
+      const stat = await this.blob.stat(blobKey(manifest.bundleId, sha));
+      if (!stat || stat.size !== expected?.size) missing.push(sha);
+    }
+    return missing;
   }
 
-  async getRelease(bundleId: string): Promise<ReleaseRecord | undefined> {
-    return (await this.db.getRelease(bundleId)) ?? undefined;
+  /**
+   * Step two: store one blob, streamed and hash-checked against the manifest.
+   *
+   * Idempotent — re-uploading a blob that is already correct is a no-op, so a resumed publish
+   * costs nothing for what already landed.
+   *
+   * @param bundleId - the release.
+   * @param blobSha256 - the hash the caller claims these bytes have.
+   * @param body - the request body.
+   * @param maxBytes - hard cap; the body is drained and rejected past it.
+   */
+  async stageBlob(
+    bundleId: string,
+    blobSha256: string,
+    body: Readable,
+    maxBytes: number,
+  ): Promise<{ ok: true; already: boolean } | StoreFailure> {
+    const record = await this.db.getRelease(bundleId);
+    if (!record) return { ok: false, status: 404, code: 'no_release', error: 'unknown bundleId' };
+    const expected = findBlobEntry(record.signedManifest.manifest, blobSha256);
+    if (!expected) {
+      return { ok: false, status: 404, code: 'no_blob', error: 'this release does not reference that blob' };
+    }
+
+    const key = blobKey(bundleId, blobSha256);
+    const existing = await this.blob.stat(key);
+    if (existing && existing.size === expected.size) {
+      await drain(body);
+      return { ok: true, already: true };
+    }
+
+    let spooled: SpooledBlob;
+    try {
+      spooled = await spoolToTemp(body, maxBytes);
+    } catch (err) {
+      if (err instanceof BlobTooLargeError) {
+        return { ok: false, status: 413, code: 'too_large', error: `blob exceeds ${err.limit} bytes` };
+      }
+      throw err;
+    }
+    try {
+      // The hash is what the manifest signed, so a mismatch means these are not the bytes the
+      // publisher signed — refuse rather than store something no device will accept.
+      if (spooled.sha256 !== blobSha256) {
+        return { ok: false, status: 400, code: 'hash_mismatch', error: 'body does not hash to the blob id' };
+      }
+      if (spooled.size !== expected.size) {
+        return { ok: false, status: 400, code: 'size_mismatch', error: `expected ${expected.size} bytes, got ${spooled.size}` };
+      }
+      await this.blob.put(key, createReadStream(spooled.path));
+      return { ok: true, already: false };
+    } finally {
+      spooled.dispose();
+    }
   }
 
+  /**
+   * Step three: make the release servable, once every blob is present.
+   *
+   * @param bundleId - the release.
+   * @returns the finalised record, or the missing blobs.
+   */
+  async finalizeRelease(bundleId: string): Promise<{ ok: true; record: ReleaseRecord; already: boolean } | StoreFailure> {
+    const record = await this.db.getRelease(bundleId);
+    if (!record) return { ok: false, status: 404, code: 'no_release', error: 'unknown bundleId' };
+    if (record.finalized) return { ok: true, record, already: true };
+
+    const missing = await this.missingBlobs(record.signedManifest.manifest);
+    if (missing.length > 0) {
+      return { ok: false, status: 409, code: 'incomplete', error: 'blobs are still missing', missing };
+    }
+    const finalized: ReleaseRecord = { ...record, finalized: true };
+    await this.db.putRelease(finalized);
+    return { ok: true, record: finalized, already: false };
+  }
+
+  /** Discard an unfinalised release and every blob it uploaded. */
+  async discardRelease(bundleId: string): Promise<void> {
+    await this.blob.deletePrefix(releasePrefix(bundleId));
+  }
+
+  /** Size of one blob, for `Content-Length` and range validation. */
+  async statBlob(bundleId: string, blobSha256: string): Promise<{ size: number } | null> {
+    return this.blob.stat(blobKey(bundleId, blobSha256));
+  }
+
+  /** Streaming reader over one blob, optionally ranged for resume. */
+  async openBlobStream(bundleId: string, blobSha256: string, range?: ByteRange): Promise<Readable | null> {
+    return this.blob.openReadStream(blobKey(bundleId, blobSha256), range);
+  }
+
+  /** Set a release's rollout percentage. @returns false when the release is unknown. */
   async setRollout(bundleId: string, pct: number): Promise<boolean> {
     const r = await this.db.getRelease(bundleId);
     if (!r) return false;
@@ -171,6 +313,7 @@ export class Store {
     return true;
   }
 
+  /** Pause or resume a release — the kill switch. @returns false when the release is unknown. */
   async setPaused(bundleId: string, paused: boolean): Promise<boolean> {
     const r = await this.db.getRelease(bundleId);
     if (!r) return false;
@@ -179,6 +322,7 @@ export class Store {
     return true;
   }
 
+  /** Withdraw a release permanently. @returns false when the release is unknown. */
   async rollback(bundleId: string): Promise<boolean> {
     const r = await this.db.getRelease(bundleId);
     if (!r) return false;
@@ -188,25 +332,41 @@ export class Store {
     return true;
   }
 
-  /** Stat a bundle's ciphertext (size for `Content-Length` + the size cap), or null if absent. */
-  async statCiphertext(bundleId: string): Promise<{ size: number } | null> {
-    return this.blob.stat(bundleId);
+  /** Count a request from a client too old to speak protocol 2. */
+  async recordRetiredClient(channel: string, platform: string): Promise<void> {
+    await this.db.incrementRetiredClient(channel, platform);
   }
 
-  /** Open a streaming reader over a bundle's ciphertext (never buffers it whole), or null if absent. */
-  async openCiphertextStream(bundleId: string): Promise<Readable | null> {
-    return this.blob.openReadStream(bundleId);
+  /** Retired-client hits, keyed `"<channel>/<platform>"`. */
+  async getRetiredClients(): Promise<Record<string, number>> {
+    return this.db.getRetiredClients();
   }
 
   /**
-   * Pick the best eligible release for a device: matches runtimeVersion/channel/platform,
-   * newer than current, within the rollout bucket, not paused/rolled-back — highest
-   * bundleVersion wins. This is where the cross-generation guarantee is enforced server-side.
-   * @param device the reporting device context
-   * @returns the chosen release or null for "no update"
+   * The policy handed to a retired client: whatever the channel says, forced to `hard`. A client
+   * that cannot speak the protocol cannot be helped by an OTA, only by a store update.
+   */
+  async retiredPolicy(channel: string): Promise<NativeVersionPolicy> {
+    const cfg = await this.db.getNativePolicy(channel);
+    return {
+      minSupportedNativeVersion: cfg?.minSupportedNativeVersion ?? 0,
+      severity: 'hard',
+      ...(cfg?.storeUrl ? { storeUrl: cfg.storeUrl } : {}),
+    };
+  }
+
+  /**
+   * Pick the best eligible release for a device: finalized, schema 2, matching
+   * runtimeVersion/channel/platform, newer than current, inside the rollout bucket, not paused or
+   * rolled back. Highest bundleVersion wins. The cross-generation guarantee is enforced here.
+   *
+   * @param device - the reporting device context.
+   * @returns the chosen release, or null for "no update".
    */
   async pickEligible(device: DeviceContext): Promise<ReleaseRecord | null> {
     const candidates = (await this.listReleases()).filter((r) => {
+      // A half-published release must never reach a device, and this backend only serves schema 2.
+      if (!r.finalized || r.schema !== MANIFEST_SCHEMA) return false;
       if (r.paused || r.rolledBack) return false;
       if (!isEligible(r.signedManifest.manifest, device).eligible) return false;
       return rolloutBucket(device.installId, r.bundleId) < r.rolloutPercentage;
@@ -244,16 +404,28 @@ export class Store {
   // ---- one-time download tokens -----------------------------------------
 
   /** Issue a one-time, short-TTL token bound to a bundle. */
-  async issueDownloadToken(bundleId: string): Promise<string> {
+  async issueDownloadToken(bundleId: string, installId: string): Promise<string> {
     const token = randomSecretB64(24);
-    await this.cache.putToken(token, bundleId, this.config.downloadTokenTtlMs);
+    await this.cache.putToken(token, `${bundleId}|${installId}`, this.config.downloadTokenTtlMs);
     return token;
   }
 
-  /** Consume a download token; returns the bundleId once, then never again. */
-  async consumeDownloadToken(token: string): Promise<string | null> {
-    return this.cache.consumeToken(token);
+  /**
+   * Read a download token without spending it. Reusable within its TTL because one update is many
+   * blob requests, and a resumed download is many more.
+   *
+   * @param token - the token from the `x-ota-download-token` header.
+   * @returns which release and install it authorises, or null.
+   */
+  async peekDownloadToken(token: string): Promise<{ bundleId: string; installId: string } | null> {
+    const value = await this.cache.peekToken(token);
+    if (!value) return null;
+    const [bundleId, installId] = value.split('|');
+    return bundleId && installId ? { bundleId, installId } : null;
   }
+
+  /** Consume a download token; returns the bundleId once, then never again. */
+
 
   // ---- server nonces (bind /confirm to a real /check) -------------------
 

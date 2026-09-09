@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS ota_trusted_keys (
   key_id     TEXT PRIMARY KEY,
   public_key TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS ota_retired_clients (
+  key TEXT PRIMARY KEY,
+  hits INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ota_native_policies (
   channel TEXT PRIMARY KEY,
   data    TEXT NOT NULL
@@ -141,6 +145,20 @@ export class SqliteDatabaseProvider implements DatabaseProvider {
     const db = await this.db();
     const row = db.prepare('SELECT data FROM ota_native_policies WHERE channel = ?').get(channel) as { data: string } | undefined;
     return row ? (JSON.parse(row.data) as NativeVersionPolicy) : null;
+  }
+
+  async incrementRetiredClient(channel: string, platform: string): Promise<void> {
+    const db = await this.db();
+    db.prepare(
+      `INSERT INTO ota_retired_clients (key, hits) VALUES (?, 1)
+       ON CONFLICT(key) DO UPDATE SET hits = hits + 1`,
+    ).run(`${channel}/${platform}`);
+  }
+
+  async getRetiredClients(): Promise<Record<string, number>> {
+    const db = await this.db();
+    const rows = db.prepare('SELECT key, hits FROM ota_retired_clients').all() as { key: string; hits: number }[];
+    return Object.fromEntries(rows.map((r) => [r.key, r.hits]));
   }
 
   async putNativePolicy(channel: string, policy: NativeVersionPolicy): Promise<void> {

@@ -60,45 +60,94 @@ function readRawBody(req: AdapterReq): Promise<Buffer> {
   });
 }
 
+/** Match a request path against a route pattern, capturing `:name` segments. */
+function matchPath(pattern: string, pathname: string): Record<string, string> | null {
+  const want = pattern.split('/');
+  const got = pathname.split('/');
+  if (want.length !== got.length) return null;
+  const params: Record<string, string> = {};
+  for (let i = 0; i < want.length; i += 1) {
+    const seg = want[i] as string;
+    const value = got[i] as string;
+    if (seg.startsWith(':')) params[seg.slice(1)] = decodeURIComponent(value);
+    else if (seg !== value) return null;
+  }
+  return params;
+}
+
 /** Build a Connect middleware that dispatches a fixed route table; unmatched paths call next(). */
 function middlewareFromRoutes(routes: readonly OtaRoute[]): OtaMiddleware {
-  const table = new Map<string, Handler>();
-  for (const r of routes) table.set(`${r.method} ${r.path}`, r.handler);
-
   return (req, res, next) => {
     const method = (req.method ?? 'GET').toUpperCase();
     const parsed = new URL(req.url ?? '/', 'http://localhost');
-    const handler = table.get(`${method} ${parsed.pathname}`);
-    if (!handler) {
+
+    let route: OtaRoute | undefined;
+    let params: Record<string, string> = {};
+    for (const r of routes) {
+      if (r.method !== method) continue;
+      const captured = matchPath(r.path, parsed.pathname);
+      // Prefer a literal match over a parameterised one at the same shape.
+      if (captured && (!route || Object.keys(captured).length < Object.keys(params).length)) {
+        route = r;
+        params = captured;
+      }
+    }
+    if (!route) {
       next();
       return;
     }
+
+    const fail = (err: unknown): void => {
+      const message = err instanceof Error ? err.message : 'internal error';
+      writeNodeResult(res, httpError(500, message, 'internal'));
+    };
+    const baseCtx = {
+      method,
+      path: parsed.pathname,
+      query: parsed.searchParams,
+      headers: req.headers,
+      params,
+    };
+
+    // A streaming route needs the body unread. If a host's JSON parser already consumed it, the
+    // upload cap can no longer be enforced as bytes arrive — so this route must be mounted before
+    // any global parser (see the mounting note on `otaMiddleware`).
+    if (route.streamBody) {
+      const ctx: ReqCtx = {
+        ...baseCtx,
+        rawBody: Buffer.alloc(0),
+        body: req,
+        json<T>(): T {
+          return null as T;
+        },
+      };
+      Promise.resolve(route.handler(ctx))
+        .then((result) => writeNodeResult(res, result))
+        .catch(fail);
+      return;
+    }
+
     readRawBody(req)
       .then((rawBody) => {
         const ctx: ReqCtx = {
-          method,
-          path: parsed.pathname,
-          query: parsed.searchParams,
-          headers: req.headers,
+          ...baseCtx,
           rawBody,
           json<T>(): T {
             return JSON.parse(rawBody.toString('utf8') || 'null') as T;
           },
         };
-        return handler(ctx);
+        return route.handler(ctx);
       })
       .then((result) => writeNodeResult(res, result))
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : 'internal error';
-        writeNodeResult(res, httpError(500, message, 'internal'));
-      });
+      .catch(fail);
   };
 }
 
 /**
  * Create the OTA distributor as a single Connect/Express middleware.
  *
- * Mount it at the **root** of your app — the OTA routes are absolute (`/ota/v1/*`, `/admin/*`,
+ * Mount it at the **root** of your app, and **before any global body parser** — the OTA routes
+ * are absolute (`/ota/v2/*`, `/admin/*`,
  * `/health`) and the device signs over the request `path`, so a sub-path mount breaks signature
  * verification.
  *
