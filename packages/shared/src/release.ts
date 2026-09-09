@@ -224,10 +224,7 @@ export async function verifyReleaseV2(
   const problems = validateManifestShape(manifest);
   if (problems.length > 0) throw new Error(`manifest is invalid: ${problems.join('; ')}`);
 
-  const contentKey =
-    manifest.encryption.mode === 'aes-256-gcm'
-      ? Buffer.from(manifest.encryption.contentKeyB64, 'base64')
-      : null;
+  const contentKey = manifest.encryption.mode === 'aes-256-gcm' ? Buffer.from(manifest.encryption.contentKeyB64, 'base64') : null;
 
   // One fetch per distinct blob, so a duplicated file is downloaded once.
   const plaintextCache = new Map<string, Buffer>();

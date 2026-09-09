@@ -202,6 +202,61 @@ export async function adminPost(server: string, path: string, body: unknown, adm
 }
 
 /** GET JSON from an admin endpoint; throws on non-2xx. */
+/**
+ * PUT raw bytes to an admin path, with retries.
+ *
+ * Publishing is many uploads, and a single transient failure part-way through should cost one
+ * retry rather than the whole release. Only network faults and 5xx are retried; a 4xx means the
+ * bytes are wrong and retrying cannot help.
+ *
+ * @param server - backend base URL.
+ * @param path - admin path.
+ * @param bytes - raw body.
+ * @param adminToken - admin credential.
+ * @param attempts - total tries, including the first.
+ * @returns the parsed JSON response.
+ */
+export async function adminPutBytes(
+  server: string,
+  path: string,
+  bytes: Buffer,
+  adminToken: string,
+  attempts = 3,
+): Promise<unknown> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const res = await fetch(`${server}${path}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/octet-stream', 'x-ota-admin-token': adminToken },
+        body: new Uint8Array(bytes),
+      });
+      const text = await res.text();
+      if (res.ok) return text ? JSON.parse(text) : {};
+      if (res.status < 500) throw new Error(`PUT ${path} → ${res.status}: ${text}`);
+      lastError = new Error(`PUT ${path} → ${res.status}: ${text}`);
+    } catch (err) {
+      // A 4xx was thrown deliberately above and must not be retried.
+      if (err instanceof Error && /→ 4\d\d:/.test(err.message)) throw err;
+      lastError = err;
+    }
+    if (attempt < attempts) await new Promise((r) => setTimeout(r, 500 * attempt));
+  }
+  throw lastError instanceof Error ? lastError : new Error(`PUT ${path} failed`);
+}
+
+/**
+ * Human-readable byte size.
+ *
+ * @param n - byte count.
+ * @returns e.g. "9.44 MB".
+ */
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 export async function adminGet(server: string, path: string, adminToken: string): Promise<unknown> {
   const res = await fetch(`${server}${path}`, { headers: { 'x-ota-admin-token': adminToken } });
   const text = await res.text();

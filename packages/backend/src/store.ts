@@ -171,14 +171,31 @@ export class Store {
    *
    * @param signedManifest - the signed manifest; the caller has already verified its signature.
    * @param rolloutPercentage - initial rollout.
-   * @returns the record plus the blob hashes still to upload.
+   * @returns the record plus the blob hashes still to upload, or a refusal.
    */
   async createRelease(
     signedManifest: SignedManifest,
     rolloutPercentage: number,
-  ): Promise<{ record: ReleaseRecord; missing: string[] }> {
+  ): Promise<{ ok: true; record: ReleaseRecord; missing: string[] } | StoreFailure> {
     const m = signedManifest.manifest;
     const existing = await this.db.getRelease(m.bundleId);
+
+    // A published release is immutable. Its manifest is signed and devices may already be running
+    // it, so replacing it under the same id would change what a given bundleId means — exactly the
+    // ambiguity signing exists to prevent.
+    if (existing?.finalized) {
+      return {
+        ok: false,
+        status: 409,
+        code: 'already_published',
+        error: `${m.bundleId} is already published; publish a new bundleVersion instead`,
+      };
+    }
+    // An unfinalised attempt is fair game to replace, but its blobs are not reachable from the new
+    // manifest (a fresh content key and IVs give different blob hashes), so drop them rather than
+    // leak them.
+    if (existing) await this.discardRelease(m.bundleId);
+
     const record: ReleaseRecord = {
       bundleId: m.bundleId,
       platform: m.platform,
@@ -196,7 +213,7 @@ export class Store {
       totalBytes: totalBlobBytes(m),
     };
     await this.db.putRelease(record);
-    return { record, missing: await this.missingBlobs(m) };
+    return { ok: true, record, missing: await this.missingBlobs(m) };
   }
 
   /**
@@ -425,7 +442,6 @@ export class Store {
   }
 
   /** Consume a download token; returns the bundleId once, then never again. */
-
 
   // ---- server nonces (bind /confirm to a real /check) -------------------
 

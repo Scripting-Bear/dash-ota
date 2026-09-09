@@ -33,9 +33,9 @@ function fixtureRelease(bundleId: string): ReleaseRecord {
     rolledBack: false,
     createdAt: '2026-01-01T00:00:00.000Z',
     adoption: { applied: 0, healthy: 0, failed: 0, rolled_back: 0 },
-  schema: 2,
-  finalized: true,
-  totalBytes: 0,
+    schema: 2,
+    finalized: true,
+    totalBytes: 0,
   };
 }
 

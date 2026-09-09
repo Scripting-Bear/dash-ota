@@ -18,7 +18,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  buildRelease,
+  buildReleaseV2,
   type Channel,
   generateSigningKeyPair,
   type Platform,
@@ -28,6 +28,8 @@ import {
 import {
   adminGet,
   adminPost,
+  adminPutBytes,
+  formatBytes,
   ask,
   askMultiline,
   askSecret,
@@ -225,15 +227,26 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
 
   const bundleId = flagStr(args, 'bundle-id', `bnd_${runtimeVersion}_${bundleVersion}_${Date.now().toString(36)}`);
 
-  const built = buildRelease({
+  const appId = flagStr(args, 'app-id') || (interactive ? await ask('appId (package name / bundle id)', '') : '');
+  if (!appId) throw new Error('--app-id is required: the device refuses a manifest built for a different app');
+  const encrypt = !flagBool(args, 'no-encrypt');
+  const levelFlag = flagStr(args, 'compression-level');
+  const bundlePath = files.find((f) => /(^|\/)(index\.android\.bundle|main\.jsbundle)$/.test(f.path))?.path;
+  if (!bundlePath) throw new Error('no index.android.bundle or main.jsbundle in the bundle dir');
+
+  const built = await buildReleaseV2({
     bundleId,
     runtimeVersion,
     bundleVersion,
     platform,
     channel,
+    appId,
     mandatory,
     files,
+    bundlePath,
     keyId,
+    encrypt,
+    ...(levelFlag ? { bundleCompressionLevel: Number.parseInt(levelFlag, 10) } : {}),
     ...(targetAppVersions ? { targetAppVersions } : {}),
     ...(releaseNotes ? { releaseNotes } : {}),
   });
@@ -250,26 +263,54 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
   }
   console.log(`  ✓ self-verified signature (${verify.source})`);
 
+  const plaintextBytes = files.reduce((sum, f) => sum + f.data.length, 0);
+  const storedBytes = [...built.blobs.values()].reduce((sum, b) => sum + b.length, 0);
   console.log(`\n  bundleId:        ${bundleId}`);
   console.log(`  runtimeVersion:  ${runtimeVersion}   bundleVersion: ${bundleVersion}`);
-  console.log(`  files:           ${files.length}   ciphertext: ${built.ciphertext.length} bytes   rollout: ${rollout}%`);
+  console.log(
+    `  files:           ${files.length} (${built.blobs.size} distinct blobs)   ` +
+      `${formatBytes(plaintextBytes)} → ${formatBytes(storedBytes)}   rollout: ${rollout}%`,
+  );
+  console.log(`  encryption:      ${built.manifest.encryption.mode}`);
 
   if (flagBool(args, 'no-upload')) {
-    const outFile = join(bundleDir, '..', `${bundleId}.signed.json`);
-    writeFileSync(
-      outFile,
-      JSON.stringify({ signedManifest: signed, ciphertextB64: built.ciphertext.toString('base64') }, null, 2),
-    );
-    console.log(`✓ wrote artifact (not uploaded): ${outFile}`);
+    const outDir = join(bundleDir, '..', `${bundleId}.v2`);
+    mkdirSync(join(outDir, 'blobs'), { recursive: true });
+    writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(signed, null, 2));
+    for (const [sha, bytes] of built.blobs) writeFileSync(join(outDir, 'blobs', sha), bytes);
+    console.log(`✓ wrote artifact (not uploaded): ${outDir}`);
     return;
   }
+
   const { server, adminToken } = resolveServer(args);
-  const res = await adminPost(
+
+  // Three steps: declare the release, upload what the server is missing, then finalize. Re-running
+  // after a failure re-declares the same manifest and uploads only the gap.
+  const created = (await adminPost(
     server,
-    '/admin/publish',
-    { signedManifest: signed, ciphertextB64: built.ciphertext.toString('base64'), rolloutPercentage: rollout },
+    '/admin/releases',
+    { signedManifest: signed, rolloutPercentage: rollout },
     adminToken,
+  )) as {
+    bundleId: string;
+    missing: string[];
+  };
+  const missing = created.missing ?? [];
+  console.log(
+    `  uploading:       ${missing.length} of ${built.blobs.size} blobs (${built.blobs.size - missing.length} already present)`,
   );
+
+  let done = 0;
+  for (const sha of missing) {
+    const bytes = built.blobs.get(sha);
+    if (!bytes) throw new Error(`server asked for a blob this release does not contain: ${sha}`);
+    await adminPutBytes(server, `/admin/releases/${encodeURIComponent(bundleId)}/blobs/${sha}`, bytes, adminToken);
+    done += 1;
+    process.stdout.write(`\r  uploaded ${done}/${missing.length}`);
+  }
+  if (missing.length > 0) process.stdout.write('\n');
+
+  const res = await adminPost(server, `/admin/releases/${encodeURIComponent(bundleId)}/finalize`, {}, adminToken);
   console.log(`✓ published to ${server}:`, JSON.stringify(res));
 }
 

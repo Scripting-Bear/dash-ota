@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { generateKeyPairSync, type KeyObject, sign as nodeSign } from 'node:crypto';
 import express from 'express';
 import {
-  buildRelease,
+  buildReleaseV2,
   type CheckResponse,
   generateSigningKeyPair,
   OTA_HEADERS,
@@ -94,7 +94,7 @@ async function main(): Promise<void> {
   ): Promise<Response & { install?: Install }> {
     const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const devicePublicKeyB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
-    const res = await fetch(`${base}/ota/v1/enroll`, {
+    const res = await fetch(`${base}/ota/v2/enroll`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -142,23 +142,40 @@ async function main(): Promise<void> {
 
   await check('admin registers key + publishes a release through Express', async () => {
     assert.equal((await adminPost('/admin/keys', { keyId, publicKeyRawB64: keys.publicKeyRawB64 })).status, 200);
-    const built = buildRelease({
+    const built = await buildReleaseV2({
       bundleId: 'bnd_x_v1',
       runtimeVersion: 'R1',
       bundleVersion: 1,
       platform: 'android',
       channel: 'dev',
+      appId: 'com.example.host',
       mandatory: false,
       files: [{ path: 'index.android.bundle', data: Buffer.from('var v = 1;', 'utf8') }],
+      bundlePath: 'index.android.bundle',
       keyId,
     });
     const signed = signManifest(built.manifest, keys.privateKeyPem);
-    const res = await adminPost('/admin/publish', {
-      signedManifest: signed,
-      ciphertextB64: built.ciphertext.toString('base64'),
-      rolloutPercentage: 100,
-    });
-    assert.equal(res.status, 200, await res.text());
+    const created = await adminPost('/admin/releases', { signedManifest: signed, rolloutPercentage: 100 });
+    // Read the body once: a fetch Response can only be consumed a single time.
+    const createdBody = (await created.json()) as { missing: string[] };
+    assert.equal(created.status, 200, JSON.stringify(createdBody));
+
+    // The blob PUT carries a raw body, so this asserts the middleware is mounted ahead of the
+    // host's global express.json() — otherwise the parser eats the body and the upload fails.
+    const { missing } = createdBody;
+    assert.ok(missing.length > 0);
+    for (const sha of missing) {
+      const bytes = built.blobs.get(sha);
+      assert.ok(bytes);
+      const put = await fetch(`${base}/admin/releases/bnd_x_v1/blobs/${sha}`, {
+        method: 'PUT',
+        headers: { 'x-ota-admin-token': ADMIN, 'content-type': 'application/octet-stream' },
+        body: new Uint8Array(bytes),
+      });
+      assert.equal(put.status, 200, await put.text());
+    }
+    const finalized = await adminPost('/admin/releases/bnd_x_v1/finalize', {});
+    assert.equal(finalized.status, 200, await finalized.text());
   });
 
   await check('verifyEnrollToken hook rejects a bad session token (401)', async () => {
@@ -184,7 +201,7 @@ async function main(): Promise<void> {
   let serverNonce = '';
   await check('signed /check verifies over raw bytes (behind express.json) and returns the update', async () => {
     const res = await signedPost(
-      '/ota/v1/check',
+      '/ota/v2/check',
       {
         installId: device.id,
         platform: 'android',
@@ -214,7 +231,7 @@ async function main(): Promise<void> {
       }),
       'utf8',
     );
-    const res = await fetch(`${base}/ota/v1/check`, {
+    const res = await fetch(`${base}/ota/v2/check`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -230,7 +247,7 @@ async function main(): Promise<void> {
 
   await check('confirm fires the onConfirm hook', async () => {
     const res = await signedPost(
-      '/ota/v1/confirm',
+      '/ota/v2/confirm',
       { installId: device.id, bundleId: 'bnd_x_v1', runtimeVersion: 'R1', status: 'healthy', serverNonce },
       device,
     );

@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildRelease, generateSigningKeyPair, publicKeyFromRawB64, signManifest, verifyManifest } from '@dash-ota/shared';
+import { buildReleaseV2, generateSigningKeyPair, publicKeyFromRawB64, signManifest, verifyManifest } from '@dash-ota/shared';
 import {
   assertSecureServer,
   decryptPrivateKeyPem,
@@ -79,21 +79,23 @@ async function main(): Promise<void> {
     }
   });
 
-  await check('key custody: encrypt → decrypt → sign → verify roundtrip', () => {
+  await check('key custody: encrypt → decrypt → sign → verify roundtrip', async () => {
     const kp = generateSigningKeyPair();
     assert.equal(isEncryptedPem(kp.privateKeyPem), false);
     const enc = encryptPrivateKeyPem(kp.privateKeyPem, 'hunter2');
     assert.equal(isEncryptedPem(enc), true);
     const dec = decryptPrivateKeyPem(enc, 'hunter2');
 
-    const { manifest } = buildRelease({
+    const { manifest } = await buildReleaseV2({
       bundleId: 'bnd_cli',
       runtimeVersion: 'R2',
       bundleVersion: 1,
       platform: 'android',
       channel: 'dev',
+      appId: 'com.example.app',
       mandatory: false,
       files: [{ path: 'index.android.bundle', data: Buffer.from('x=1', 'utf8') }],
+      bundlePath: 'index.android.bundle',
       keyId: 'key_dev_1',
     });
     const signed = signManifest(manifest, dec);
@@ -101,7 +103,7 @@ async function main(): Promise<void> {
     assert.throws(() => decryptPrivateKeyPem(enc, 'wrong-passphrase'));
   });
 
-  await check('resolveVerifyKey: sibling .public.json, --verify-pub, and safe fallback (no crash)', () => {
+  await check('resolveVerifyKey: sibling .public.json, --verify-pub, and safe fallback (no crash)', async () => {
     const kp = generateSigningKeyPair();
     const dir = mkdtempSync(join(tmpdir(), 'dash-ota-verify-'));
     const keyPath = join(dir, 'key_dev_1.private.pem');
@@ -110,14 +112,16 @@ async function main(): Promise<void> {
       join(dir, 'key_dev_1.public.json'),
       JSON.stringify({ keyId: 'key_dev_1', publicKeyRawB64: kp.publicKeyRawB64 }),
     );
-    const { manifest } = buildRelease({
+    const { manifest } = await buildReleaseV2({
       bundleId: 'bnd_v',
       runtimeVersion: 'R2',
       bundleVersion: 1,
       platform: 'android',
       channel: 'dev',
+      appId: 'com.example.app',
       mandatory: false,
       files: [{ path: 'index.android.bundle', data: Buffer.from('x=1', 'utf8') }],
+      bundlePath: 'index.android.bundle',
       keyId: 'key_dev_1',
     });
     const signed = signManifest(manifest, kp.privateKeyPem);

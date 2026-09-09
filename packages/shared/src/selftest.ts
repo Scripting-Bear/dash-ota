@@ -24,7 +24,6 @@ import {
   randomAesKey,
   rolloutBucket,
   satisfiesAppVersionRange,
-  sha256Hex,
   signManifest,
   validateManifestShape,
   validatePath,
@@ -189,9 +188,16 @@ await check('edge cases: empty file, incompressible bytes, and a unicode path', 
     { path: 'assets/ünïcode ᛒ/ok.txt', data: Buffer.from('unicode path', 'utf8') },
   ];
   const built = await buildReleaseV2({
-    bundleId: 'bnd_edge', runtimeVersion: 'rt', bundleVersion: 1, platform: 'ios',
-    channel: 'prod', appId: 'com.example.app', mandatory: false,
-    files, bundlePath: 'index.android.bundle', keyId: 'k',
+    bundleId: 'bnd_edge',
+    runtimeVersion: 'rt',
+    bundleVersion: 1,
+    platform: 'ios',
+    channel: 'prod',
+    appId: 'com.example.app',
+    mandatory: false,
+    files,
+    bundlePath: 'index.android.bundle',
+    keyId: 'k',
   });
   assert.deepEqual(validateManifestShape(built.manifest), []);
   const empty = built.manifest.files.find((f) => f.path === 'empty.txt');
@@ -230,9 +236,17 @@ await check('a decompression bomb is refused before anything is allocated', asyn
   const { privateKeyPem, publicKeyRawB64 } = generateSigningKeyPair();
   const files: ArchiveFile[] = [{ path: 'index.android.bundle', data: Buffer.from('real bundle'.repeat(50), 'utf8') }];
   const built = await buildReleaseV2({
-    bundleId: 'bnd_bomb', runtimeVersion: 'rt', bundleVersion: 1, platform: 'android',
-    channel: 'dev', appId: 'com.example.app', mandatory: false,
-    files, bundlePath: 'index.android.bundle', keyId: 'k', encrypt: false,
+    bundleId: 'bnd_bomb',
+    runtimeVersion: 'rt',
+    bundleVersion: 1,
+    platform: 'android',
+    channel: 'dev',
+    appId: 'com.example.app',
+    mandatory: false,
+    files,
+    bundlePath: 'index.android.bundle',
+    keyId: 'k',
+    encrypt: false,
   });
   const signed = signManifest(built.manifest, privateKeyPem);
   const entry = built.manifest.files[0];

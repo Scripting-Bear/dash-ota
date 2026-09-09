@@ -142,13 +142,7 @@ export function aesGcmEncrypt(key: Buffer, plaintext: Buffer, aad?: Buffer): Aes
  * @returns the recovered plaintext
  * @throws {Error} if authentication fails
  */
-export function aesGcmDecrypt(
-  key: Buffer,
-  ivB64: string,
-  ciphertext: Buffer,
-  tagB64: string,
-  aad?: Buffer,
-): Buffer {
+export function aesGcmDecrypt(key: Buffer, ivB64: string, ciphertext: Buffer, tagB64: string, aad?: Buffer): Buffer {
   if (key.length !== 32) throw new Error('aesGcmDecrypt: key must be 32 bytes');
   const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
   if (aad) decipher.setAAD(aad);

@@ -261,7 +261,12 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
 
       const range = parseRange(header(ctx, 'range'), stat.size);
       if (range === 'unsatisfiable') {
-        return { kind: 'json', status: 416, body: { error: 'range not satisfiable' }, headers: { ...headers, 'content-range': `bytes */${stat.size}` } };
+        return {
+          kind: 'json',
+          status: 416,
+          body: { error: 'range not satisfiable' },
+          headers: { ...headers, 'content-range': `bytes */${stat.size}` },
+        };
       }
       const stream = await store.openBlobStream(bundleId, blobSha256, range ?? undefined);
       if (!stream) return httpError(404, 'blob missing', 'not_found');
@@ -340,11 +345,12 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
         return httpError(413, `release exceeds the ${config.maxBundleBytes}-byte size cap`, 'too_large');
       }
 
-      const { record, missing } = await store.createRelease(
-        signedManifest,
-        Math.max(0, Math.min(100, body.rolloutPercentage ?? 100)),
+      const created = await store.createRelease(signedManifest, Math.max(0, Math.min(100, body.rolloutPercentage ?? 100)));
+      if (!created.ok) return httpError(created.status, created.error, created.code);
+      const { record, missing } = created;
+      log?.info(
+        `created ${record.bundleId} (${missing.length} of ${collectBlobShas(signedManifest.manifest).length} blobs to upload)`,
       );
-      log?.info(`created ${record.bundleId} (${missing.length} of ${collectBlobShas(signedManifest.manifest).length} blobs to upload)`);
       return json({ ok: true, bundleId: record.bundleId, missing });
     },
   });
@@ -362,12 +368,7 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
         return denied;
       }
       if (!ctx.body) return httpError(400, 'expected a request body');
-      const result = await store.stageBlob(
-        ctx.params.bundleId ?? '',
-        ctx.params.blobSha256 ?? '',
-        ctx.body,
-        config.maxBlobBytes,
-      );
+      const result = await store.stageBlob(ctx.params.bundleId ?? '', ctx.params.blobSha256 ?? '', ctx.body, config.maxBlobBytes);
       if (!result.ok) return httpError(result.status, result.error, result.code);
       return json({ ok: true, already: result.already });
     },

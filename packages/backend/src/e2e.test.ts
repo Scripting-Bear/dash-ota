@@ -7,16 +7,18 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import type { Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   type ArchiveFile,
-  buildRelease,
+  buildReleaseV2,
   type CheckResponse,
   generateSigningKeyPair,
-  openRelease,
+  type SignedManifest,
+  verifyReleaseV2,
   OTA_HEADERS,
   publicKeyFromRawB64,
   randomNonceB64,
@@ -107,11 +109,15 @@ async function main(): Promise<void> {
     });
   }
 
+  async function adminGet(path: string): Promise<Response> {
+    return fetch(`${base}${path}`, { headers: { 'x-ota-admin-token': ADMIN } });
+  }
+
   async function enroll(id: string, runtimeVersion: string): Promise<Install> {
     void runtimeVersion;
     const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const devicePublicKeyB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
-    const res = await fetch(`${base}/ota/v1/enroll`, {
+    const res = await fetch(`${base}/ota/v2/enroll`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -151,67 +157,184 @@ async function main(): Promise<void> {
     assert.equal(res.status, 200);
   });
 
-  await check('CLI publishes a pre-signed release for runtimeVersion R2', async () => {
-    const built = buildRelease({
+  /**
+   * Publish exactly as the CLI will: manifest first, then every missing blob, then finalize.
+   *
+   * @returns the signed manifest, the blobs, and the response of each step.
+   */
+  async function publishRelease(
+    input: Parameters<typeof buildReleaseV2>[0],
+    opts: { rollout?: number; tamper?: (m: SignedManifest) => SignedManifest; skipFinalize?: boolean } = {},
+  ) {
+    const built = await buildReleaseV2(input);
+    const signed = opts.tamper
+      ? opts.tamper(signManifest(built.manifest, keys.privateKeyPem))
+      : signManifest(built.manifest, keys.privateKeyPem);
+    const created = await adminPost('/admin/releases', { signedManifest: signed, rolloutPercentage: opts.rollout ?? 100 });
+    if (created.status !== 200) return { built, signed, created, uploads: [], finalized: null };
+
+    const { missing } = (await created.clone().json()) as { missing: string[] };
+    const uploads: Response[] = [];
+    for (const sha of missing) {
+      const bytes = built.blobs.get(sha);
+      assert.ok(bytes, `missing local blob ${sha}`);
+      uploads.push(
+        await fetch(`${base}/admin/releases/${signed.manifest.bundleId}/blobs/${sha}`, {
+          method: 'PUT',
+          headers: { 'x-ota-admin-token': ADMIN, 'content-type': 'application/octet-stream' },
+          body: new Uint8Array(bytes),
+        }),
+      );
+    }
+    const finalized = opts.skipFinalize ? null : await adminPost(`/admin/releases/${signed.manifest.bundleId}/finalize`, {});
+    return { built, signed, created, uploads, finalized };
+  }
+
+  await check('CLI publishes a pre-signed release for runtimeVersion R2 in three steps', async () => {
+    const { created, uploads, finalized } = await publishRelease({
       bundleId: 'bnd_R2_v1',
       runtimeVersion: 'R2',
       bundleVersion: 1,
       platform: 'android',
       channel: 'dev',
+      appId: 'com.example.app',
       mandatory: false,
       files: bundleFiles,
+      bundlePath: 'index.android.bundle',
       keyId,
       releaseNotes: 'First OTA on R2',
     });
-    const signed = signManifest(built.manifest, keys.privateKeyPem);
-    const res = await adminPost('/admin/publish', {
-      signedManifest: signed,
-      ciphertextB64: built.ciphertext.toString('base64'),
-      rolloutPercentage: 100,
-    });
-    assert.equal(res.status, 200, await res.text());
+    assert.equal(created.status, 200, await created.text());
+    for (const u of uploads) assert.equal(u.status, 200, await u.text());
+    assert.equal(finalized?.status, 200, await finalized?.text());
   });
 
-  await check('publish rejects a tampered (post-sign) manifest', async () => {
-    const built = buildRelease({
-      bundleId: 'bnd_tampered',
+  await check('a published release is immutable — the same bundleId cannot be replaced', async () => {
+    const { created } = await publishRelease({
+      bundleId: 'bnd_R2_v1',
       runtimeVersion: 'R2',
-      bundleVersion: 2,
+      bundleVersion: 1,
       platform: 'android',
       channel: 'dev',
+      appId: 'com.example.app',
       mandatory: false,
       files: bundleFiles,
+      bundlePath: 'index.android.bundle',
+      keyId,
+      releaseNotes: 'First OTA on R2',
+    });
+    // Devices may already be running it, and its manifest is signed: silently swapping the content
+    // behind a bundleId is exactly the ambiguity signing exists to prevent.
+    const body = (await created.json()) as { code: string };
+    assert.equal(created.status, 409, JSON.stringify(body));
+    assert.equal(body.code, 'already_published');
+  });
+
+  await check('a release is invisible to devices until it is finalized', async () => {
+    const { created } = await publishRelease(
+      {
+        bundleId: 'bnd_unfinalized',
+        runtimeVersion: 'R2',
+        bundleVersion: 90,
+        platform: 'android',
+        channel: 'dev',
+        appId: 'com.example.app',
+        mandatory: false,
+        files: bundleFiles,
+        bundlePath: 'index.android.bundle',
+        keyId,
+      },
+      { skipFinalize: true },
+    );
+    assert.equal(created.status, 200);
+    const listed = (await (await adminGet('/admin/releases')).json()) as { releases: { bundleId: string; finalized: boolean }[] };
+    assert.equal(listed.releases.find((r) => r.bundleId === 'bnd_unfinalized')?.finalized, false);
+  });
+
+  await check('finalize refuses while blobs are still missing', async () => {
+    const built = await buildReleaseV2({
+      bundleId: 'bnd_incomplete',
+      runtimeVersion: 'R2',
+      bundleVersion: 91,
+      platform: 'android',
+      channel: 'dev',
+      appId: 'com.example.app',
+      mandatory: false,
+      files: bundleFiles,
+      bundlePath: 'index.android.bundle',
       keyId,
     });
     const signed = signManifest(built.manifest, keys.privateKeyPem);
-    const tampered = { ...signed, manifest: { ...signed.manifest, bundleVersion: 999 } };
-    const res = await adminPost('/admin/publish', {
-      signedManifest: tampered,
-      ciphertextB64: built.ciphertext.toString('base64'),
-      rolloutPercentage: 100,
-    });
-    assert.equal(res.status, 400);
+    await adminPost('/admin/releases', { signedManifest: signed, rolloutPercentage: 100 });
+    const res = await adminPost('/admin/releases/bnd_incomplete/finalize', {});
+    const body = (await res.json()) as { code: string; missing: string[] };
+    assert.equal(res.status, 409);
+    assert.equal(body.code, 'incomplete');
+    assert.ok(body.missing.length > 0);
   });
 
-  await check('publish rejects an oversized ciphertext (size cap)', async () => {
-    const built = buildRelease({
+  await check('a blob whose bytes do not match its hash is refused', async () => {
+    const built = await buildReleaseV2({
+      bundleId: 'bnd_badblob',
+      runtimeVersion: 'R2',
+      bundleVersion: 92,
+      platform: 'android',
+      channel: 'dev',
+      appId: 'com.example.app',
+      mandatory: false,
+      files: bundleFiles,
+      bundlePath: 'index.android.bundle',
+      keyId,
+    });
+    const signed = signManifest(built.manifest, keys.privateKeyPem);
+    const created = await adminPost('/admin/releases', { signedManifest: signed, rolloutPercentage: 100 });
+    const { missing } = (await created.json()) as { missing: string[] };
+    const sha = missing[0] as string;
+    const res = await fetch(`${base}/admin/releases/bnd_badblob/blobs/${sha}`, {
+      method: 'PUT',
+      headers: { 'x-ota-admin-token': ADMIN, 'content-type': 'application/octet-stream' },
+      body: new Uint8Array(Buffer.from('not the signed bytes')),
+    });
+    const body = (await res.json()) as { code: string };
+    assert.equal(res.status, 400);
+    assert.ok(body.code === 'hash_mismatch' || body.code === 'size_mismatch', body.code);
+  });
+
+  await check('publish rejects a tampered (post-sign) manifest', async () => {
+    const { created } = await publishRelease(
+      {
+        bundleId: 'bnd_tampered',
+        runtimeVersion: 'R2',
+        bundleVersion: 2,
+        platform: 'android',
+        channel: 'dev',
+        appId: 'com.example.app',
+        mandatory: false,
+        files: bundleFiles,
+        bundlePath: 'index.android.bundle',
+        keyId,
+      },
+      { tamper: (m) => ({ ...m, manifest: { ...m.manifest, bundleVersion: 999 } }) },
+    );
+    assert.equal(created.status, 400);
+  });
+
+  await check('publish rejects an oversized release (size cap)', async () => {
+    const { created } = await publishRelease({
       bundleId: 'bnd_R2_huge',
       runtimeVersion: 'R2',
       bundleVersion: 3,
       platform: 'android',
       channel: 'dev',
+      appId: 'com.example.app',
       mandatory: false,
-      files: [{ path: 'index.android.bundle', data: Buffer.alloc(4096, 0x61) }], // 4 KiB > 2 KiB cap
+      // Random bytes so compression cannot shrink it back under the cap.
+      files: [{ path: 'index.android.bundle', data: randomBytes(4096) }],
+      bundlePath: 'index.android.bundle',
       keyId,
     });
-    const signed = signManifest(built.manifest, keys.privateKeyPem);
-    const res = await adminPost('/admin/publish', {
-      signedManifest: signed,
-      ciphertextB64: built.ciphertext.toString('base64'),
-      rolloutPercentage: 100,
-    });
-    const body = (await res.json()) as { code: string };
-    assert.equal(res.status, 413, JSON.stringify(body));
+    const body = (await created.json()) as { code: string };
+    assert.equal(created.status, 413, JSON.stringify(body));
     assert.equal(body.code, 'too_large');
   });
 
@@ -220,7 +343,7 @@ async function main(): Promise<void> {
 
   await check('R2 device: check returns the update + download token + server nonce', async () => {
     const res = await signedPost(
-      '/ota/v1/check',
+      '/ota/v2/check',
       {
         installId: r2Device.id,
         platform: 'android',
@@ -239,24 +362,109 @@ async function main(): Promise<void> {
     assert.equal(data.update?.manifest.bundleId, 'bnd_R2_v1');
     serverNonce = data.serverNonce;
 
-    // download + open exactly as native will (streamed, with a Content-Length for the size pre-check)
-    const dl = await fetch(`${base}/ota/v1/download`, { headers: { [OTA_HEADERS.downloadToken]: data.downloadToken ?? '' } });
-    assert.equal(dl.status, 200);
-    const ciphertext = Buffer.from(await dl.arrayBuffer());
-    assert.equal(Number(dl.headers.get('content-length')), ciphertext.byteLength, 'Content-Length matches ciphertext size');
-    const files = openRelease(data.update!, ciphertext, embeddedPublicKey);
-    const bundle = files.find((f) => f.path === 'index.android.bundle');
+    // Fetch and reassemble exactly as native will: one blob at a time, verified against the
+    // signed manifest.
+    const token = data.downloadToken ?? '';
+    const blobUrl = (sha: string): string => `${base}/ota/v2/releases/bnd_R2_v1/blobs/${sha}`;
+    const fetchBlob = async (sha: string): Promise<Buffer> => {
+      const res2 = await fetch(blobUrl(sha), { headers: { [OTA_HEADERS.downloadToken]: token } });
+      assert.equal(res2.status, 200);
+      assert.equal(res2.headers.get('etag'), `"${sha}"`);
+      const bytes = Buffer.from(await res2.arrayBuffer());
+      assert.equal(Number(res2.headers.get('content-length')), bytes.byteLength);
+      return bytes;
+    };
+    const opened = await verifyReleaseV2(data.update!, fetchBlob, embeddedPublicKey);
+    const bundle = opened.files.find((f) => f.path === 'index.android.bundle');
     assert.match(bundle?.data.toString('utf8') ?? '', /OTA bundle for R2/);
 
-    // the one-time token cannot be reused
-    const reuse = await fetch(`${base}/ota/v1/download`, { headers: { [OTA_HEADERS.downloadToken]: data.downloadToken ?? '' } });
-    assert.equal(reuse.status, 403);
+    // The token is reusable within its TTL — one update is many requests, and a resumed one more.
+    const anySha = data.update!.manifest.files[0]!.blob.sha256;
+    assert.equal((await fetch(blobUrl(anySha), { headers: { [OTA_HEADERS.downloadToken]: token } })).status, 200);
+  });
+
+  await check('a blob can be resumed with a byte range', async () => {
+    // Its own install: `checkRateLimit` is per-install and r2Device is close to its budget.
+    const dev = await enroll('install-range', 'R2');
+    const res = await signedPost(
+      '/ota/v2/check',
+      {
+        installId: dev.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R2',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        currentBundleVersion: 0,
+      },
+      dev,
+    );
+    const data = (await res.json()) as CheckResponse;
+    const entry = data.update!.manifest.files[0]!;
+    const url = `${base}/ota/v2/releases/bnd_R2_v1/blobs/${entry.blob.sha256}`;
+    const headers = { [OTA_HEADERS.downloadToken]: data.downloadToken ?? '' };
+
+    const whole = Buffer.from(await (await fetch(url, { headers })).arrayBuffer());
+    const half = Math.floor(whole.byteLength / 2);
+
+    const tail = await fetch(url, { headers: { ...headers, range: `bytes=${half}-` } });
+    assert.equal(tail.status, 206);
+    assert.equal(tail.headers.get('content-range'), `bytes ${half}-${whole.byteLength - 1}/${whole.byteLength}`);
+    const tailBytes = Buffer.from(await tail.arrayBuffer());
+    // Resuming from the halfway point must reproduce the blob exactly.
+    assert.deepEqual(Buffer.concat([whole.subarray(0, half), tailBytes]), whole);
+
+    const past = await fetch(url, { headers: { ...headers, range: `bytes=${whole.byteLength + 10}-` } });
+    assert.equal(past.status, 416);
+    assert.equal(past.headers.get('content-range'), `bytes */${whole.byteLength}`);
+  });
+
+  await check('a download token is scoped to its own release', async () => {
+    const dev = await enroll('install-scope', 'R2');
+    const res = await signedPost(
+      '/ota/v2/check',
+      {
+        installId: dev.id,
+        platform: 'android',
+        channel: 'dev',
+        runtimeVersion: 'R2',
+        appVersion: '1.2.0',
+        buildNumber: 10,
+        currentBundleVersion: 0,
+      },
+      dev,
+    );
+    const data = (await res.json()) as CheckResponse;
+    const sha = data.update!.manifest.files[0]!.blob.sha256;
+    const wrong = await fetch(`${base}/ota/v2/releases/bnd_other/blobs/${sha}`, {
+      headers: { [OTA_HEADERS.downloadToken]: data.downloadToken ?? '' },
+    });
+    assert.equal(wrong.status, 403);
+    const noToken = await fetch(`${base}/ota/v2/releases/bnd_R2_v1/blobs/${sha}`);
+    assert.equal(noToken.status, 403);
+  });
+
+  await check('a retired v1 client is told to update from the store, and is counted', async () => {
+    const res = await fetch(`${base}/ota/v1/check`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: 'dev', platform: 'android', runtimeVersion: 'R2' }),
+    });
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { update: null; nativePolicy: { severity: string } };
+    assert.equal(body.update, null);
+    assert.equal(body.nativePolicy.severity, 'hard');
+
+    assert.equal((await fetch(`${base}/ota/v1/download`)).status, 410);
+
+    const listed = (await (await adminGet('/admin/releases')).json()) as { retiredClients: Record<string, number> };
+    assert.ok((listed.retiredClients['dev/android'] ?? 0) >= 1, 'retired hit should be counted');
   });
 
   await check('R1 device: NO update (runtimeVersion gate — the store-vs-OTA scenario)', async () => {
     const r1 = await enroll('install-R1', 'R1');
     const res = await signedPost(
-      '/ota/v1/check',
+      '/ota/v2/check',
       {
         installId: r1.id,
         platform: 'android',
@@ -289,7 +497,7 @@ async function main(): Promise<void> {
       r2Device.privateKey,
       requestSigningString({
         method: 'POST',
-        path: '/ota/v1/check',
+        path: '/ota/v2/check',
         installId: r2Device.id,
         nonce,
         timestamp,
@@ -303,9 +511,9 @@ async function main(): Promise<void> {
       [OTA_HEADERS.timestamp]: timestamp,
       [OTA_HEADERS.signature]: signature,
     };
-    const first = await fetch(`${base}/ota/v1/check`, { method: 'POST', headers, body: raw });
+    const first = await fetch(`${base}/ota/v2/check`, { method: 'POST', headers, body: raw });
     assert.equal(first.status, 200);
-    const replay = await fetch(`${base}/ota/v1/check`, { method: 'POST', headers, body: raw });
+    const replay = await fetch(`${base}/ota/v2/check`, { method: 'POST', headers, body: raw });
     assert.equal(replay.status, 401);
   });
 
@@ -320,7 +528,7 @@ async function main(): Promise<void> {
       currentBundleVersion: 0,
     };
     const raw = Buffer.from(JSON.stringify(body), 'utf8');
-    const res = await fetch(`${base}/ota/v1/check`, {
+    const res = await fetch(`${base}/ota/v2/check`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -351,14 +559,14 @@ async function main(): Promise<void> {
       r2Device.privateKey,
       requestSigningString({
         method: 'POST',
-        path: '/ota/v1/check',
+        path: '/ota/v2/check',
         installId: r2Device.id,
         nonce,
         timestamp: staleTs,
         bodySha256: sha256Hex(raw),
       }),
     );
-    const res = await fetch(`${base}/ota/v1/check`, {
+    const res = await fetch(`${base}/ota/v2/check`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -377,7 +585,7 @@ async function main(): Promise<void> {
     // Enroll an install with a garbage public key, then sign a request — the malformed key must
     // make verification fail closed, not throw a 500.
     const { privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
-    const enrollRes = await fetch(`${base}/ota/v1/enroll`, {
+    const enrollRes = await fetch(`${base}/ota/v2/enroll`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -391,7 +599,7 @@ async function main(): Promise<void> {
     assert.equal(enrollRes.status, 200);
     const hostile: Install = { id: 'install-hostile-key', privateKey };
     const res = await signedPost(
-      '/ota/v1/check',
+      '/ota/v2/check',
       {
         installId: hostile.id,
         platform: 'android',
@@ -408,7 +616,7 @@ async function main(): Promise<void> {
 
   await check('confirm healthy is recorded (bound to the server nonce)', async () => {
     const res = await signedPost(
-      '/ota/v1/confirm',
+      '/ota/v2/confirm',
       { installId: r2Device.id, bundleId: 'bnd_R2_v1', runtimeVersion: 'R2', status: 'healthy', serverNonce },
       r2Device,
     );
@@ -420,7 +628,7 @@ async function main(): Promise<void> {
   await check('confirm for a bundle the server nonce was NOT issued for is rejected', async () => {
     // Fresh check → a server nonce bound to bnd_R2_v1; confirming a different bundleId must fail.
     const checkRes = await signedPost(
-      '/ota/v1/check',
+      '/ota/v2/check',
       {
         installId: r2Device.id,
         platform: 'android',
@@ -434,7 +642,7 @@ async function main(): Promise<void> {
     );
     const nonce = ((await checkRes.json()) as CheckResponse).serverNonce;
     const res = await signedPost(
-      '/ota/v1/confirm',
+      '/ota/v2/confirm',
       { installId: r2Device.id, bundleId: 'bnd_not_offered', runtimeVersion: 'R2', status: 'failed', serverNonce: nonce },
       r2Device,
     );
@@ -452,7 +660,7 @@ async function main(): Promise<void> {
     // running. Requiring an exact bundle match here rejected every healthy report, pinning the
     // adoption counter at 0 — the up-to-date nonce must act as an install-scoped wildcard.
     const checkRes = await signedPost(
-      '/ota/v1/check',
+      '/ota/v2/check',
       {
         installId: healthyDevice.id,
         platform: 'android',
@@ -467,7 +675,7 @@ async function main(): Promise<void> {
     const data = (await checkRes.json()) as CheckResponse;
     assert.equal(data.update, null, 'expected an up-to-date check');
     const res = await signedPost(
-      '/ota/v1/confirm',
+      '/ota/v2/confirm',
       {
         installId: healthyDevice.id,
         bundleId: 'bnd_R2_v1',
@@ -486,7 +694,7 @@ async function main(): Promise<void> {
     const victim = await enroll('install-nonce-victim', 'R2');
     const attacker = await enroll('install-nonce-attacker', 'R2');
     const checkRes = await signedPost(
-      '/ota/v1/check',
+      '/ota/v2/check',
       {
         installId: victim.id,
         platform: 'android',
@@ -501,7 +709,7 @@ async function main(): Promise<void> {
     const nonce = ((await checkRes.json()) as CheckResponse).serverNonce;
     // Another enrolled device replaying the victim's nonce must still be rejected.
     const res = await signedPost(
-      '/ota/v1/confirm',
+      '/ota/v2/confirm',
       { installId: attacker.id, bundleId: 'bnd_R2_v1', runtimeVersion: 'R2', status: 'healthy', serverNonce: nonce },
       attacker,
     );
@@ -517,7 +725,7 @@ async function main(): Promise<void> {
       storeUrl: 'market://x',
     });
     const res = await signedPost(
-      '/ota/v1/check',
+      '/ota/v2/check',
       {
         installId: r2Device.id,
         platform: 'android',
@@ -538,28 +746,24 @@ async function main(): Promise<void> {
 
   await check('rollout auto-pauses after repeated failures', async () => {
     // publish a fresh release to a dedicated install set
-    const built = buildRelease({
+    await publishRelease({
       bundleId: 'bnd_R2_bad',
       runtimeVersion: 'R2',
       bundleVersion: 5,
       platform: 'android',
       channel: 'dev',
+      appId: 'com.example.app',
       mandatory: false,
       files: bundleFiles,
+      bundlePath: 'index.android.bundle',
       keyId,
-    });
-    const signed = signManifest(built.manifest, keys.privateKeyPem);
-    await adminPost('/admin/publish', {
-      signedManifest: signed,
-      ciphertextB64: built.ciphertext.toString('base64'),
-      rolloutPercentage: 100,
     });
 
     let autoPaused = false;
     for (let i = 0; i < 2; i++) {
       const dev = await enroll(`install-bad-${i}`, 'R2');
       const checkRes = await signedPost(
-        '/ota/v1/check',
+        '/ota/v2/check',
         {
           installId: dev.id,
           platform: 'android',
@@ -573,7 +777,7 @@ async function main(): Promise<void> {
       );
       const checkData = (await checkRes.json()) as CheckResponse;
       const confirmRes = await signedPost(
-        '/ota/v1/confirm',
+        '/ota/v2/confirm',
         { installId: dev.id, bundleId: 'bnd_R2_bad', runtimeVersion: 'R2', status: 'failed', serverNonce: checkData.serverNonce },
         dev,
       );
@@ -596,7 +800,7 @@ async function main(): Promise<void> {
     const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
     const devicePublicKeyB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
     const enrollOnce = (): Promise<Response> =>
-      fetch(`${base}/ota/v1/enroll`, {
+      fetch(`${base}/ota/v2/enroll`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -619,7 +823,7 @@ async function main(): Promise<void> {
     const dev = await enroll('install-rl-check', 'R2');
     const doCheck = (): Promise<Response> =>
       signedPost(
-        '/ota/v1/check',
+        '/ota/v2/check',
         {
           installId: dev.id,
           platform: 'android',

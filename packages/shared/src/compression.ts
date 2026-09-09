@@ -24,10 +24,32 @@ export const ASSET_COMPRESSION_LEVEL = 3;
  * nothing, and often costs a few bytes.
  */
 const PRECOMPRESSED_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'heic',
-  'mp4', 'm4a', 'm4v', 'mov', 'mp3', 'aac', 'ogg', 'webm',
-  'zip', 'gz', 'zst', 'br', 'xz', 'bz2', 'jar', 'aar', 'apk',
-  'woff', 'woff2',
+  'png',
+  'jpg',
+  'jpeg',
+  'webp',
+  'gif',
+  'avif',
+  'heic',
+  'mp4',
+  'm4a',
+  'm4v',
+  'mov',
+  'mp3',
+  'aac',
+  'ogg',
+  'webm',
+  'zip',
+  'gz',
+  'zst',
+  'br',
+  'xz',
+  'bz2',
+  'jar',
+  'aar',
+  'apk',
+  'woff',
+  'woff2',
 ]);
 
 /**
@@ -114,11 +136,7 @@ export function zstdFrameContentSize(data: Buffer): number | null {
  * @returns the plaintext file bytes.
  * @throws when the frame declares no size, or a size other than `expectedSize`.
  */
-export async function decompressBlob(
-  data: Buffer,
-  compression: BlobCompression,
-  expectedSize: number,
-): Promise<Buffer> {
+export async function decompressBlob(data: Buffer, compression: BlobCompression, expectedSize: number): Promise<Buffer> {
   if (compression !== 'zstd') {
     if (data.length !== expectedSize) {
       throw new Error(`stored blob is ${data.length} bytes, manifest says ${expectedSize}`);
