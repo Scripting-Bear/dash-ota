@@ -29,6 +29,9 @@ import {
   validateManifestShape,
   validatePath,
   verifyManifest,
+  zstdFrameContentSize,
+  compressForBlob,
+  decompressBlob,
   verifyReleaseV2,
 } from './index.js';
 
@@ -221,6 +224,39 @@ await check('AES-GCM rejects a wrong key and a flipped byte', () => {
   const flipped = Buffer.from(enc.ciphertext);
   flipped[0] = (flipped[0] ?? 0) ^ 0xff;
   assert.throws(() => aesGcmDecrypt(key, enc.ivB64, flipped, enc.tagB64, Buffer.from('aad')));
+});
+
+await check('a decompression bomb is refused before anything is allocated', async () => {
+  const { privateKeyPem, publicKeyRawB64 } = generateSigningKeyPair();
+  const files: ArchiveFile[] = [{ path: 'index.android.bundle', data: Buffer.from('real bundle'.repeat(50), 'utf8') }];
+  const built = await buildReleaseV2({
+    bundleId: 'bnd_bomb', runtimeVersion: 'rt', bundleVersion: 1, platform: 'android',
+    channel: 'dev', appId: 'com.example.app', mandatory: false,
+    files, bundlePath: 'index.android.bundle', keyId: 'k', encrypt: false,
+  });
+  const signed = signManifest(built.manifest, privateKeyPem);
+  const entry = built.manifest.files[0];
+  assert.ok(entry);
+
+  // 64 MB of zeros compresses to a couple of KB. A publisher that served this in place of the real
+  // blob would, without the frame-size check, expand it in full before comparing against `size`.
+  const bomb = await compressForBlob(Buffer.alloc(64 * 1024 * 1024), 'index.android.bundle', 3);
+  assert.equal(bomb.compression, 'zstd');
+  assert.ok(bomb.data.length < 100 * 1024, 'the bomb should be tiny on the wire');
+  assert.equal(zstdFrameContentSize(bomb.data), 64 * 1024 * 1024);
+
+  // Through the whole pipeline the bomb never reaches the decompressor at all: the blob's stored
+  // size is signed too, so it is refused one layer earlier than the frame check.
+  await assert.rejects(
+    () => verifyReleaseV2(signed, async () => bomb.data, publicKeyFromRawB64(publicKeyRawB64)),
+    /size \d+ != \d+/,
+  );
+
+  // The frame-size gate itself, isolated: this is the layer that protects a caller who already
+  // holds bytes whose stored size and hash are both correct for the entry.
+  await assert.rejects(() => decompressBlob(bomb.data, 'zstd', entry.size), /declares 67108864 bytes/);
+  // A frame with no declared size is refused outright rather than trusted.
+  await assert.rejects(() => decompressBlob(Buffer.from('not a zstd frame'), 'zstd', 10), /declares no content size/);
 });
 
 await check('path rules reject traversal, absolute and malformed paths', () => {

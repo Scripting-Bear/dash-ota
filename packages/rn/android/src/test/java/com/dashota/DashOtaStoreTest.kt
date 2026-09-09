@@ -1,0 +1,180 @@
+package com.dashota
+
+import androidx.test.core.app.ApplicationProvider
+import android.content.Context
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.io.File
+
+/**
+ * The slot state machine and the crash-loop breaker.
+ *
+ * This is where the 2026-09-08 production incident lived: the breaker fired on the first boot of
+ * every update and deleted the slot directory out from under the running bundle. Every test here
+ * exists because something in this file was, or could still be, wrong.
+ */
+@RunWith(RobolectricTestRunner::class)
+class DashOtaStoreTest {
+  private lateinit var ctx: Context
+
+  @Before
+  fun setUp() {
+    ctx = ApplicationProvider.getApplicationContext()
+    DashOtaStore.baseDir(ctx).deleteRecursively()
+  }
+
+  /** Stage a bundle and promote it, i.e. what a completed download does. */
+  private fun stagePending(bundleId: String, version: Int) {
+    DashOtaStore.stage(
+      ctx,
+      bundleId,
+      version,
+      DashOtaConfig.runtimeVersion(ctx),
+      listOf("index.android.bundle" to "// $bundleId".toByteArray()),
+    )
+    assertTrue("staged bundle should promote to pending", DashOtaStore.promoteStagedToPending(ctx))
+  }
+
+  private fun state(): JSONObject = DashOtaStore.loadState(ctx)
+  private fun slotId(key: String): String? =
+    if (state().isNull(key)) null else state().getJSONObject(key).optString("bundleId")
+
+  @Test
+  fun `fresh install resolves to the embedded bundle`() {
+    assertNull(DashOtaStore.resolveBundleAtLaunch(ctx))
+    assertEquals(2, state().optInt("stateSchema"))
+  }
+
+  @Test
+  fun `a pending bundle applies on trial and marks healthy`() {
+    stagePending("bnd_1", 1)
+    assertTrue(DashOtaStore.resolveBundleAtLaunch(ctx)!!.endsWith("bnd_1/index.android.bundle"))
+    assertTrue(state().getBoolean("trial"))
+    assertEquals(1, state().getInt("bootAttempts"))
+
+    DashOtaStore.markHealthy(ctx)
+    assertFalse(state().getBoolean("trial"))
+    assertEquals("bnd_1", slotId("lastKnownGood"))
+  }
+
+  @Test
+  fun `two real crashes disable the bundle and revert to last known good`() {
+    stagePending("bnd_good", 1)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markHealthy(ctx)
+
+    stagePending("bnd_bad", 2)
+    // Launch 1: applied on trial. Reaches JS, then dies — no pause mark, so it is a crash.
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markBeacon(ctx)
+    // Launch 2: still on trial, second attempt.
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markBeacon(ctx)
+    assertEquals("bnd_bad", slotId("current"))
+    // Launch 3: the breaker fires.
+    val path = DashOtaStore.resolveBundleAtLaunch(ctx)
+    assertEquals("bnd_good", slotId("current"))
+    assertTrue(path!!.endsWith("bnd_good/index.android.bundle"))
+    assertTrue(DashOtaStore.isDisabled(ctx, "bnd_bad"))
+    assertEquals("bnd_bad", DashOtaStore.consumeFailedReport(ctx))
+  }
+
+  @Test
+  fun `force killing the app never disables a healthy bundle`() {
+    stagePending("bnd_1", 1)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+
+    // The user opens it and swipes it away, ten times, always before it can mark healthy.
+    repeat(10) {
+      DashOtaStore.markBeacon(ctx)
+      DashOtaStore.markPaused(ctx)
+      DashOtaStore.resolveBundleAtLaunch(ctx)
+      assertEquals("the refund must hold the attempt count still", 1, state().getInt("bootAttempts"))
+    }
+    assertFalse(DashOtaStore.isDisabled(ctx, "bnd_1"))
+    assertEquals("bnd_1", slotId("current"))
+  }
+
+  @Test
+  fun `a bundle that pauses, resumes and then crashes is still counted`() {
+    stagePending("bnd_1", 1)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    // Reached JS, was interrupted, came back — then died. Returning to the foreground clears the
+    // pause mark, so this must NOT be forgiven.
+    DashOtaStore.markBeacon(ctx)
+    DashOtaStore.markPaused(ctx)
+    DashOtaStore.clearPaused(ctx)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    assertEquals(2, state().getInt("bootAttempts"))
+  }
+
+  @Test
+  fun `the breaker never deletes a slot the running process may still be using`() {
+    stagePending("bnd_good", 1)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markHealthy(ctx)
+    stagePending("bnd_bad", 2)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markBeacon(ctx)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markBeacon(ctx)
+
+    val badDir = File(DashOtaStore.bundlesDir(ctx), "bnd_bad")
+    assertTrue(badDir.exists())
+    DashOtaStore.resolveBundleAtLaunch(ctx) // the breaker fires here
+    // The incident: gc() ran in this same process and deleted the directory whose bytecode was
+    // still mapped. It must survive until the NEXT launch sweeps it.
+    assertTrue("the demoted slot must outlive the process that demoted it", badDir.exists())
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    assertFalse("the next launch may collect it", badDir.exists())
+  }
+
+  @Test
+  fun `a bundle downloaded inside the health window is not swept away`() {
+    stagePending("bnd_1", 1)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    // A second update finishes downloading before the first is marked healthy.
+    DashOtaStore.stage(ctx, "bnd_2", 2, DashOtaConfig.runtimeVersion(ctx), listOf("index.android.bundle" to "x".toByteArray()))
+    DashOtaStore.markHealthy(ctx) // used to gc() everything that was not current or last-known-good
+    assertTrue(File(DashOtaStore.bundlesDir(ctx), "bnd_2").exists())
+    assertTrue(DashOtaStore.promoteStagedToPending(ctx))
+  }
+
+  @Test
+  fun `state written by an older schema is discarded rather than trusted`() {
+    val legacy = JSONObject()
+      .put("current", JSONObject().put("bundleId", "bnd_legacy").put("version", 99))
+      .put("trial", false)
+    File(DashOtaStore.baseDir(ctx), "state.json").writeText(legacy.toString())
+    File(DashOtaStore.bundlesDir(ctx), "bnd_legacy").mkdirs()
+
+    assertNull("a pre-schema-2 slot must never be loaded", DashOtaStore.resolveBundleAtLaunch(ctx))
+    assertEquals(2, state().optInt("stateSchema"))
+    assertFalse(File(DashOtaStore.bundlesDir(ctx), "bnd_legacy").exists())
+  }
+
+  @Test
+  fun `a corrupt state file does not brick OTA forever`() {
+    File(DashOtaStore.baseDir(ctx), "state.json").writeText("{ this is not json")
+    assertNull(DashOtaStore.resolveBundleAtLaunch(ctx))
+    stagePending("bnd_1", 1)
+    assertTrue(DashOtaStore.resolveBundleAtLaunch(ctx)!!.endsWith("bnd_1/index.android.bundle"))
+  }
+
+  @Test
+  fun `a user-requested reload does not spend a boot attempt`() {
+    stagePending("bnd_1", 1)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    assertEquals(1, state().getInt("bootAttempts"))
+    DashOtaStore.markUserReload(ctx)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    assertEquals("an explicit restart is not evidence of a crash", 1, state().getInt("bootAttempts"))
+  }
+}

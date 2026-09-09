@@ -67,13 +67,70 @@ export async function compressForBlob(data: Buffer, path: string, level: number)
   return { data: compressed, compression: 'zstd' };
 }
 
+/** zstd frame magic, little-endian. */
+const ZSTD_MAGIC = 0xfd2fb528;
+
+/**
+ * Read the decompressed size a zstd frame declares in its own header, without decompressing.
+ *
+ * This is what makes a decompression bomb cheap to refuse: a 12.5 KB frame can declare 400 MB, and
+ * reading fourteen bytes is enough to know that before a single byte is allocated.
+ *
+ * @param data - a complete zstd frame.
+ * @returns the declared content size, or null when the frame omits it or is malformed.
+ * @see https://github.com/facebook/zstd/blob/dev/doc/zstd_compression_format.md
+ */
+export function zstdFrameContentSize(data: Buffer): number | null {
+  if (data.length < 5 || data.readUInt32LE(0) !== ZSTD_MAGIC) return null;
+  const descriptor = data[4] as number;
+  const fcsFieldSize = [0, 2, 4, 8][descriptor >> 6] as number;
+  const singleSegment = (descriptor >> 5) & 1;
+  const dictIdSize = [0, 1, 2, 4][descriptor & 0b11] as number;
+  const offset = 5 + (singleSegment ? 0 : 1) + dictIdSize;
+
+  // A zero flag means one byte when single-segment, and no field at all otherwise.
+  if (fcsFieldSize === 0) {
+    if (!singleSegment || offset >= data.length) return null;
+    return data.readUInt8(offset);
+  }
+  if (offset + fcsFieldSize > data.length) return null;
+  if (fcsFieldSize === 2) return data.readUInt16LE(offset) + 256; // the 2-byte form is offset by 256
+  if (fcsFieldSize === 4) return data.readUInt32LE(offset);
+  const wide = data.readBigUInt64LE(offset);
+  return wide > BigInt(Number.MAX_SAFE_INTEGER) ? null : Number(wide);
+}
+
 /**
  * Reverse {@link compressForBlob}. The reference implementation of what the native side does.
  *
+ * Refuses to decompress unless the frame's own declared size matches the size the signed manifest
+ * promises. Without that check a release whose `size` is wrong — a compromised publisher, or simply
+ * a bug — exhausts memory instead of failing cleanly, and on device that OOM then feeds the
+ * crash-loop breaker and disables a healthy bundle.
+ *
  * @param data - the stored blob bytes, after decryption.
  * @param compression - the manifest's `compression` for that blob.
+ * @param expectedSize - the plaintext size the manifest declares for this file.
  * @returns the plaintext file bytes.
+ * @throws when the frame declares no size, or a size other than `expectedSize`.
  */
-export async function decompressBlob(data: Buffer, compression: BlobCompression): Promise<Buffer> {
-  return compression === 'zstd' ? decompress(data) : data;
+export async function decompressBlob(
+  data: Buffer,
+  compression: BlobCompression,
+  expectedSize: number,
+): Promise<Buffer> {
+  if (compression !== 'zstd') {
+    if (data.length !== expectedSize) {
+      throw new Error(`stored blob is ${data.length} bytes, manifest says ${expectedSize}`);
+    }
+    return data;
+  }
+  const declared = zstdFrameContentSize(data);
+  if (declared === null) {
+    throw new Error('zstd frame declares no content size; refusing to decompress an unbounded frame');
+  }
+  if (declared !== expectedSize) {
+    throw new Error(`zstd frame declares ${declared} bytes, manifest says ${expectedSize}`);
+  }
+  return decompress(data);
 }

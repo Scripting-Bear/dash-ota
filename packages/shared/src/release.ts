@@ -251,7 +251,8 @@ export async function verifyReleaseV2(
             blobAad(manifest.bundleId, entry.sha256),
           )
         : stored;
-      data = await decompressBlob(compressed, entry.blob.compression);
+      // Bounded: the frame must declare exactly the size the signed manifest promises.
+      data = await decompressBlob(compressed, entry.blob.compression, entry.size);
 
       if (data.length !== entry.size) throw new Error(`${entry.path}: size ${data.length} != ${entry.size}`);
       if (sha256Hex(data) !== entry.sha256) throw new Error(`${entry.path}: plaintext hash mismatch`);

@@ -44,6 +44,15 @@ android {
     sourceCompatibility JavaVersion.VERSION_17
     targetCompatibility JavaVersion.VERSION_17
   }
+
+  // Unit tests run on the JVM under Robolectric, so the trust-critical logic (crypto, the slot
+  // state machine, the crash-loop breaker) is covered without a device or an emulator.
+  testOptions {
+    unitTests {
+      includeAndroidResources = true
+      returnDefaultValues = false
+    }
+  }
 }
 
 dependencies {
@@ -51,4 +60,10 @@ dependencies {
   // Package-based crypto: Google Tink for Ed25519 verification (raw 32-byte public key).
   // AES-256-GCM, SHA-256 and HMAC use the JDK (javax.crypto / java.security) directly.
   implementation "com.google.crypto.tink:tink-android:1.13.0"
+
+  testImplementation "junit:junit:4.13.2"
+  testImplementation "androidx.test:core:1.6.1"
+  testImplementation "org.robolectric:robolectric:4.14.1"
+  // The JVM's org.json stub throws; the real implementation is needed to parse manifests in tests.
+  testImplementation "org.json:json:20240303"
 }
