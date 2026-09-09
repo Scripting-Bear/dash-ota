@@ -47,9 +47,14 @@ is made by trusted native code, not JS.
 bundle runs and the next check re-downloads. Slots written before schema 2 came from a resolver that
 disabled them on their first boot, so they are not worth migrating.
 
-Per-launch marks live under `launch` as `{ beaconAt, pausedAt }` (epoch milliseconds) and are reset
-by the resolver at every launch. They drive attempt forgiveness in the
-[crash-loop breaker](/docs/concepts/crash-loop).
+Per-launch marks live in their **own** file, `launch.json`, as `{ beaconAt, pausedAt }` (epoch
+milliseconds). The resolver consumes and deletes it at every launch. They drive attempt forgiveness
+in the [crash-loop breaker](/docs/concepts/crash-loop).
+
+They are deliberately not part of `state.json`: the pause mark is written from the main thread by a
+lifecycle callback, and a read-modify-write of the whole state from there could lose a concurrent
+`markHealthy()` on the JS thread. An unreadable `launch.json` is treated as no marks, which counts
+the launch rather than forgiving it.
 
 GC keeps every slot the state still references — `current`, `lastKnownGood`, `pending` **and**
 `staged` — and runs at startup before the bundle is selected. Two rules follow from that:

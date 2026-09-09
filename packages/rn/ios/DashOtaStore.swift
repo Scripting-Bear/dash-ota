@@ -25,6 +25,11 @@ final class DashOtaStore {
   }
   private var stateURL: URL { baseDir.appendingPathComponent("state.json") }
 
+  /// Per-launch marks live in their own file, NOT in `state.json`. They are written from the main
+  /// thread by the app lifecycle notifications, and a read-modify-write of the whole state from
+  /// there can lose a concurrent `markHealthy()` on the JS thread.
+  private var launchURL: URL { baseDir.appendingPathComponent("launch.json") }
+
   func loadState() -> [String: Any] {
     guard let data = try? Data(contentsOf: stateURL),
           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -51,22 +56,41 @@ final class DashOtaStore {
   func clearPaused() {
     markLock.lock()
     defer { markLock.unlock() }
-    var state = loadState()
-    guard var launch = state["launch"] as? [String: Any], launch["pausedAt"] != nil else { return }
-    launch["pausedAt"] = nil
-    state["launch"] = launch
-    saveState(state)
+    var marks = readLaunchMarks()
+    guard marks["pausedAt"] != nil else { return }
+    marks["pausedAt"] = nil
+    writeLaunchMarks(marks)
   }
 
   private func markLaunch(_ key: String) {
     markLock.lock()
     defer { markLock.unlock() }
-    var state = loadState()
-    var launch = (state["launch"] as? [String: Any]) ?? [:]
-    guard launch[key] == nil else { return }
-    launch[key] = Int(Date().timeIntervalSince1970 * 1000)
-    state["launch"] = launch
-    saveState(state)
+    var marks = readLaunchMarks()
+    guard marks[key] == nil else { return }
+    marks[key] = Int(Date().timeIntervalSince1970 * 1000)
+    writeLaunchMarks(marks)
+  }
+
+  /// Read the marks the PREVIOUS process left, and reset them for this one.
+  private func consumeLaunchMarks() -> [String: Any] {
+    markLock.lock()
+    defer { markLock.unlock() }
+    let marks = readLaunchMarks()
+    try? fm.removeItem(at: launchURL)
+    return marks
+  }
+
+  /// Unreadable marks mean "no marks", which counts the launch rather than forgiving it.
+  private func readLaunchMarks() -> [String: Any] {
+    guard let data = try? Data(contentsOf: launchURL),
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+    return obj
+  }
+
+  private func writeLaunchMarks(_ marks: [String: Any]) {
+    // Losing a mark only costs a refund; never let it break a lifecycle callback.
+    guard let data = try? JSONSerialization.data(withJSONObject: marks) else { return }
+    try? data.write(to: launchURL)
   }
 
   func saveState(_ input: [String: Any]) {
@@ -200,9 +224,8 @@ final class DashOtaStore {
     // Marks left behind by the PREVIOUS process. Reaching JS and then resigning active is what a
     // user swiping the app away looks like; a crash cannot produce both, because the resign-active
     // callback never runs. So that launch is refunded below instead of counting as a crash.
-    let prev = state["launch"] as? [String: Any]
-    let forgiven = prev?["beaconAt"] != nil && prev?["pausedAt"] != nil
-    state["launch"] = [String: Any]()
+    let prev = consumeLaunchMarks()
+    let forgiven = prev["beaconAt"] != nil && prev["pausedAt"] != nil
 
     // The only safe moment to sweep slots: nothing is mapped yet this process.
     gc(state)

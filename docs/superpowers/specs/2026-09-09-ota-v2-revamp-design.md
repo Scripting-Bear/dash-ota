@@ -59,7 +59,11 @@ memoise the result of `resolveBundleAtLaunch` for the process lifetime (synchron
 Already implemented and verified on both platforms 2026-09-09.
 
 ### 4.2 Attempt forgiveness (the "boot beacon")
-State gains two per-launch marks written by native:
+Native writes two per-launch marks into their own file, `launch.json`, beside `state.json`. They are
+deliberately **not** part of `state.json`: the pause mark is written from the main thread by a
+lifecycle callback, and a read-modify-write of the whole state from there can lose a concurrent
+`markHealthy()` on the JS thread. An unreadable `launch.json` counts as no marks, which spends the
+attempt rather than refunding it (fail safe). The marks are:
 
 - `launch.beaconAt` — set when the TurboModule is initialised by JS (`initialize()` / first
   `getState`). Proves the bundle reached JS.
@@ -67,13 +71,14 @@ State gains two per-launch marks written by native:
   `UIApplication.willResignActiveNotification` (iOS). Proves the user left the app (or at least
   that the OS took the foreground) rather than the app dying. Pause/resign-active is used rather
   than stop/background because an iOS swipe-kill from the app switcher only guarantees
-  resign-active.
+  resign-active. **Cleared** on `onActivityResumed` / `didBecomeActive`, so only a pause the app
+  never returned from counts — a bundle that pauses, resumes and then crashes is not forgiven, and
+  the transient resign-active iOS raises for a banner or a call is discarded.
 
 Rule in `resolveBundleAtLaunch`, for a `current` slot in `trial`:
 ```
-prev = state.launch                       // marks from the PREVIOUS process
+prev = consume(launch.json)               // marks from the PREVIOUS process; file deleted
 forgiven = prev.beaconAt && prev.pausedAt // user-driven exit after JS ran
-state.launch = {}                         // reset for this process
 attempts = state.bootAttempts
 if forgiven && attempts > 0: attempts -= 1        // refund the previous launch
 if attempts >= MAX_BOOT_ATTEMPTS (2): disable + revert (as today, minus the gc — see §4.4)
@@ -89,10 +94,20 @@ crash-before-JS and crash-after-JS both count.
 State gets `stateSchema: 2`. On load, a state without it is discarded entirely (embedded bundle
 runs; the next check re-downloads). Slots from 0.3.x are broken by construction, so nothing is lost.
 
+Residual limit, accepted and documented: a bundle backgrounded and then crashing *in the background*
+before it was ever marked healthy is forgiven. A short `autoMarkHealthyMs` closes that window,
+because a healthy bundle leaves the trial state and stops counting attempts.
+
 ### 4.4 GC timing
-`gc()` is called only from `resolveBundleAtLaunch` before selection and from `rollback()` when
-invoked by JS at startup. The crash-loop branch no longer deletes anything in the process that
-tripped it; it marks and returns, and the next launch's startup GC cleans up.
+`gc()` never runs from the crash-loop branch: the bundle it demotes is memory-mapped by the process
+that is running it, and deleting its directory is the production incident. It marks and returns, and
+the next launch's startup GC cleans up.
+
+The keep-set is every slot the state still references — `current`, `lastKnownGood`, `pending` **and**
+`staged`. Keeping only the first two (as the code did) meant a bundle downloaded inside the health
+window was deleted by the `markHealthy` sweep before it could ever be applied. With the wider
+keep-set, GC only ever deletes unreferenced directories, so the remaining call sites (`markHealthy`,
+`rollback`, `dropIncompatibleSlots`) are safe.
 
 ## 5. M2 — protocol v2
 

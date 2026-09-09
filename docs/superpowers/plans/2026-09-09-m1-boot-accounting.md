@@ -1,5 +1,22 @@
 # M1 — Boot accounting fix (react-native-dash-ota 0.3.2) Implementation Plan
 
+> ## ✅ IMPLEMENTED 2026-09-09 — `253b165` plus the QA follow-up that moved the launch marks
+>
+> This plan is a historical record. **Do not re-execute it**: the shipped code differs from the
+> listings below in three ways, all deliberate, all verified on device. Read
+> `packages/rn/android/.../DashOtaStore.kt` and `packages/rn/ios/DashOtaStore.swift` for the truth.
+>
+> 1. **The launch marks live in their own `launch.json`, not in `state.json`.** The pause mark is
+>    written from the main thread; a read-modify-write of the whole state from there can lose a
+>    concurrent `markHealthy()` on the JS thread.
+> 2. **The pause mark is cleared when the app returns to the foreground** (`onActivityResumed` /
+>    `didBecomeActive`), so a pause/resume/crash is still counted and iOS transients are discarded.
+> 3. **GC keeps `pending` and `staged` as well.** Keeping only current + last-known-good meant a
+>    bundle downloaded inside the health window was deleted before it could be applied — a second
+>    bug found while implementing.
+>
+> Verification actually run is recorded in the roadmap's Phase 1 evidence, not in Task 6 below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a native-only release of `react-native-dash-ota` in which a healthy OTA bundle can never be blocklisted by repeated host calls or by users force-killing the app, and no slot directory is ever deleted underneath a running bundle.

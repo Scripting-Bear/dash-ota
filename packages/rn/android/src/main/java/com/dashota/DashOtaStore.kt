@@ -26,6 +26,14 @@ object DashOtaStore {
   fun tmpDir(ctx: Context): File = File(baseDir(ctx), "tmp").apply { mkdirs() }
   private fun stateFile(ctx: Context): File = File(baseDir(ctx), "state.json")
 
+  /**
+   * Per-launch marks live in their own file, NOT in `state.json`. They are written from the main
+   * thread by the Activity lifecycle callbacks, and a read-modify-write of the whole state from
+   * there can lose a concurrent `markHealthy()` on the JS thread.
+   */
+  private fun launchFile(ctx: Context): File = File(baseDir(ctx), "launch.json")
+  private val launchLock = Any()
+
   fun loadState(ctx: Context): JSONObject {
     val f = stateFile(ctx)
     if (!f.exists()) return freshState()
@@ -77,26 +85,47 @@ object DashOtaStore {
    * also discards the transient resign-active iOS raises for a banner or an incoming call.
    */
   fun clearPaused(ctx: Context) {
-    synchronized(this) {
-      val state = loadState(ctx)
-      val launch = state.optJSONObject("launch") ?: return
-      if (!launch.has("pausedAt")) return
-      launch.remove("pausedAt")
-      state.put("launch", launch)
-      saveState(ctx, state)
+    synchronized(launchLock) {
+      val marks = readLaunchMarks(ctx)
+      if (!marks.has("pausedAt")) return
+      marks.remove("pausedAt")
+      writeLaunchMarks(ctx, marks)
     }
   }
 
   /** One-shot per process per key; cheap enough to write through to disk immediately. */
   private fun markLaunch(ctx: Context, key: String) {
-    synchronized(this) {
-      val state = loadState(ctx)
-      val launch = state.optJSONObject("launch") ?: JSONObject()
-      if (!launch.has(key)) {
-        launch.put(key, System.currentTimeMillis())
-        state.put("launch", launch)
-        saveState(ctx, state)
-      }
+    synchronized(launchLock) {
+      val marks = readLaunchMarks(ctx)
+      if (marks.has(key)) return
+      marks.put(key, System.currentTimeMillis())
+      writeLaunchMarks(ctx, marks)
+    }
+  }
+
+  /** Read the marks the PREVIOUS process left, and reset them for this one. */
+  private fun consumeLaunchMarks(ctx: Context): JSONObject = synchronized(launchLock) {
+    val marks = readLaunchMarks(ctx)
+    launchFile(ctx).delete()
+    marks
+  }
+
+  /** Unreadable marks mean "no marks", which counts the launch rather than forgiving it. */
+  private fun readLaunchMarks(ctx: Context): JSONObject {
+    val f = launchFile(ctx)
+    if (!f.exists()) return JSONObject()
+    return try {
+      JSONObject(f.readText())
+    } catch (_: Exception) {
+      JSONObject()
+    }
+  }
+
+  private fun writeLaunchMarks(ctx: Context, marks: JSONObject) {
+    try {
+      launchFile(ctx).writeText(marks.toString())
+    } catch (_: Exception) {
+      // Losing a mark only costs a refund; never let it break a lifecycle callback.
     }
   }
 
@@ -224,9 +253,8 @@ object DashOtaStore {
     // Marks left behind by the PREVIOUS process. Reaching JS and then being paused is what a user
     // swiping the app away looks like; a crash cannot produce both, in either order, because the
     // pause callback never runs. So that launch is refunded below instead of counting as a crash.
-    val prev = state.optJSONObject("launch")
-    val forgiven = prev != null && prev.has("beaconAt") && prev.has("pausedAt")
-    state.put("launch", JSONObject())
+    val prev = consumeLaunchMarks(ctx)
+    val forgiven = prev.has("beaconAt") && prev.has("pausedAt")
 
     // The only safe moment to sweep slots: nothing is mapped yet this process.
     gc(ctx, state)
