@@ -5,6 +5,9 @@ board, the locked decisions, the facts already verified (do not re-derive them),
 order. If a session ends, the next agent resumes from the Status board below.
 
 - **Spec (source of truth for all design decisions):** `docs/superpowers/specs/2026-09-09-ota-v2-revamp-design.md`
+- **Closure plan (what "done" means, per phase and per layer):** `2026-09-09-closure-plan.md` — read
+  its state ledger before trusting any status below; it is verified rather than remembered
+- **Library-grade QA programme (only if publishing):** `2026-09-09-library-grade-qa-plan.md`
 - **Consuming app:** `/Users/essence/ReactNative/go-trade-mobile` (GoTradeIndia, RN 0.81, prod OTA channel)
 - **Owner:** Priyanshu Agrawal. Decisions marked "owner" below were taken in conversation; do not relitigate them.
 
