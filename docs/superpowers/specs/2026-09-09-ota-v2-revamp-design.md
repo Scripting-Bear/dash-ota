@@ -37,8 +37,9 @@ clients get a tombstone), **encryption stays available as a per-release option**
 3. **Lifetime safety** — no process can lose files underneath a running or mapped bundle. Slot
    directories are immutable after staging; GC runs only at startup, before bundle selection, and
    never touches `current` or `lastKnownGood`.
-4. **Bounded resources** — download and staging never hold more than one blob's plaintext in
-   memory (plus the memory-mapped patch base in milestone 3).
+4. **Bounded resources** — download and staging never hold more than one blob in memory, and the
+   largest *plaintext* (the 25.8 MB bytecode) is streamed to disk rather than held. See §5.6 for the
+   measured numbers and the decrypt-then-stream shape that achieves it.
 
 ## 3. Milestones
 
@@ -207,12 +208,23 @@ server URL. Steps, both platforms, identical semantics:
    decompress in a streaming pass to `staging/{path}.tmp` (GCM tag verified before the plaintext
    is renamed into place); verify plaintext `sha256` + `size`; rename to `staging/{path}`.
    Blobs already complete in `staging/` are skipped on resume.
+
+   **Memory.** The peak is set by the bytecode blob, not by an average asset: 7.3 MB stored, 25.8 MB
+   decompressed on the real go-trade bundle. Decrypt into a temp file, then stream the decompression
+   from that file to `staging/{path}.tmp`, so the 25.8 MB never has to be resident. A naive
+   in-memory pass peaks around 33 MB and will be felt on a low-end device.
+
+   **Android trap — do not use `CipherInputStream` for GCM.** Several implementations swallow
+   `AEADBadTagException` at end of stream and simply return truncated plaintext, so a tampered blob
+   would be accepted silently. Use `Cipher.doFinal` (or `updateAAD` + `doFinal` over the buffered
+   ciphertext) and treat the exception as fatal. On iOS `AES.GCM.open` is one-shot and throws
+   properly, so the equivalent risk does not exist there.
 4. For each reused entry: hard-link (`Os.link` / `linkItem`) the source file into
    `staging/{path}`, fall back to copy; re-hash the result and reject on mismatch (invariant 1).
 5. Commit: `rename(staging/{bundleId} → bundles/{bundleId})`, write the slot record
    `{ bundleId, version, runtimeVersion, nativeBuild, bundleSha256, files: {path: sha256} }`,
    set `staged`. Any failure leaves `staging/` in place for the next attempt; a change of
-   `bundleId` clears it.
+   `bundleId` clears it. Nothing is renamed into place before its tag and plaintext hash verify.
 6. Progress: emit `onProgress { bundleId, bytesDone, bytesTotal, filesDone, filesTotal }` events
    (NativeEventEmitter); JS exposes `ota.progress` in the UI model.
 

@@ -1,6 +1,19 @@
 # dash-ota M2 — shared + backend Implementation Plan
 
-> ## ⚠️ PARTIAL — Tasks 1 to 8 only
+> ## Status: Tasks 1–4 ✅ IMPLEMENTED · Tasks 5–8 ⬜ pending · routes ⚠️ NOT WRITTEN
+>
+> **Tasks 1 to 4 are shipped** (`d97d3de` on `feat/ota-v2`). Do not re-execute them; read
+> `packages/shared/src/{paths,compression,manifest,release,protocol}.ts` for the truth. The shipped
+> code differs from the listings below in two ways:
+>
+> 1. The decompression helper is **`decompressBlob(data, compression)`**, not `zstdDecompress(data)`.
+>    It takes the manifest's `compression` value and passes `'none'` through, so callers do not each
+>    re-implement that branch.
+> 2. **`CheckRequestV2` was missed** in the first pass and added during QA. It lives in
+>    `protocol.ts` and extends `CheckRequest` with `protocol`, `currentBundleId` and
+>    `currentBundleSha256`.
+>
+> Tasks 5 to 8 (router, providers, adapters, config, store) are still to do.
 >
 > Drafting was cut off after Task 8. Everything through the v2 `Store` is here; the **routes are
 > not**. After Task 8, build the rest from the spec (§5.3 to §5.5): the `/ota/v2/*` device routes

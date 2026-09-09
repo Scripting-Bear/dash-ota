@@ -6,6 +6,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import {
   aesGcmDecrypt,
   aesGcmEncrypt,
@@ -143,7 +144,10 @@ await check('a tampered blob is rejected before it is decrypted', async () => {
   await assert.rejects(() => verifyReleaseV2(signed, evil, publicKeyFromRawB64(publicKeyRawB64)), /hash mismatch/);
 });
 
-await check('a blob from another release is rejected (AAD binds blob to release)', async () => {
+// The blob hash is what actually catches this (a different release encrypts with a different key
+// and IV, so the stored bytes differ). The AAD is the layer beneath it, proven directly in the
+// AES-GCM check above; this asserts the release-level behaviour, not which layer fired.
+await check('a blob served from another release is rejected', async () => {
   const { publicKeyRawB64, signed } = await makeSignedRelease();
   const other = await makeSignedRelease({ bundleId: 'bnd_other' });
   // Serve the *other* release's blobs, relabelled with this manifest's hashes so the cheap checks
@@ -169,6 +173,44 @@ await check('unencrypted releases still verify, and carry no iv/tag', async () =
   }
   const out = await verifyReleaseV2(signed, fetchBlob, publicKeyFromRawB64(publicKeyRawB64));
   assert.equal(out.files.length, files.length);
+});
+
+await check('edge cases: empty file, incompressible bytes, and a unicode path', async () => {
+  const { privateKeyPem, publicKeyRawB64 } = generateSigningKeyPair();
+  // Random bytes do not compress; an empty file has nothing to compress. Both must survive the
+  // "only keep compression if it saves something" rule and come back byte-identical.
+  const files: ArchiveFile[] = [
+    { path: 'index.android.bundle', data: Buffer.from('x'.repeat(500), 'utf8') },
+    { path: 'empty.txt', data: Buffer.alloc(0) },
+    { path: 'noise.bin', data: randomBytes(4096) },
+    { path: 'assets/ünïcode ᛒ/ok.txt', data: Buffer.from('unicode path', 'utf8') },
+  ];
+  const built = await buildReleaseV2({
+    bundleId: 'bnd_edge', runtimeVersion: 'rt', bundleVersion: 1, platform: 'ios',
+    channel: 'prod', appId: 'com.example.app', mandatory: false,
+    files, bundlePath: 'index.android.bundle', keyId: 'k',
+  });
+  assert.deepEqual(validateManifestShape(built.manifest), []);
+  const empty = built.manifest.files.find((f) => f.path === 'empty.txt');
+  assert.equal(empty?.size, 0);
+  assert.equal(empty?.blob.compression, 'none');
+  assert.equal(built.manifest.files.find((f) => f.path === 'noise.bin')?.blob.compression, 'none');
+
+  const signed = signManifest(built.manifest, privateKeyPem);
+  const out = await verifyReleaseV2(
+    signed,
+    async (sha) => {
+      const b = built.blobs.get(sha);
+      assert.ok(b);
+      return b;
+    },
+    publicKeyFromRawB64(publicKeyRawB64),
+  );
+  for (const original of files) {
+    const got = out.files.find((f) => f.path === original.path);
+    assert.ok(got, `missing ${original.path}`);
+    assert.deepEqual(got.data, original.data);
+  }
 });
 
 await check('AES-GCM rejects a wrong key and a flipped byte', () => {

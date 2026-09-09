@@ -6,7 +6,7 @@
  * @module protocol
  */
 
-import type { Channel, Platform, SignedManifest } from './manifest.js';
+import { type Channel, OTA_PROTOCOL, type Platform, type SignedManifest } from './manifest.js';
 
 /** Header names for device-key request signing / anti-replay. */
 export const OTA_HEADERS = {
@@ -55,7 +55,7 @@ export interface EnrollResponse {
   ok: true;
 }
 
-/** POST /ota/v1/check — the update query. */
+/** POST /ota/v2/check — the update query. */
 export interface CheckRequest {
   installId: string;
   platform: Platform;
@@ -67,11 +67,30 @@ export interface CheckRequest {
   currentBundleVersion: number;
 }
 
-/** POST /ota/v1/check response. */
+/**
+ * What a v2 device sends on `/check`.
+ *
+ * `currentBundleId` and `currentBundleSha256` are what make a small update possible: the server
+ * uses them to decide whether it can offer a bytecode delta instead of the whole thing. Both are
+ * empty strings when the embedded bundle is running.
+ */
+export interface CheckRequestV2 extends CheckRequest {
+  /** wire protocol the client speaks; the backend retires anything older. */
+  protocol: typeof OTA_PROTOCOL;
+  /** id of the applied bundle, or "" when running the embedded one. */
+  currentBundleId: string;
+  /** lowercase hex SHA-256 of the running JS bytecode, embedded included; "" if unknown. */
+  currentBundleSha256: string;
+}
+
+/** POST /ota/v2/check response. */
 export interface CheckResponse {
   /** the eligible signed manifest, or null for "no update". */
   update: SignedManifest | null;
-  /** one-time, short-TTL token to fetch the ciphertext from /download (no S3 URL exposed). */
+  /**
+   * Short-TTL token authorising blob fetches for this release. Reusable within its TTL, unlike
+   * v1's one-shot token: a v2 update is many requests, and a resumed download needs more.
+   */
   downloadToken?: string;
   /** server-issued nonce the client echoes on /confirm to prove liveness (anti-replay). */
   serverNonce: string;
