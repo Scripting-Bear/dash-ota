@@ -23,8 +23,8 @@ order. If a session ends, the next agent resumes from the Status board below.
 | # | Phase | Packages | Detailed plan | State |
 |---|---|---|---|---|
 | 0 | Investigation, root cause, spec, loader fix | rn | this file + spec | ✅ done |
-| 1 | **M1** boot accounting (rn 0.3.2) | rn | `2026-09-09-m1-boot-accounting.md` (full) | ⬜ next |
-| 2 | **M2a** shared: manifest v2, zstd, per-blob crypto | shared | `2026-09-09-m2-shared-backend.md` Tasks 1–4 | ⬜ |
+| 1 | **M1** boot accounting (rn 0.3.2) | rn | `2026-09-09-m1-boot-accounting.md` (full) | ✅ done — `253b165`, verified both platforms |
+| 2 | **M2a** shared: manifest v2, zstd, per-blob crypto | shared | `2026-09-09-m2-shared-backend.md` Tasks 1–4 | ⬜ next |
 | 3 | **M2b** backend: router, providers, store, routes, tombstone | backend | same file Tasks 5–8; routes onward from spec §5.3–§5.5 | ⬜ |
 | 4 | **M2c** CLI: 3-step publish, `verify-release` | cli | `2026-09-09-m2-cli-docs.md` Tasks 1–7 (full) | ⬜ |
 | 5 | **M2d** rn native + JS (0.4.0) | rn | none — spec §5.6, §5.7 | ⬜ |
@@ -164,11 +164,21 @@ policy would be invisible to existing users.
 
 ## Working-tree state (as of 2026-09-09)
 
-**secure-ota**, on `a9f01b4`, uncommitted:
+**secure-ota**, on `253b165`. Phase 1 is committed (`0be9174` docs, `253b165` the fix). Only
+`package-lock.json` is dirty, and that predates this workstream — leave it.
 
-- `packages/rn/android/.../DashOtaBundleLoader.kt` and `packages/rn/ios/DashOtaBundleLoader.swift` — the memoisation fix, **verified working on both platforms**.
-- `packages/rn/package.json` — version 0.3.2.
-- `docs/superpowers/` — this file, the spec, three plans. Untracked.
+Phase 1 also fixed two bugs found while implementing, beyond the spec:
+
+- GC kept only `current` + `lastKnownGood`, so a bundle downloaded inside the health window was
+  deleted by the `markHealthy` sweep before it could be applied. The keep-set now covers `pending`
+  and `staged`.
+- Returning to the foreground now clears the pause mark, so a bundle that pauses, resumes and then
+  crashes is no longer forgiven, and iOS transients (a banner, an incoming call) are discarded.
+
+**Phase 1 evidence (2026-09-09, Android emulator + iOS simulator):** a mandatory dev bundle applies
+with zero ENOENT and all 115 assets intact; three force-kills while on trial leave `bootAttempts`
+pinned at 1 instead of climbing to disabled; a deliberately crashing bundle is still disabled after
+two real crashes and reported to the server (`adoption.failed = 1`).
 
 **go-trade-mobile**, on `feat/reports-changes` at `f6bc5ad1` (pushed), uncommitted:
 
