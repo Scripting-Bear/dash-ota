@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// On-disk slot + state manager (the iOS twin of the Kotlin `DashOtaStore`). Holds the
 /// active / last-known-good / staged / pending bundles + crash-loop counters, and implements
@@ -11,6 +12,13 @@ final class DashOtaStore {
   /// Bumped when the on-disk state shape changes in a way older slots cannot survive.
   private let stateSchema = 2
   private let markLock = NSLock()
+
+  /// One line per cold start saying which bundle was chosen and why. Native on purpose: release
+  /// builds strip the JS `console.*` trail, so this is the only way to see the launch decision on a
+  /// real device. Every value is interpolated `.public` because the log is useless when redacted —
+  /// it carries only bundle ids and counters, never tokens, keys or user data.
+  private let log = Logger(subsystem: "dash-ota", category: "launch")
+  private var schemaResetLogged = false
 
   private var baseDir: URL {
     let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("dash-ota")
@@ -39,7 +47,13 @@ final class DashOtaStore {
     // read of the bundle path, so the breaker disabled them on their first boot and deleted the slot
     // dir under the running bundle. Discard, don't migrate: the embedded bundle runs and the next
     // check re-downloads.
-    if (obj["stateSchema"] as? Int ?? 1) != stateSchema { return ["stateSchema": stateSchema] }
+    if (obj["stateSchema"] as? Int ?? 1) != stateSchema {
+      if !schemaResetLogged {
+        schemaResetLogged = true
+        log.warning("launch: state schema is not \(self.stateSchema, privacy: .public) — discarding it and starting clean")
+      }
+      return ["stateSchema": stateSchema]
+    }
     return obj
   }
 
@@ -236,9 +250,14 @@ final class DashOtaStore {
       state["trial"] = true
       state["bootAttempts"] = 1
       saveState(state)
+      log.warning("launch: applying pending \((pending["bundleId"] as? String) ?? "?", privacy: .public) on trial (attempt 1/\(self.maxBootAttempts, privacy: .public))")
       return bundlePath(pending)
     }
-    guard let current = slot(state, "current") else { saveState(state); return nil }
+    guard let current = slot(state, "current") else {
+      saveState(state)
+      log.warning("launch: no stored bundle — using the embedded one")
+      return nil
+    }
     if (state["trial"] as? Bool) == true {
       var attempts = (state["bootAttempts"] as? Int) ?? 0
       if forgiven && attempts > 0 { attempts -= 1 }
@@ -254,14 +273,19 @@ final class DashOtaStore {
         state["trial"] = false
         state["bootAttempts"] = 0
         saveState(state)
+        log.warning("launch: crash loop: disabling \(failedId, privacy: .public), reverting to \((lkg?["bundleId"] as? String) ?? "the embedded bundle", privacy: .public)")
         return lkg.flatMap { bundlePath($0) }
       }
       if !userReload { attempts += 1 }
       state["bootAttempts"] = attempts
       saveState(state)
+      let notes = (forgiven ? " (previous launch refunded: reached JS then paused)" : "")
+        + (userReload ? " (user reload, not counted)" : "")
+      log.warning("launch: \((current["bundleId"] as? String) ?? "?", privacy: .public) on trial, attempt \(attempts, privacy: .public)/\(self.maxBootAttempts, privacy: .public)\(notes, privacy: .public)")
       return bundlePath(current)
     }
     saveState(state)
+    log.warning("launch: \((current["bundleId"] as? String) ?? "?", privacy: .public) (healthy)")
     return bundlePath(current)
   }
 

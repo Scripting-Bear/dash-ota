@@ -16,5 +16,8 @@ revert on the next launch.
 - **fix:** GC keeps every slot the state references, including `pending` and `staged`. A bundle
   downloaded inside the health window used to be deleted before it could be applied.
 - **fix:** the crash-loop branch no longer deletes slot directories from a live process.
+- **new:** the launch decision is logged natively, one line per cold start (Android `adb logcat -s
+  DashOta:W`, iOS subsystem `dash-ota`). Release builds strip the JS console trail, so this is the
+  only way to see why an update did or did not apply on a real device. No tokens, keys or user data.
 - **breaking (on-disk state):** `state.json` gains `stateSchema: 2`; older state is discarded on
   load. The embedded bundle runs and the next check re-downloads.

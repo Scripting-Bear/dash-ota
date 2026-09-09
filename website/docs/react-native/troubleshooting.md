@@ -28,3 +28,34 @@ is stripped** — only `console.error` and native logs surface. Watch logcat / C
   beats `install -r`).
 - Confirm the device's reported `runtimeVersion` matches the OTA's exactly.
 - Check `dash-ota list` for the release's rollout %, paused state, and adoption.
+
+## Seeing why an update did or did not apply
+
+Release builds strip the JS `console.*` trail and a release APK is not debuggable, so from 0.3.2 the
+**launch decision is logged natively**, one line per cold start. It never contains tokens, keys or
+user data — only bundle ids and counters.
+
+```bash
+# Android (works on a release build, and on a real device)
+adb logcat -s DashOta:W
+
+# iOS simulator
+xcrun simctl spawn booted log show --last 5m --predicate 'subsystem == "dash-ota"' --style compact
+# iOS device: Console.app, filter the subsystem "dash-ota"
+```
+
+What the lines mean:
+
+| Line | Meaning |
+|---|---|
+| `applying pending <id> on trial (attempt 1/2)` | the update is being applied for the first time |
+| `<id> on trial, attempt n/2` | it has not been marked healthy yet; `n` counts real crashes |
+| `... (previous launch refunded: reached JS then paused)` | the last launch ended because the user left, so it was not counted |
+| `<id> (healthy)` | promoted to last-known-good; attempts are no longer counted |
+| `crash loop: disabling <id>, reverting to <id>` | two real crashes; the bundle is blocklisted and reported |
+| `state schema is not 2 — discarding it and starting clean` | upgrading from a pre-0.3.2 install |
+| `no stored bundle — using the embedded one` | fresh install, or the state was just discarded |
+
+Reading the state directly needs a debuggable build (`adb shell run-as`), root (an AOSP or
+`google_apis` emulator image, `adb root`), or on the simulator the app container:
+`xcrun simctl get_app_container booted <bundle-id> data`.

@@ -189,10 +189,12 @@ Phase 1 also fixed three bugs found while implementing and during QA, beyond the
   climbing to disabled;
 - a deliberately crashing bundle is still disabled after two real crashes and reported to the
   server (`adoption.failed = 1`) — verified twice, once per build;
-- the **upgrade path**: a pre-0.3.2 `state.json` (no `stateSchema`) is discarded on first launch,
-  its stale slot dir is GC'd, and the app boots the embedded bundle and re-stages. Exercised on the
-  iOS simulator by writing a legacy state into the container; the Android code path is identical but
-  is not directly testable because a release APK is not debuggable.
+- the **upgrade path**, on BOTH platforms: a pre-0.3.2 `state.json` (no `stateSchema`) is discarded
+  on first launch, its stale slot dir is GC'd, and the app boots the embedded bundle and re-stages;
+- on Android this was run against a genuine release APK on a **rootable** emulator, which also gave
+  direct reads of `state.json` and `launch.json` between kill cycles: `bootAttempts` stayed at 1
+  across three trial-state kills while the log said `previous launch refunded: reached JS then
+  paused`, then went healthy.
 - `npm run ci` green; `cd website && npm run build` green.
 
 Dev-channel bundles `bnd_2_36_mttxtxp8` and `bnd_2_37_mttyevk7` were the deliberate crash tests and
@@ -207,6 +209,31 @@ are rolled back. Do not un-pause them.
 
 **Server state:** all four prod OTA releases published 2026-09-08 are rolled back. Dev-channel
 releases v34/v35 (android) and v22 (ios) were verification publishes; v34 is rolled back.
+
+## Inspecting a release build (how the Android evidence was obtained)
+
+A release APK is not debuggable, so `adb shell run-as` is refused and the Play-image emulator
+(`sdk_gphone*`, `ro.build.type=user`) refuses `adb root`. Two ways around it, both used here:
+
+1. **Native launch log (works anywhere, including production devices).** From 0.3.2 the launch
+   decision is one native log line per cold start — `adb logcat -s DashOta:W`, or the `dash-ota`
+   subsystem in Console.app / `log show` on iOS. It needs no JS, so `transform-remove-console` does
+   not affect it.
+2. **A rootable emulator, for reading and writing the app's private files.** Create one from a
+   non-Play image (`google_apis`, not `google_apis_playstore`) and `adb root` works:
+
+   ```bash
+   avdmanager create avd -n dashota_root_34 -k "system-images;android-34;google_apis;arm64-v8a" -d pixel_6
+   emulator -avd dashota_root_34 -no-snapshot -port 5560 &
+   adb -s emulator-5560 root
+   adb -s emulator-5560 shell cat /data/data/<pkg>/files/dash-ota/state.json
+   ```
+
+   Writing a fixture (a legacy state, a corrupt file) needs `chown -R <appuid>:<appgid>` and
+   `restorecon -R` on the directory afterwards, or the app cannot read it back.
+
+On the iOS simulator neither is needed: `xcrun simctl get_app_container booted <id> data` gives the
+container directly.
 
 ## Rules of engagement
 

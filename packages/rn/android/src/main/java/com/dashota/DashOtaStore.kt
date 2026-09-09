@@ -1,6 +1,7 @@
 package com.dashota
 
 import android.content.Context
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -20,6 +21,16 @@ object DashOtaStore {
    */
   private const val STATE_SCHEMA = 2
   private const val STATE_SCHEMA_KEY = "stateSchema"
+  private const val TAG = "DashOta"
+
+  /**
+   * One line per cold start saying which bundle was chosen and why. Native on purpose: release
+   * builds strip the JS `console.*` trail, and a release APK is not debuggable, so this is the only
+   * way to see the launch decision on a real device. Never carries tokens, keys or user data.
+   */
+  private fun logLaunch(message: String) = Log.w(TAG, "launch: $message")
+
+  @Volatile private var schemaResetLogged = false
 
   fun baseDir(ctx: Context): File = File(ctx.filesDir, "dash-ota").apply { mkdirs() }
   fun bundlesDir(ctx: Context): File = File(baseDir(ctx), "bundles").apply { mkdirs() }
@@ -51,7 +62,13 @@ object DashOtaStore {
     // read of the bundle path (RN reads it 5-6x per launch), so the breaker disabled them on their
     // very first boot and deleted the slot dir under the running bundle. Discard, don't migrate:
     // the embedded bundle runs and the next check re-downloads.
-    if (parsed.optInt(STATE_SCHEMA_KEY, 1) != STATE_SCHEMA) return freshState()
+    if (parsed.optInt(STATE_SCHEMA_KEY, 1) != STATE_SCHEMA) {
+      if (!schemaResetLogged) {
+        schemaResetLogged = true
+        logLaunch("state schema is not $STATE_SCHEMA — discarding it and starting clean")
+      }
+      return freshState()
+    }
     return parsed
   }
 
@@ -266,10 +283,15 @@ object DashOtaStore {
       state.put("trial", true)
       state.put("bootAttempts", 1)
       saveState(ctx, state)
+      logLaunch("applying pending ${pending.optString("bundleId")} on trial (attempt 1/$MAX_BOOT_ATTEMPTS)")
       return bundlePath(ctx, pending)
     }
 
-    val current = slot(state, "current") ?: run { saveState(ctx, state); return null }
+    val current = slot(state, "current") ?: run {
+      saveState(ctx, state)
+      logLaunch("no stored bundle — using the embedded one")
+      return null
+    }
     if (state.optBoolean("trial", false)) {
       var attempts = state.optInt("bootAttempts", 0)
       if (forgiven && attempts > 0) attempts -= 1
@@ -286,14 +308,21 @@ object DashOtaStore {
         state.put("trial", false)
         state.put("bootAttempts", 0)
         saveState(ctx, state)
+        logLaunch("crash loop: disabling $failedId, reverting to ${lkg?.optString("bundleId") ?: "the embedded bundle"}")
         return lkg?.let { bundlePath(ctx, it) }
       }
       if (!userReload) attempts += 1
       state.put("bootAttempts", attempts)
       saveState(ctx, state)
+      logLaunch(
+        "${current.optString("bundleId")} on trial, attempt $attempts/$MAX_BOOT_ATTEMPTS" +
+          (if (forgiven) " (previous launch refunded: reached JS then paused)" else "") +
+          (if (userReload) " (user reload, not counted)" else "")
+      )
       return bundlePath(ctx, current)
     }
     saveState(ctx, state)
+    logLaunch("${current.optString("bundleId")} (healthy)")
     return bundlePath(ctx, current)
   }
 
