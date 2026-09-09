@@ -30,15 +30,23 @@ class DashOtaStoreTest {
     DashOtaStore.baseDir(ctx).deleteRecursively()
   }
 
-  /** Stage a bundle and promote it, i.e. what a completed download does. */
-  private fun stagePending(bundleId: String, version: Int) {
-    DashOtaStore.stage(
+  /** Assemble a bundle in staging and commit it, i.e. what a completed download does. */
+  private fun stage(bundleId: String, version: Int) {
+    val staging = DashOtaStore.stagingDir(ctx, bundleId)
+    File(staging, "index.android.bundle").writeText("// $bundleId")
+    DashOtaStore.commitStaged(
       ctx,
       bundleId,
       version,
       DashOtaConfig.runtimeVersion(ctx),
-      listOf("index.android.bundle" to "// $bundleId".toByteArray()),
+      "sha-of-$bundleId",
+      mapOf("index.android.bundle" to "sha-of-$bundleId"),
     )
+  }
+
+  /** Stage a bundle and promote it to pending. */
+  private fun stagePending(bundleId: String, version: Int) {
+    stage(bundleId, version)
     assertTrue("staged bundle should promote to pending", DashOtaStore.promoteStagedToPending(ctx))
   }
 
@@ -141,10 +149,25 @@ class DashOtaStoreTest {
     stagePending("bnd_1", 1)
     DashOtaStore.resolveBundleAtLaunch(ctx)
     // A second update finishes downloading before the first is marked healthy.
-    DashOtaStore.stage(ctx, "bnd_2", 2, DashOtaConfig.runtimeVersion(ctx), listOf("index.android.bundle" to "x".toByteArray()))
+    stage("bnd_2", 2)
     DashOtaStore.markHealthy(ctx) // used to gc() everything that was not current or last-known-good
     assertTrue(File(DashOtaStore.bundlesDir(ctx), "bnd_2").exists())
     assertTrue(DashOtaStore.promoteStagedToPending(ctx))
+  }
+
+  @Test
+  fun `a committed slot advertises its files for the next update to reuse`() {
+    stagePending("bnd_1", 1)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markHealthy(ctx)
+
+    // This map is what makes the next update small: a file whose hash is already here is linked
+    // from this slot instead of downloaded again.
+    val have = DashOtaStore.haveFiles(ctx)
+    assertEquals(1, have.size)
+    val reusable = have["sha-of-bnd_1"]
+    assertTrue("the previous slot's file should be reusable", reusable != null && reusable.exists())
+    assertEquals("// bnd_1", reusable!!.readText())
   }
 
   @Test

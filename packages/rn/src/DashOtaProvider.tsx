@@ -10,7 +10,7 @@ import { AppState, type AppStateStatus } from 'react-native';
 import DashOta from './NativeDashOta';
 import { canonicalize } from './canonical';
 import { consoleLogger, DEFAULT_UI_COPY, type OtaConfig } from './config';
-import { checkForUpdate, confirm, createClientContext, downloadUrl, type OtaClientContext } from './otaClient';
+import { blobBaseUrl, checkForUpdate, confirm, createClientContext, type OtaClientContext } from './otaClient';
 import type { AvailableUpdate, BundleMeta, NativeVersionPolicy, OtaPhase, OtaStatus, OtaUi, OtaUpdateState } from './types';
 
 const OtaContext = createContext<OtaUpdateState | null>(null);
@@ -75,7 +75,12 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
    * Held only until staged (or until the next check replaces it) so `downloadUpdate()` can run long
    * after the check that announced the update.
    */
-  const pendingDownload = useRef<{ downloadToken: string; manifestJson: string; signatureB64: string } | null>(null);
+  const pendingDownload = useRef<{
+    bundleId: string;
+    downloadToken: string;
+    manifestJson: string;
+    signatureB64: string;
+  } | null>(null);
 
   const ensureCtx = useCallback(async (): Promise<OtaClientContext> => {
     if (!ctxRef.current) ctxRef.current = await createClientContext(config, logger);
@@ -94,12 +99,12 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
     if (!material || !ctx) return false;
     setStatus('downloading');
     const staged = (await DashOta.downloadAndStage(
-      downloadUrl(ctx),
+      blobBaseUrl(ctx, material.bundleId),
       material.downloadToken,
       material.manifestJson,
       material.signatureB64,
     )) as unknown as { bundleId: string; bundleVersion: number };
-    // The download token is one-time — drop it so a retry re-checks instead of replaying a dead token.
+    // Drop the material so a retry re-checks rather than reusing a token that may have expired.
     pendingDownload.current = null;
     setProgress(1);
     logger.info(`staged ${staged.bundleId} v${staged.bundleVersion}`);
@@ -124,7 +129,10 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
       const meta = (await DashOta.getCurrentBundleMeta()) as unknown as BundleMeta;
       setCurrentBundle(meta);
 
-      const resp = await checkForUpdate(ctx, meta.bundleVersion, config.appVersion);
+      const resp = await checkForUpdate(ctx, meta.bundleVersion, config.appVersion, {
+        bundleId: meta.isEmbedded ? '' : meta.bundleId,
+        bundleSha256: meta.bundleSha256 ?? '',
+      });
       setNativePolicy(resp.nativePolicy);
       serverNonceRef.current = resp.serverNonce;
 
@@ -158,6 +166,7 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
 
       // Keep what a later download needs; canonicalize once, here, while the response is in hand.
       pendingDownload.current = {
+        bundleId: m.bundleId,
         downloadToken: resp.downloadToken,
         manifestJson: canonicalize(m), // canonical bytes the CLI signed; native verifies the Ed25519 sig over these
         signatureB64: resp.update.signatureB64,

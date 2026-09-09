@@ -60,6 +60,14 @@ dependencies {
   // Package-based crypto: Google Tink for Ed25519 verification (raw 32-byte public key).
   // AES-256-GCM, SHA-256 and HMAC use the JDK (javax.crypto / java.security) directly.
   implementation "com.google.crypto.tink:tink-android:1.13.0"
+  // Per-blob decompression.
+  //
+  // Pinned at 1.5.7-4 deliberately. Later builds declare a compileSdk 37 floor in their AAR
+  // metadata, which would force every consumer to bump; and 1.5.6-9 and earlier ship .so files that
+  // are NOT 16 KB page aligned on armeabi-v7a, x86 and x86_64, which Google Play now rejects.
+  // 1.5.7-4 is the newest release that is aligned on every ABI and imposes no SDK floor.
+  // Re-check both properties before bumping.
+  implementation "com.github.luben:zstd-jni:1.5.7-4@aar"
 
   testImplementation "junit:junit:4.13.2"
   testImplementation "androidx.test:core:1.6.1"

@@ -31,6 +31,8 @@ export interface BundleMeta {
   bundleVersion: number;
   runtimeVersion: string;
   isEmbedded: boolean;
+  /** SHA-256 of the running JS bytecode; the server uses it to offer a delta. '' when unknown. */
+  bundleSha256: string;
 }
 
 /** Native slot/rollback state. */

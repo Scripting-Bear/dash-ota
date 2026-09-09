@@ -31,7 +31,11 @@ export interface Spec extends TurboModule {
    * unpack, verify every file's SHA-256, and stage as `pending`. Fails closed on any error.
    * @returns `{ bundleId, bundleVersion }` on success.
    */
-  downloadAndStage(downloadUrl: string, downloadToken: string, manifestJson: string, signatureB64: string): Promise<Object>;
+  downloadAndStage(blobBaseUrl: string, downloadToken: string, manifestJson: string, signatureB64: string): Promise<Object>;
+
+  /** Required by codegen for NativeEventEmitter; progress is emitted as `onDashOtaProgress`. */
+  addListener(eventName: string): void;
+  removeListeners(count: number): void;
 
   /**
    * True if a bundle was disabled by the crash-loop breaker (so the client skips re-downloading

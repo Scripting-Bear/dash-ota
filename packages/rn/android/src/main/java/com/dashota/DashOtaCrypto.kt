@@ -1,8 +1,9 @@
 package com.dashota
 
 import android.util.Base64
+import com.github.luben.zstd.Zstd
 import com.google.crypto.tink.subtle.Ed25519Verify
-import org.json.JSONArray
+import java.io.File
 import java.security.MessageDigest
 import javax.crypto.Cipher
 import javax.crypto.Mac
@@ -12,7 +13,7 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * Trust-critical crypto, mirroring the shared `openRelease` reference. Ed25519 verification
  * uses Google **Tink** (package-based) with the raw 32-byte embedded public key; AES-256-GCM,
- * SHA-256 and HMAC use the JDK directly. SOA1 is the package archive format.
+ * SHA-256 and HMAC use the JDK directly; zstd comes from zstd-jni.
  */
 object DashOtaCrypto {
   fun b64(s: String): ByteArray = Base64.decode(s, Base64.DEFAULT)
@@ -32,13 +33,56 @@ object DashOtaCrypto {
   }
 
   /** AES-256-GCM decrypt (throws if the tag fails to authenticate). */
-  fun aesGcmDecrypt(key: ByteArray, iv: ByteArray, ciphertext: ByteArray, tag: ByteArray): ByteArray {
+  /**
+   * Decrypt one blob.
+   *
+   * @param aad additional authenticated data — `bundleId + "/" + fileSha256`, binding the blob to
+   *   its release and to the plaintext it claims to be. A mismatch fails the tag, so a blob cannot
+   *   be lifted from another release or swapped for a different file within this one.
+   * @throws javax.crypto.AEADBadTagException on any tampering.
+   */
+  fun aesGcmDecrypt(key: ByteArray, iv: ByteArray, ciphertext: ByteArray, tag: ByteArray, aad: ByteArray?): ByteArray {
     val cipher = Cipher.getInstance("AES/GCM/NoPadding")
     cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), GCMParameterSpec(128, iv))
-    val combined = ByteArray(ciphertext.size + tag.size)
-    System.arraycopy(ciphertext, 0, combined, 0, ciphertext.size)
-    System.arraycopy(tag, 0, combined, ciphertext.size, tag.size)
-    return cipher.doFinal(combined)
+    if (aad != null) cipher.updateAAD(aad)
+    // doFinal, never CipherInputStream: several implementations of that stream swallow
+    // AEADBadTagException at end of stream and hand back truncated plaintext, which would accept a
+    // tampered blob silently.
+    return cipher.doFinal(ciphertext + tag)
+  }
+
+  /**
+   * Decompress a zstd blob, bounded by the size the signed manifest promises.
+   *
+   * The frame declares its own decompressed size, so a bomb (a few KB expanding to hundreds of MB)
+   * is refused before anything is allocated rather than after it has already exhausted memory.
+   *
+   * @param data compressed bytes.
+   * @param expectedSize plaintext size from the manifest.
+   */
+  fun zstdDecompress(data: ByteArray, expectedSize: Int): ByteArray {
+    val declared = Zstd.decompressedSize(data)
+    if (declared <= 0L) throw RuntimeException("zstd frame declares no content size")
+    if (declared != expectedSize.toLong()) {
+      throw RuntimeException("zstd frame declares $declared bytes, manifest says $expectedSize")
+    }
+    val out = Zstd.decompress(data, expectedSize)
+    if (Zstd.isError(out.size.toLong())) throw RuntimeException("zstd decompress failed")
+    return out
+  }
+
+  /** Streaming SHA-256 of a file, so a large blob is never held in memory just to be hashed. */
+  fun sha256HexOfFile(file: File): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    file.inputStream().use { input ->
+      val buf = ByteArray(64 * 1024)
+      while (true) {
+        val n = input.read(buf)
+        if (n < 0) break
+        digest.update(buf, 0, n)
+      }
+    }
+    return toHex(digest.digest())
   }
 
   fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
@@ -56,25 +100,4 @@ object DashOtaCrypto {
     return sb.toString()
   }
 
-  /** Unpack a "SOA1" archive: magic(4) + uint32BE headerLen + header JSON [{path,size}] + blobs. */
-  fun unpackArchive(buf: ByteArray): List<Pair<String, ByteArray>> {
-    require(buf.size >= 8 && String(buf, 0, 4, Charsets.US_ASCII) == "SOA1") { "bad archive magic" }
-    val headerLen = ((buf[4].toInt() and 0xff) shl 24) or
-      ((buf[5].toInt() and 0xff) shl 16) or
-      ((buf[6].toInt() and 0xff) shl 8) or
-      (buf[7].toInt() and 0xff)
-    val headerEnd = 8 + headerLen
-    require(buf.size >= headerEnd) { "truncated archive header" }
-    val header = JSONArray(String(buf, 8, headerLen, Charsets.UTF_8))
-    val out = ArrayList<Pair<String, ByteArray>>(header.length())
-    var offset = headerEnd
-    for (i in 0 until header.length()) {
-      val entry = header.getJSONObject(i)
-      val size = entry.getInt("size")
-      require(buf.size >= offset + size) { "truncated archive blob" }
-      out.add(Pair(entry.getString("path"), buf.copyOfRange(offset, offset + size)))
-      offset += size
-    }
-    return out
   }
-}

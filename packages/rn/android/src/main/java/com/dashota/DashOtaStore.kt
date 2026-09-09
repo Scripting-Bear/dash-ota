@@ -35,6 +35,13 @@ object DashOtaStore {
   fun baseDir(ctx: Context): File = File(ctx.filesDir, "dash-ota").apply { mkdirs() }
   fun bundlesDir(ctx: Context): File = File(baseDir(ctx), "bundles").apply { mkdirs() }
   fun tmpDir(ctx: Context): File = File(baseDir(ctx), "tmp").apply { mkdirs() }
+
+  /**
+   * Where a release is assembled before it becomes a slot. Survives process death on purpose: a
+   * download killed half way resumes from what is already verified here instead of starting over.
+   */
+  fun stagingDir(ctx: Context, bundleId: String): File =
+    File(File(baseDir(ctx), "staging"), bundleId).apply { mkdirs() }
   private fun stateFile(ctx: Context): File = File(baseDir(ctx), "state.json")
 
   /**
@@ -152,15 +159,34 @@ object DashOtaStore {
   fun currentBundleVersion(ctx: Context): Int = slot(loadState(ctx), "current")?.optInt("version", 0) ?: 0
 
   /** Write verified files to a fresh slot dir and record it as `staged`. */
-  fun stage(ctx: Context, bundleId: String, version: Int, runtimeVersion: String, files: List<Pair<String, ByteArray>>) {
+  /**
+   * Promote a fully-assembled staging directory into a real slot, atomically.
+   *
+   * The rename is the commit point: before it there is no slot, after it there is a complete one.
+   * A kill in between leaves the staging dir for the next attempt, never a half-written slot.
+   *
+   * @param files path → plaintext SHA-256 for every file, recorded so the NEXT update can tell
+   *   what this device already holds and download only what changed.
+   */
+  fun commitStaged(
+    ctx: Context,
+    bundleId: String,
+    version: Int,
+    runtimeVersion: String,
+    bundleSha256: String,
+    files: Map<String, String>,
+  ) {
+    val staging = stagingDir(ctx, bundleId)
     val dir = File(bundlesDir(ctx), bundleId)
     if (dir.exists()) dir.deleteRecursively()
-    dir.mkdirs()
-    for ((path, data) in files) {
-      val outFile = File(dir, path)
-      outFile.parentFile?.mkdirs()
-      outFile.writeBytes(data)
+    if (!staging.renameTo(dir)) {
+      // Across-filesystem rename can fail; fall back to a copy, then drop the staging copy.
+      staging.copyRecursively(dir, overwrite = true)
+      staging.deleteRecursively()
     }
+
+    val fileMap = JSONObject()
+    for ((path, sha) in files) fileMap.put(path, sha)
     val state = loadState(ctx)
     // `nativeBuild` stamps the binary this bundle was staged against — see `isCompatible`.
     state.put(
@@ -170,9 +196,36 @@ object DashOtaStore {
         .put("version", version)
         .put("runtimeVersion", runtimeVersion)
         .put("nativeBuild", DashOtaConfig.nativeBuild(ctx))
+        .put("bundleSha256", bundleSha256)
+        .put("files", fileMap)
         .put("dir", dir.absolutePath)
     )
     saveState(ctx, state)
+  }
+
+  /**
+   * Everything this device already holds, as plaintext SHA-256 → an existing file.
+   *
+   * This is what makes an update small: a file whose hash is already here is linked from the old
+   * slot instead of downloaded. Drawn from `current` and `lastKnownGood`, the only two slots GC
+   * guarantees to keep.
+   */
+  fun haveFiles(ctx: Context): Map<String, File> {
+    val out = HashMap<String, File>()
+    val state = loadState(ctx)
+    for (key in listOf("current", "lastKnownGood")) {
+      val slot = slot(state, key) ?: continue
+      val bundleId = slot.optString("bundleId")
+      if (bundleId.isEmpty()) continue
+      val dir = File(bundlesDir(ctx), bundleId)
+      val files = slot.optJSONObject("files") ?: continue
+      for (path in files.keys()) {
+        val sha = files.optString(path)
+        val file = File(dir, path)
+        if (sha.isNotEmpty() && file.exists()) out.putIfAbsent(sha, file)
+      }
+    }
+    return out
   }
 
   /** Promote `staged` → `pending` so it applies on next cold start. */
@@ -341,6 +394,7 @@ object DashOtaStore {
     return JSONObject()
       .put("bundleId", current?.optString("bundleId") ?: "embedded")
       .put("bundleVersion", current?.optInt("version", 0) ?: 0)
+      .put("bundleSha256", current?.optString("bundleSha256") ?: "")
       .put("isEmbedded", current == null)
   }
 
@@ -394,6 +448,10 @@ object DashOtaStore {
       .toSet()
     bundlesDir(ctx).listFiles()?.forEach { dir ->
       if (dir.name !in keep) dir.deleteRecursively()
+    }
+    // Staging for anything no longer referenced is dead weight; the download will restart cleanly.
+    File(baseDir(ctx), "staging").listFiles()?.forEach { dir ->
+      if (dir.name !in keep && slot(state, "staged")?.optString("bundleId") != dir.name) dir.deleteRecursively()
     }
   }
 }

@@ -11,6 +11,13 @@ import DashOta from './NativeDashOta';
 import { STORAGE_KEYS, type OtaConfig } from './config';
 import type { CheckResponse, OtaLogger } from './types';
 
+/**
+ * Wire protocol this client speaks. Sent on `/check` so a backend can recognise — and retire —
+ * clients it no longer serves. Kept local rather than imported: this package ships to apps and
+ * must not drag in the server-side toolchain.
+ */
+export const OTA_PROTOCOL = 2;
+
 const OTA_HEADERS = {
   installId: 'x-ota-install',
   nonce: 'x-ota-nonce',
@@ -103,7 +110,7 @@ async function enrollIfNeeded(config: OtaConfig, ctx: OtaClientContext, force: b
   // backend's verifyEnrollToken hook can gate registration on a genuine device. Null when the host
   // wires no attestor (the default) — the field is simply omitted.
   const attestationToken = (await config.attestor?.getAttestationToken()) ?? undefined;
-  const res = await ctx.fetchImpl(`${ctx.serverUrl}/ota/v1/enroll`, {
+  const res = await ctx.fetchImpl(`${ctx.serverUrl}/ota/v2/enroll`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -189,8 +196,9 @@ export async function checkForUpdate(
   ctx: OtaClientContext,
   currentBundleVersion: number,
   appVersion: string,
+  current: { bundleId: string; bundleSha256: string } = { bundleId: '', bundleSha256: '' },
 ): Promise<CheckResponse> {
-  return signedPost<CheckResponse>(ctx, '/ota/v1/check', {
+  return signedPost<CheckResponse>(ctx, '/ota/v2/check', {
     installId: ctx.installId,
     platform: Platform.OS,
     channel: ctx.channel,
@@ -198,6 +206,11 @@ export async function checkForUpdate(
     appVersion,
     buildNumber: ctx.buildNumber,
     currentBundleVersion,
+    protocol: OTA_PROTOCOL,
+    // What the device already holds. The server needs both to decide whether it can offer a
+    // bytecode delta instead of the whole bundle; empty strings mean the embedded bundle.
+    currentBundleId: current.bundleId,
+    currentBundleSha256: current.bundleSha256,
   });
 }
 
@@ -209,7 +222,7 @@ export async function confirm(
   serverNonce: string,
   reason?: string,
 ): Promise<void> {
-  await signedPost(ctx, '/ota/v1/confirm', {
+  await signedPost(ctx, '/ota/v2/confirm', {
     installId: ctx.installId,
     bundleId,
     runtimeVersion: ctx.runtimeVersion,
@@ -219,7 +232,13 @@ export async function confirm(
   });
 }
 
-/** The URL the native side downloads ciphertext from (no S3 URL on the JS side). */
-export function downloadUrl(ctx: OtaClientContext): string {
-  return `${ctx.serverUrl}/ota/v1/download`;
+/**
+ * Base URL for this release's blobs. Native appends `/{blobSha256}` per blob it needs.
+ *
+ * @param ctx - client context.
+ * @param bundleId - the release being fetched.
+ * @returns the blob base URL.
+ */
+export function blobBaseUrl(ctx: OtaClientContext, bundleId: string): string {
+  return `${ctx.serverUrl}/ota/v2/releases/${encodeURIComponent(bundleId)}/blobs`;
 }
