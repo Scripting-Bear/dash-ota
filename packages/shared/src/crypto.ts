@@ -124,10 +124,11 @@ export interface AesGcmResult {
  * @param plaintext bytes to encrypt
  * @returns iv, ciphertext, and auth tag
  */
-export function aesGcmEncrypt(key: Buffer, plaintext: Buffer): AesGcmResult {
+export function aesGcmEncrypt(key: Buffer, plaintext: Buffer, aad?: Buffer): AesGcmResult {
   if (key.length !== 32) throw new Error('aesGcmEncrypt: key must be 32 bytes');
   const iv = randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
+  if (aad) cipher.setAAD(aad);
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return { ivB64: iv.toString('base64'), ciphertext, tagB64: cipher.getAuthTag().toString('base64') };
 }
@@ -141,9 +142,16 @@ export function aesGcmEncrypt(key: Buffer, plaintext: Buffer): AesGcmResult {
  * @returns the recovered plaintext
  * @throws {Error} if authentication fails
  */
-export function aesGcmDecrypt(key: Buffer, ivB64: string, ciphertext: Buffer, tagB64: string): Buffer {
+export function aesGcmDecrypt(
+  key: Buffer,
+  ivB64: string,
+  ciphertext: Buffer,
+  tagB64: string,
+  aad?: Buffer,
+): Buffer {
   if (key.length !== 32) throw new Error('aesGcmDecrypt: key must be 32 bytes');
   const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(ivB64, 'base64'));
+  if (aad) decipher.setAAD(aad);
   decipher.setAuthTag(Buffer.from(tagB64, 'base64'));
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }

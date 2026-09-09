@@ -9,13 +9,16 @@ import assert from 'node:assert/strict';
 import {
   aesGcmDecrypt,
   aesGcmEncrypt,
+  type ArchiveFile,
+  type BuildReleaseV2Input,
+  buildReleaseV2,
+  bundleEntry,
   canonicalize,
   computeRuntimeVersion,
   constantTimeEqualHex,
   generateSigningKeyPair,
   hmacSha256Hex,
   isEligible,
-  type Manifest,
   publicKeyFromRawB64,
   randomAesKey,
   rolloutBucket,
@@ -23,97 +26,191 @@ import {
   sha256Hex,
   signManifest,
   validateManifestShape,
+  validatePath,
   verifyManifest,
+  verifyReleaseV2,
 } from './index.js';
 
 let passed = 0;
-function check(name: string, fn: () => void): void {
-  fn();
+async function check(name: string, fn: () => void | Promise<void>): Promise<void> {
+  await fn();
   passed += 1;
   console.log(`  ✓ ${name}`);
 }
 
-/** Build a fully-formed, signed manifest over a fake encrypted bundle. */
-function makeSignedBundle(overrides: Partial<Manifest> = {}) {
+/** The files a small release is built from: a bundle, an asset, and a duplicate of that asset. */
+function fixtureFiles(): ArchiveFile[] {
+  const asset = Buffer.from('PNG-ish bytes that repeat across densities', 'utf8');
+  return [
+    { path: 'index.android.bundle', data: Buffer.from('console.log("hello from OTA bundle");'.repeat(40), 'utf8') },
+    { path: 'drawable-xhdpi/logo.png', data: asset },
+    // Same content at a different path: must collapse to one blob.
+    { path: 'drawable-xxhdpi/logo.png', data: Buffer.from(asset) },
+  ];
+}
+
+/** Build and sign a release, and hand back a fetcher over its blobs. */
+async function makeSignedRelease(overrides: Partial<BuildReleaseV2Input> = {}) {
   const { privateKeyPem, publicKeyRawB64 } = generateSigningKeyPair();
-  const plaintext = Buffer.from('console.log("hello from OTA bundle");', 'utf8');
-  const key = randomAesKey();
-  const enc = aesGcmEncrypt(key, plaintext);
-  const manifest: Manifest = {
-    schema: 1,
+  const files = fixtureFiles();
+  const built = await buildReleaseV2({
     bundleId: 'bnd_test_1',
     runtimeVersion: 'rt_v1',
     bundleVersion: 2,
     platform: 'android',
     channel: 'dev',
-    createdAt: new Date('2026-06-18T00:00:00.000Z').toISOString(),
+    appId: 'com.example.app',
     mandatory: false,
-    files: [{ path: 'index.android.bundle', sha256: sha256Hex(plaintext), size: plaintext.length }],
-    encryption: {
-      algo: 'AES-256-GCM',
-      ivB64: enc.ivB64,
-      tagB64: enc.tagB64,
-      contentKeyB64: key.toString('base64'),
-      ciphertextSha256: sha256Hex(enc.ciphertext),
-      ciphertextSize: enc.ciphertext.length,
-    },
+    files,
+    bundlePath: 'index.android.bundle',
     keyId: 'key_dev_1',
     ...overrides,
+  });
+  const signed = signManifest(built.manifest, privateKeyPem);
+  const fetchBlob = async (sha: string): Promise<Buffer> => {
+    const blob = built.blobs.get(sha);
+    if (!blob) throw new Error(`no such blob ${sha}`);
+    return blob;
   };
-  const signed = signManifest(manifest, privateKeyPem);
-  return { signed, publicKeyRawB64, key, ciphertext: enc.ciphertext, plaintext };
+  return { signed, publicKeyRawB64, built, files, fetchBlob };
 }
 
 console.log('dash-ota core self-test\n');
 
-check('canonicalize is key-order independent', () => {
+await check('canonicalize is key-order independent', () => {
   assert.equal(canonicalize({ b: 1, a: { d: 4, c: 3 } }), canonicalize({ a: { c: 3, d: 4 }, b: 1 }));
   assert.equal(canonicalize({ a: 2, b: 1 }), '{"a":2,"b":1}');
 });
 
-check('Ed25519 sign → verify with embedded raw public key', () => {
-  const { signed, publicKeyRawB64 } = makeSignedBundle();
-  const embeddedKey = publicKeyFromRawB64(publicKeyRawB64);
-  assert.equal(verifyManifest(signed, embeddedKey), true);
+await check('Ed25519 sign → verify with embedded raw public key', async () => {
+  const { signed, publicKeyRawB64 } = await makeSignedRelease();
+  assert.equal(verifyManifest(signed, publicKeyFromRawB64(publicKeyRawB64)), true);
 });
 
-check('tampered manifest fails verification (integrity / anti-injection)', () => {
-  const { signed, publicKeyRawB64 } = makeSignedBundle();
-  const embeddedKey = publicKeyFromRawB64(publicKeyRawB64);
+await check('tampered manifest fails verification (integrity / anti-injection)', async () => {
+  const { signed, publicKeyRawB64 } = await makeSignedRelease();
   const tampered = { ...signed, manifest: { ...signed.manifest, bundleVersion: 999 } };
-  assert.equal(verifyManifest(tampered, embeddedKey), false);
+  assert.equal(verifyManifest(tampered, publicKeyFromRawB64(publicKeyRawB64)), false);
 });
 
-check('signature from a different key is rejected (forgery)', () => {
-  const { signed } = makeSignedBundle();
+await check('signature from a different key is rejected (forgery)', async () => {
+  const { signed } = await makeSignedRelease();
   const attacker = generateSigningKeyPair();
   assert.equal(verifyManifest(signed, publicKeyFromRawB64(attacker.publicKeyRawB64)), false);
 });
 
-check('AES-256-GCM roundtrip recovers the bundle', () => {
-  const { key, ciphertext, plaintext, signed } = makeSignedBundle();
-  const out = aesGcmDecrypt(key, signed.manifest.encryption.ivB64, ciphertext, signed.manifest.encryption.tagB64);
-  assert.deepEqual(out, plaintext);
+await check('release roundtrip: every file comes back byte-identical', async () => {
+  const { signed, publicKeyRawB64, fetchBlob, files } = await makeSignedRelease();
+  const out = await verifyReleaseV2(signed, fetchBlob, publicKeyFromRawB64(publicKeyRawB64));
+  assert.equal(out.files.length, files.length);
+  for (const original of files) {
+    const got = out.files.find((f) => f.path === original.path);
+    assert.ok(got, `missing ${original.path}`);
+    assert.deepEqual(got.data, original.data);
+  }
 });
 
-check('AES-GCM rejects wrong key and tampered ciphertext', () => {
-  const { ciphertext, signed } = makeSignedBundle();
-  const { ivB64, tagB64 } = signed.manifest.encryption;
-  assert.throws(() => aesGcmDecrypt(randomAesKey(), ivB64, ciphertext, tagB64));
-  const flipped = Buffer.from(ciphertext);
+await check('identical files share one blob (dedup within a release)', async () => {
+  const { built } = await makeSignedRelease();
+  assert.equal(built.manifest.files.length, 3);
+  assert.equal(built.blobs.size, 2, 'the duplicated asset must not be stored twice');
+  const a = built.manifest.files.find((f) => f.path === 'drawable-xhdpi/logo.png');
+  const b = built.manifest.files.find((f) => f.path === 'drawable-xxhdpi/logo.png');
+  assert.equal(a?.blob.sha256, b?.blob.sha256);
+  assert.equal(a?.sha256, b?.sha256);
+});
+
+await check('the bundle is compressed and marked; the manifest carries no payload bytes', async () => {
+  const { built, signed } = await makeSignedRelease();
+  const bundle = bundleEntry(built.manifest);
+  assert.ok(bundle);
+  assert.equal(bundle.blob.compression, 'zstd');
+  assert.ok(bundle.blob.size < bundle.size, 'compressed blob should be smaller than the plaintext');
+  // A manifest that embedded the payload would be enormous and would defeat the point.
+  assert.ok(JSON.stringify(signed.manifest).length < 4096);
+  assert.equal(JSON.stringify(signed.manifest).includes('stored'), false);
+});
+
+await check('a tampered blob is rejected before it is decrypted', async () => {
+  const { signed, publicKeyRawB64, built } = await makeSignedRelease();
+  const evil = async (sha: string): Promise<Buffer> => {
+    const good = built.blobs.get(sha);
+    assert.ok(good);
+    const flipped = Buffer.from(good);
+    flipped[0] = (flipped[0] ?? 0) ^ 0xff;
+    return flipped;
+  };
+  await assert.rejects(() => verifyReleaseV2(signed, evil, publicKeyFromRawB64(publicKeyRawB64)), /hash mismatch/);
+});
+
+await check('a blob from another release is rejected (AAD binds blob to release)', async () => {
+  const { publicKeyRawB64, signed } = await makeSignedRelease();
+  const other = await makeSignedRelease({ bundleId: 'bnd_other' });
+  // Serve the *other* release's blobs, relabelled with this manifest's hashes so the cheap checks
+  // pass and only the AEAD can catch it.
+  const swap = async (sha: string): Promise<Buffer> => {
+    const mine = signed.manifest.files.find((f) => f.blob.sha256 === sha);
+    assert.ok(mine);
+    const theirs = other.signed.manifest.files.find((f) => f.path === mine.path);
+    assert.ok(theirs);
+    const bytes = other.built.blobs.get(theirs.blob.sha256);
+    assert.ok(bytes);
+    return bytes;
+  };
+  await assert.rejects(() => verifyReleaseV2(signed, swap, publicKeyFromRawB64(publicKeyRawB64)));
+});
+
+await check('unencrypted releases still verify, and carry no iv/tag', async () => {
+  const { signed, publicKeyRawB64, fetchBlob, files } = await makeSignedRelease({ encrypt: false });
+  assert.equal(signed.manifest.encryption.mode, 'none');
+  for (const f of signed.manifest.files) {
+    assert.equal(f.blob.ivB64, undefined);
+    assert.equal(f.blob.tagB64, undefined);
+  }
+  const out = await verifyReleaseV2(signed, fetchBlob, publicKeyFromRawB64(publicKeyRawB64));
+  assert.equal(out.files.length, files.length);
+});
+
+await check('AES-GCM rejects a wrong key and a flipped byte', () => {
+  const key = randomAesKey();
+  const enc = aesGcmEncrypt(key, Buffer.from('secret'), Buffer.from('aad'));
+  assert.throws(() => aesGcmDecrypt(randomAesKey(), enc.ivB64, enc.ciphertext, enc.tagB64, Buffer.from('aad')));
+  assert.throws(() => aesGcmDecrypt(key, enc.ivB64, enc.ciphertext, enc.tagB64, Buffer.from('other-aad')));
+  const flipped = Buffer.from(enc.ciphertext);
   flipped[0] = (flipped[0] ?? 0) ^ 0xff;
-  const realKey = Buffer.from(signed.manifest.encryption.contentKeyB64, 'base64');
-  assert.throws(() => aesGcmDecrypt(realKey, ivB64, flipped, tagB64));
+  assert.throws(() => aesGcmDecrypt(key, enc.ivB64, flipped, enc.tagB64, Buffer.from('aad')));
 });
 
-check('per-file sha256 detects a swapped asset', () => {
-  const { plaintext, signed } = makeSignedBundle();
-  const fileHash = signed.manifest.files[0]?.sha256;
-  assert.equal(fileHash, sha256Hex(plaintext));
-  assert.notEqual(fileHash, sha256Hex(Buffer.from('malicious', 'utf8')));
+await check('path rules reject traversal, absolute and malformed paths', () => {
+  assert.equal(validatePath('drawable-xxhdpi/logo.png'), null);
+  assert.equal(validatePath('index.android.bundle'), null);
+  for (const bad of ['../escape', 'a/../b', '/etc/passwd', 'a//b', './x', 'a\\b', 'C:/x', '', 'a/\u0000b']) {
+    assert.notEqual(validatePath(bad), null, `expected ${JSON.stringify(bad)} to be rejected`);
+  }
+  assert.notEqual(validatePath('x'.repeat(513)), null);
 });
 
-check('HMAC-SHA256 primitive is deterministic + constant-time compared', () => {
+await check('manifest validation catches the mistakes that would reach a device', async () => {
+  const { signed } = await makeSignedRelease();
+  assert.deepEqual(validateManifestShape(signed.manifest), []);
+
+  const noBundle = { ...signed.manifest, files: signed.manifest.files.map((f) => ({ ...f, role: undefined })) };
+  assert.ok(validateManifestShape(noBundle).some((e) => e.includes('exactly one file')));
+
+  const traversal = {
+    ...signed.manifest,
+    files: signed.manifest.files.map((f, i) => (i === 0 ? { ...f, path: '../escape' } : f)),
+  };
+  assert.ok(validateManifestShape(traversal).some((e) => e.includes('".." segment')));
+
+  const v1 = { ...signed.manifest, schema: 1 };
+  assert.ok(validateManifestShape(v1).some((e) => e.includes('schema must be 2')));
+
+  const noPatches = { ...signed.manifest, patches: undefined };
+  assert.ok(validateManifestShape(noPatches).some((e) => e.includes('patches must be an array')));
+});
+
+await check('HMAC-SHA256 primitive is deterministic + constant-time compared', () => {
   const key = Buffer.from('mac-key').toString('base64');
   const a = hmacSha256Hex(key, 'POST/ota/v1/check|nonce|123');
   const b = hmacSha256Hex(key, 'POST/ota/v1/check|nonce|123');
@@ -121,14 +218,8 @@ check('HMAC-SHA256 primitive is deterministic + constant-time compared', () => {
   assert.equal(constantTimeEqualHex(a, hmacSha256Hex(key, 'tampered')), false);
 });
 
-check('manifest shape validation catches malformed input', () => {
-  const { signed } = makeSignedBundle();
-  assert.deepEqual(validateManifestShape(signed.manifest), []);
-  assert.ok(validateManifestShape({ schema: 2 }).length > 0);
-});
-
-check('eligibility: runtimeVersion gate blocks cross-generation OTA (the store-vs-OTA bug)', () => {
-  const { signed } = makeSignedBundle({ runtimeVersion: 'R2', bundleVersion: 5 });
+await check('eligibility: runtimeVersion gate blocks cross-generation OTA (the store-vs-OTA bug)', async () => {
+  const { signed } = await makeSignedRelease({ runtimeVersion: 'R2', bundleVersion: 5 });
   const r1Device = {
     platform: 'android' as const,
     channel: 'dev' as const,
@@ -142,8 +233,12 @@ check('eligibility: runtimeVersion gate blocks cross-generation OTA (the store-v
   assert.equal(isEligible(signed.manifest, { ...r1Device, runtimeVersion: 'R2' }).eligible, true);
 });
 
-check('eligibility: downgrade guard + app-version range', () => {
-  const { signed } = makeSignedBundle({ runtimeVersion: 'R2', bundleVersion: 3, targetAppVersions: '>=1.2.0 <1.3.0' });
+await check('eligibility: downgrade guard + app-version range', async () => {
+  const { signed } = await makeSignedRelease({
+    runtimeVersion: 'R2',
+    bundleVersion: 3,
+    targetAppVersions: '>=1.2.0 <1.3.0',
+  });
   const base = {
     platform: 'android' as const,
     channel: 'dev' as const,
@@ -161,7 +256,7 @@ check('eligibility: downgrade guard + app-version range', () => {
   );
 });
 
-check('semver-subset range matching', () => {
+await check('semver-subset range matching', () => {
   assert.equal(satisfiesAppVersionRange('1.2.5', '>=1.2.0 <1.3.0'), true);
   assert.equal(satisfiesAppVersionRange('1.3.0', '>=1.2.0 <1.3.0'), false);
   assert.equal(satisfiesAppVersionRange('1.2.9', '1.2.x'), true);
@@ -169,14 +264,14 @@ check('semver-subset range matching', () => {
   assert.equal(satisfiesAppVersionRange('9.9.9', '*'), true);
 });
 
-check('rollout bucket is deterministic and in range', () => {
+await check('rollout bucket is deterministic and in range', () => {
   const a = rolloutBucket('install-A', 'bnd_1');
   assert.equal(a, rolloutBucket('install-A', 'bnd_1'));
   assert.ok(a >= 0 && a < 100);
   assert.notEqual(rolloutBucket('install-A', 'bnd_1'), rolloutBucket('install-Z', 'bnd_1') - 0.5);
 });
 
-check('runtimeVersion fingerprint: stable + changes on native input change', () => {
+await check('runtimeVersion fingerprint: stable + changes on native input change', () => {
   const base = {
     nativeDependencies: ['react-native-reanimated@4.0.0', 'react-native-dash-ota@0.1.0'],
     nativeDirHashes: { android: 'aa', ios: 'bb' },

@@ -28,5 +28,8 @@
     "build": "tsc -p tsconfig.build.json",
     "selftest": "tsx src/selftest.ts",
     "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@mongodb-js/zstd": "^7.0.0"
   }
 }

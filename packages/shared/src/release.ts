@@ -1,106 +1,264 @@
 /**
- * High-level release packaging + opening — the reference implementation of the
- * trust-critical client path. The CLI uses {@link buildRelease} then signs; the RN native
- * client must mirror {@link openRelease} (verify signature → check ciphertext hash → decrypt
- * → unpack → verify every file hash) in Kotlin/Swift. Keeping it here means CLI, backend
- * tests, and the native port all agree on one format.
+ * Building and verifying a release.
+ *
+ * A release is a signed manifest plus one **blob per distinct file**, addressed by the hash of the
+ * file's plaintext. That is what makes an update small: the device already knows the hashes it
+ * holds, so it fetches only the blobs it is missing and hard-links the rest out of its previous
+ * slot. Two identical files anywhere in a release share one blob.
+ *
+ * {@link verifyReleaseV2} is the reference implementation of what the native client does. The CLI
+ * runs it in CI against a real published release, so a change that would break devices fails the
+ * build instead of the fleet.
  *
  * @module release
  */
 
-import { type ArchiveFile, packArchive, unpackArchive } from './archive.js';
+import {
+  ASSET_COMPRESSION_LEVEL,
+  BUNDLE_COMPRESSION_LEVEL,
+  type BlobCompression,
+  compressForBlob,
+  decompressBlob,
+} from './compression.js';
 import { aesGcmDecrypt, aesGcmEncrypt, type KeyObject, randomAesKey, sha256Hex } from './crypto.js';
-import { type Channel, type FileEntry, type Manifest, type Platform, type SignedManifest, verifyManifest } from './manifest.js';
+import {
+  type BlobEntry,
+  blobAad,
+  type Channel,
+  type EncryptionV2,
+  type FileEntryV2,
+  MANIFEST_SCHEMA,
+  type ManifestV2,
+  OTA_PROTOCOL,
+  type Platform,
+  type SignedManifest,
+  validateManifestShape,
+  verifyManifest,
+} from './manifest.js';
+import { validatePath } from './paths.js';
 
-/** Inputs to build (but not yet sign) a release. */
-export interface BuildReleaseInput {
+/** One file's plaintext, as read from the bundler output. */
+export interface ArchiveFile {
+  path: string;
+  data: Buffer;
+}
+
+/** Everything needed to build a release except the signature. */
+export interface BuildReleaseV2Input {
   bundleId: string;
   runtimeVersion: string;
   bundleVersion: number;
   platform: Platform;
   channel: Channel;
+  /** package name / bundle identifier; the device refuses a manifest for a different app. */
+  appId: string;
   mandatory: boolean;
   files: ArchiveFile[];
+  /** which of `files` is the JS bytecode the runtime loads. */
+  bundlePath: string;
   keyId: string;
+  /** default true. Off stores compressed plaintext, still hash-authenticated. */
+  encrypt?: boolean;
+  bundleCompressionLevel?: number;
+  assetCompressionLevel?: number;
   targetAppVersions?: string;
   minNativeBuild?: number;
   releaseNotes?: string;
 }
 
-/** A built (unsigned) release: the manifest plus the encrypted archive. */
-export interface BuiltRelease {
-  manifest: Manifest;
-  ciphertext: Buffer;
-  /** the AES content key (also embedded in the manifest); returned for convenience/tests. */
-  contentKey: Buffer;
+/** The unsigned manifest plus the bytes to upload. */
+export interface BuiltReleaseV2 {
+  manifest: ManifestV2;
+  /** blob sha256 → the exact bytes the blob endpoint must return. */
+  blobs: Map<string, Buffer>;
+  /** the release's content key, or null when unencrypted. Never persist this outside the manifest. */
+  contentKey: Buffer | null;
 }
 
 /**
- * Pack files → encrypt (AES-256-GCM) → build an unsigned manifest with per-file hashes.
- * Sign the returned `manifest` with the CLI's private key to get a {@link SignedManifest}.
- * @param input the release inputs
- * @returns the unsigned manifest + ciphertext + content key
+ * Build a release: hash, compress and (optionally) encrypt every distinct file, then assemble the
+ * manifest that describes them.
+ *
+ * @param input - see {@link BuildReleaseV2Input}.
+ * @returns the unsigned manifest, the blobs to upload, and the content key.
+ * @throws if a path is unsafe, a path repeats, or `bundlePath` is not among the files.
+ *
+ * @example
+ * const built = await buildReleaseV2({ ...meta, files, bundlePath: 'index.android.bundle' });
+ * const signed = signManifest(built.manifest, privateKeyPem);
  */
-export function buildRelease(input: BuildReleaseInput): BuiltRelease {
-  const archive = packArchive(input.files);
-  const contentKey = randomAesKey();
-  const enc = aesGcmEncrypt(contentKey, archive);
-  const files: FileEntry[] = [...input.files]
-    .sort((a, b) => a.path.localeCompare(b.path))
-    .map((f) => ({ path: f.path, sha256: sha256Hex(f.data), size: f.data.length }));
+export async function buildReleaseV2(input: BuildReleaseV2Input): Promise<BuiltReleaseV2> {
+  if (input.files.length === 0) throw new Error('buildReleaseV2: no files');
 
-  const manifest: Manifest = {
-    schema: 1,
+  const seenPaths = new Set<string>();
+  for (const file of input.files) {
+    const pathError = validatePath(file.path);
+    if (pathError) throw new Error(`buildReleaseV2: path ${JSON.stringify(file.path)} ${pathError}`);
+    if (seenPaths.has(file.path)) throw new Error(`buildReleaseV2: duplicate path ${JSON.stringify(file.path)}`);
+    seenPaths.add(file.path);
+  }
+  if (!seenPaths.has(input.bundlePath)) {
+    throw new Error(`buildReleaseV2: bundlePath ${JSON.stringify(input.bundlePath)} is not among the files`);
+  }
+
+  const encrypt = input.encrypt !== false;
+  const contentKey = encrypt ? randomAesKey() : null;
+  const encryption: EncryptionV2 = contentKey
+    ? { mode: 'aes-256-gcm', contentKeyB64: contentKey.toString('base64') }
+    : { mode: 'none' };
+
+  const blobs = new Map<string, Buffer>();
+  // Keyed by plaintext hash: identical files share one blob, so an asset duplicated across
+  // densities or a renamed file costs nothing extra.
+  const blobByPlaintext = new Map<string, BlobEntry>();
+
+  const entries: FileEntryV2[] = [];
+  for (const file of [...input.files].sort((a, b) => a.path.localeCompare(b.path))) {
+    const plaintextSha = sha256Hex(file.data);
+    const isBundle = file.path === input.bundlePath;
+
+    let blob = blobByPlaintext.get(plaintextSha);
+    if (!blob) {
+      const level = isBundle
+        ? (input.bundleCompressionLevel ?? BUNDLE_COMPRESSION_LEVEL)
+        : (input.assetCompressionLevel ?? ASSET_COMPRESSION_LEVEL);
+      const compressed = await compressForBlob(file.data, file.path, level);
+      const sealed = sealBlob(compressed.data, compressed.compression, contentKey, input.bundleId, plaintextSha);
+      blob = sealed.entry;
+      blobByPlaintext.set(plaintextSha, blob);
+      blobs.set(blob.sha256, sealed.stored);
+    }
+
+    entries.push({
+      path: file.path,
+      ...(isBundle ? { role: 'bundle' as const } : {}),
+      sha256: plaintextSha,
+      size: file.data.length,
+      blob,
+    });
+  }
+
+  const manifest: ManifestV2 = {
+    schema: MANIFEST_SCHEMA,
+    protocol: OTA_PROTOCOL,
     bundleId: input.bundleId,
     runtimeVersion: input.runtimeVersion,
     bundleVersion: input.bundleVersion,
     platform: input.platform,
     channel: input.channel,
+    appId: input.appId,
     createdAt: new Date().toISOString(),
     mandatory: input.mandatory,
     ...(input.minNativeBuild !== undefined ? { minNativeBuild: input.minNativeBuild } : {}),
     ...(input.targetAppVersions ? { targetAppVersions: input.targetAppVersions } : {}),
-    files,
-    encryption: {
-      algo: 'AES-256-GCM',
-      ivB64: enc.ivB64,
-      tagB64: enc.tagB64,
-      contentKeyB64: contentKey.toString('base64'),
-      ciphertextSha256: sha256Hex(enc.ciphertext),
-      ciphertextSize: enc.ciphertext.length,
-    },
+    encryption,
+    files: entries,
+    patches: [],
     ...(input.releaseNotes ? { releaseNotes: input.releaseNotes } : {}),
     keyId: input.keyId,
   };
-  return { manifest, ciphertext: enc.ciphertext, contentKey };
+
+  const problems = validateManifestShape(manifest);
+  if (problems.length > 0) throw new Error(`buildReleaseV2: produced an invalid manifest: ${problems.join('; ')}`);
+
+  return { manifest, blobs, contentKey };
 }
 
 /**
- * Open a downloaded release exactly as the native client must: verify the Ed25519 signature
- * against a **trusted** key, verify the ciphertext hash, decrypt, unpack, and verify every
- * file's hash + size. Throws (fails closed) on any discrepancy.
- * @param signed the signed manifest from /check
- * @param ciphertext the bytes downloaded from /download
- * @param trustedPublicKey a key from the app's embedded key ring (PEM or KeyObject)
- * @returns the verified payload files
- * @throws {Error} on signature/hash/decrypt/structure failure
+ * Encrypt (or not) one already-compressed blob.
+ *
+ * `entry` and `stored` are kept apart on purpose: `entry` is signed into the manifest, `stored` is
+ * uploaded. Carrying the bytes on the entry would serialise the whole payload into the manifest.
  */
-export function openRelease(signed: SignedManifest, ciphertext: Buffer, trustedPublicKey: string | KeyObject): ArchiveFile[] {
-  if (!verifyManifest(signed, trustedPublicKey)) throw new Error('openRelease: manifest signature invalid');
-  const m = signed.manifest;
-  if (sha256Hex(ciphertext) !== m.encryption.ciphertextSha256) throw new Error('openRelease: ciphertext hash mismatch');
-
-  const key = Buffer.from(m.encryption.contentKeyB64, 'base64');
-  const archive = aesGcmDecrypt(key, m.encryption.ivB64, ciphertext, m.encryption.tagB64);
-  const files = unpackArchive(archive);
-
-  if (files.length !== m.files.length) throw new Error('openRelease: file count mismatch');
-  const byPath = new Map(files.map((f) => [f.path, f]));
-  for (const expected of m.files) {
-    const file = byPath.get(expected.path);
-    if (!file) throw new Error(`openRelease: missing file ${expected.path}`);
-    if (file.data.length !== expected.size) throw new Error(`openRelease: size mismatch ${expected.path}`);
-    if (sha256Hex(file.data) !== expected.sha256) throw new Error(`openRelease: hash mismatch ${expected.path}`);
+function sealBlob(
+  data: Buffer,
+  compression: BlobCompression,
+  contentKey: Buffer | null,
+  bundleId: string,
+  plaintextSha: string,
+): { entry: BlobEntry; stored: Buffer } {
+  if (!contentKey) {
+    return { entry: { sha256: sha256Hex(data), size: data.length, compression }, stored: data };
   }
-  return files;
+  const sealed = aesGcmEncrypt(contentKey, data, blobAad(bundleId, plaintextSha));
+  return {
+    entry: {
+      sha256: sha256Hex(sealed.ciphertext),
+      size: sealed.ciphertext.length,
+      compression,
+      ivB64: sealed.ivB64,
+      tagB64: sealed.tagB64,
+    },
+    stored: sealed.ciphertext,
+  };
+}
+
+/** Fetches one blob's stored bytes by its hash. */
+export type BlobFetcher = (blobSha256: string) => Promise<Buffer>;
+
+/** A release reassembled and fully verified. */
+export interface VerifiedReleaseV2 {
+  files: ArchiveFile[];
+}
+
+/**
+ * Reassemble a release exactly as a device would, failing closed at every step.
+ *
+ * Order matters and mirrors the native client: signature first, then shape, then per-blob hash
+ * *before* decryption (so unverified bytes never reach the cipher), then the GCM tag, then the
+ * plaintext hash and size.
+ *
+ * @param signed - the signed manifest from `/check`.
+ * @param fetchBlob - returns a blob's stored bytes by hash.
+ * @param trustedPublicKey - the key the app embeds.
+ * @returns every file in the release, with verified plaintext.
+ * @throws on a bad signature, a malformed manifest, or any hash, size or tag mismatch.
+ */
+export async function verifyReleaseV2(
+  signed: SignedManifest,
+  fetchBlob: BlobFetcher,
+  trustedPublicKey: string | KeyObject,
+): Promise<VerifiedReleaseV2> {
+  if (!verifyManifest(signed, trustedPublicKey)) throw new Error('manifest signature did not verify');
+  const manifest = signed.manifest;
+  const problems = validateManifestShape(manifest);
+  if (problems.length > 0) throw new Error(`manifest is invalid: ${problems.join('; ')}`);
+
+  const contentKey =
+    manifest.encryption.mode === 'aes-256-gcm'
+      ? Buffer.from(manifest.encryption.contentKeyB64, 'base64')
+      : null;
+
+  // One fetch per distinct blob, so a duplicated file is downloaded once.
+  const plaintextCache = new Map<string, Buffer>();
+  const files: ArchiveFile[] = [];
+
+  for (const entry of manifest.files) {
+    let data = plaintextCache.get(entry.blob.sha256);
+    if (!data) {
+      const stored = await fetchBlob(entry.blob.sha256);
+      if (stored.length !== entry.blob.size) {
+        throw new Error(`blob ${entry.blob.sha256}: size ${stored.length} != ${entry.blob.size}`);
+      }
+      if (sha256Hex(stored) !== entry.blob.sha256) throw new Error(`blob ${entry.blob.sha256}: hash mismatch`);
+
+      const compressed = contentKey
+        ? aesGcmDecrypt(
+            contentKey,
+            entry.blob.ivB64 ?? '',
+            stored,
+            entry.blob.tagB64 ?? '',
+            blobAad(manifest.bundleId, entry.sha256),
+          )
+        : stored;
+      data = await decompressBlob(compressed, entry.blob.compression);
+
+      if (data.length !== entry.size) throw new Error(`${entry.path}: size ${data.length} != ${entry.size}`);
+      if (sha256Hex(data) !== entry.sha256) throw new Error(`${entry.path}: plaintext hash mismatch`);
+      plaintextCache.set(entry.blob.sha256, data);
+    }
+    files.push({ path: entry.path, data });
+  }
+
+  return { files };
 }
