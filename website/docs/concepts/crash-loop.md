@@ -44,3 +44,31 @@ loading. A bundle that white-screens after load must still count as **unhealthy*
 
 → [markHealthy & crash-loop in the client](/docs/react-native/mark-healthy) ·
 [Server-side auto-pause](/docs/guides/staged-rollout)
+
+## What counts as a boot attempt (0.3.2+)
+
+The bundle resolver runs **once per process**. React Native reads the host's `getJSBundleFile()` /
+`bundleURL()` five or six times per launch; before 0.3.2 each read ran the resolver and spent an
+attempt, so the breaker fired on the **first** boot of every bundle and disabled it.
+
+An attempt is spent when a trial bundle is selected at launch. It is **refunded** at the next launch
+if the previous process both:
+
+1. reached JS — the TurboModule initialised, which dash-ota records as the *beacon*; and
+2. was then paused — `Activity.onPause` on Android, `willResignActive` on iOS.
+
+Coming back to the foreground **clears** the pause mark, so only a pause the app never returned from
+counts as the user leaving. A bundle that pauses, resumes and then crashes is not forgiven, and the
+transient resign-active iOS raises for a notification banner or an incoming call is discarded.
+
+A crash cannot produce the pair, because the pause callback never runs. So a crash before JS and a
+crash after JS both still count, while a user swiping the app away does not. Two real crashes
+disable a bundle; force-killing the app any number of times does not.
+
+Pause is used rather than background because an iOS swipe-kill from the app switcher only guarantees
+resign-active.
+
+**Known limit.** A bundle that is backgrounded and then crashes *while in the background*, before it
+was ever marked healthy, is forgiven. Keeping `autoMarkHealthyMs` short (or calling `markHealthy()`
+from your first real screen) closes that window, because a healthy bundle leaves the trial state
+entirely and stops counting attempts.

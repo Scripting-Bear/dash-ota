@@ -2,12 +2,15 @@ import Foundation
 
 /// On-disk slot + state manager (the iOS twin of the Kotlin `DashOtaStore`). Holds the
 /// active / last-known-good / staged / pending bundles + crash-loop counters, and implements
-/// the launch-time apply / revert logic. GC keeps only current + last-known-good.
+/// the launch-time apply / revert logic. GC keeps every slot the state still references.
 final class DashOtaStore {
   static let shared = DashOtaStore()
   private let maxBootAttempts = 2
   private let bundleFile = "main.jsbundle"
   private let fm = FileManager.default
+  /// Bumped when the on-disk state shape changes in a way older slots cannot survive.
+  private let stateSchema = 2
+  private let markLock = NSLock()
 
   private var baseDir: URL {
     let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("dash-ota")
@@ -24,11 +27,51 @@ final class DashOtaStore {
 
   func loadState() -> [String: Any] {
     guard let data = try? Data(contentsOf: stateURL),
-          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+          let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      return ["stateSchema": stateSchema]
+    }
+    // Slots written before schema 2 were staged by a loader that spent a boot attempt on every host
+    // read of the bundle path, so the breaker disabled them on their first boot and deleted the slot
+    // dir under the running bundle. Discard, don't migrate: the embedded bundle runs and the next
+    // check re-downloads.
+    if (obj["stateSchema"] as? Int ?? 1) != stateSchema { return ["stateSchema": stateSchema] }
     return obj
   }
 
-  func saveState(_ state: [String: Any]) {
+  /// JS initialised the TurboModule in this process, so the running bundle reached its runtime.
+  func markBeacon() { markLaunch("beaconAt") }
+
+  /// The app resigned active. A crash never gets to write this, which is what separates
+  /// "the user swiped the app away" from "the bundle died".
+  func markPaused() { markLaunch("pausedAt") }
+
+  /// The app came back to the foreground, so whatever paused it was an interruption, not the user
+  /// leaving. Without this a bundle that resigns active, becomes active and *then* crashes would be
+  /// forgiven; it also discards the transient resign-active iOS raises for a banner or a call.
+  func clearPaused() {
+    markLock.lock()
+    defer { markLock.unlock() }
+    var state = loadState()
+    guard var launch = state["launch"] as? [String: Any], launch["pausedAt"] != nil else { return }
+    launch["pausedAt"] = nil
+    state["launch"] = launch
+    saveState(state)
+  }
+
+  private func markLaunch(_ key: String) {
+    markLock.lock()
+    defer { markLock.unlock() }
+    var state = loadState()
+    var launch = (state["launch"] as? [String: Any]) ?? [:]
+    guard launch[key] == nil else { return }
+    launch[key] = Int(Date().timeIntervalSince1970 * 1000)
+    state["launch"] = launch
+    saveState(state)
+  }
+
+  func saveState(_ input: [String: Any]) {
+    var state = input
+    state["stateSchema"] = stateSchema
     guard let data = try? JSONSerialization.data(withJSONObject: state) else { return }
     let tmp = baseDir.appendingPathComponent("state.json.tmp")
     try? data.write(to: tmp)
@@ -77,7 +120,7 @@ final class DashOtaStore {
     state["trial"] = false
     state["bootAttempts"] = 0
     saveState(state)
-    gc()
+    gc(state)
   }
 
   func rollback() -> Bool {
@@ -87,7 +130,7 @@ final class DashOtaStore {
     state["bootAttempts"] = 0
     state["pending"] = nil
     saveState(state)
-    gc()
+    gc(state)
     return true
   }
 
@@ -145,7 +188,6 @@ final class DashOtaStore {
     if cleaned.dropped {
       state = cleaned.state
       saveState(state)
-      gc()
     }
 
     // A reload the user asked for is not evidence of a crash. Consume the marker and let this launch
@@ -153,10 +195,17 @@ final class DashOtaStore {
     // a perfectly healthy bundle into the crash-loop breaker and blocklists it. Genuine cold starts
     // still count, so a bundle that really crashes on boot is still caught.
     let userReload = (state["userReload"] as? Bool) == true
-    if userReload {
-      state["userReload"] = nil
-      saveState(state)
-    }
+    if userReload { state["userReload"] = nil }
+
+    // Marks left behind by the PREVIOUS process. Reaching JS and then resigning active is what a
+    // user swiping the app away looks like; a crash cannot produce both, because the resign-active
+    // callback never runs. So that launch is refunded below instead of counting as a crash.
+    let prev = state["launch"] as? [String: Any]
+    let forgiven = prev?["beaconAt"] != nil && prev?["pausedAt"] != nil
+    state["launch"] = [String: Any]()
+
+    // The only safe moment to sweep slots: nothing is mapped yet this process.
+    gc(state)
 
     if let pending = slot(state, "pending") {
       state["current"] = pending
@@ -166,9 +215,10 @@ final class DashOtaStore {
       saveState(state)
       return bundlePath(pending)
     }
-    guard let current = slot(state, "current") else { return nil }
+    guard let current = slot(state, "current") else { saveState(state); return nil }
     if (state["trial"] as? Bool) == true {
-      let attempts = (state["bootAttempts"] as? Int) ?? 0
+      var attempts = (state["bootAttempts"] as? Int) ?? 0
+      if forgiven && attempts > 0 { attempts -= 1 }
       if attempts >= maxBootAttempts {
         // Crash loop → disable the bundle (never re-stage) + remember it to report once.
         let failedId = (current["bundleId"] as? String) ?? ""
@@ -181,15 +231,14 @@ final class DashOtaStore {
         state["trial"] = false
         state["bootAttempts"] = 0
         saveState(state)
-        gc()
         return lkg.flatMap { bundlePath($0) }
       }
-      if !userReload {
-        state["bootAttempts"] = attempts + 1
-        saveState(state)
-      }
+      if !userReload { attempts += 1 }
+      state["bootAttempts"] = attempts
+      saveState(state)
       return bundlePath(current)
     }
+    saveState(state)
     return bundlePath(current)
   }
 
@@ -231,13 +280,22 @@ final class DashOtaStore {
     return path
   }
 
-  private func gc() {
-    let state = loadState()
+  /// Delete slot dirs no state key still references.
+  ///
+  /// The keep-set covers `pending` and `staged` too: keeping only current + last-known-good meant a
+  /// bundle downloaded inside the health window was deleted by the `markHealthy` sweep before it
+  /// could ever be applied.
+  ///
+  /// NEVER call this from the crash-loop branch — the bundle being demoted there is mapped by the
+  /// process running it, and deleting its dir leaves the JS running with every require()d asset
+  /// gone (the 2026-09-08 production incident).
+  private func gc(_ state: [String: Any]) {
     // Keep-set by bundleId (stable across container migrations) — matching on stored absolute
     // paths would consider every live dir unknown after a migration and delete current + LKG.
     let keep = Set(
-      [slot(state, "current")?["bundleId"] as? String, slot(state, "lastKnownGood")?["bundleId"] as? String]
-        .compactMap { $0 }
+      ["current", "lastKnownGood", "pending", "staged"]
+        .compactMap { slot(state, $0)?["bundleId"] as? String }
+        .filter { !$0.isEmpty }
     )
     let dirs = (try? fm.contentsOfDirectory(at: bundlesDir, includingPropertiesForKeys: nil)) ?? []
     for d in dirs where !keep.contains(d.lastPathComponent) { try? fm.removeItem(at: d) }

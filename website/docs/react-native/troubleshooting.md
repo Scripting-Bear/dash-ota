@@ -9,6 +9,7 @@ title: Troubleshooting
 |---|---|---|
 | `enroll failed: 400` / no `devicePublicKeyB64` | native module not wired (stale build) or `getEnrollToken` returns nothing while `requireEnrollAuth` is on | Clean rebuild (regenerate codegen + native); supply `getEnrollToken`, or set `OTA_REQUIRE_ENROLL_AUTH=false` for local dev |
 | `enroll failed: 401` | enroll token rejected | Implement `verifyEnrollToken` on the backend; pass a valid session token from `getEnrollToken` |
+| **All bundled images vanish right after an update applies**, and the update reverts on the next launch | `react-native-dash-ota` **< 0.3.2**: every host read of the bundle path spent a crash-loop attempt, so the breaker fired on the first boot and deleted the slot directory while the bytecode was still mapped | Upgrade to **0.3.2 or later**. This is native code, so it needs a store release — an OTA cannot deliver it |
 | `manifest signature did not verify` | the OTA was signed with a key the app doesn't embed | Embed the matching `ota_public_keys`; ensure the channel/key line up |
 | "no update" when you expect one | `runtimeVersion`/`channel` mismatch, rollout bucket, or `bundleVersion` not greater | Confirm the published OTA's `runtimeVersion` equals the binary's; check `dash-ota list` |
 | OTA never applies | applied on **cold start** only; debug build uses Metro | Use a **release** build; relaunch twice |

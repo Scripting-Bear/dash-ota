@@ -5,6 +5,12 @@ import Foundation
 /// chosen before React starts. Runs the crash-loop circuit breaker. Returns nil to fall back
 /// to the embedded bundle (fail closed).
 ///
+/// Resolved ONCE per process. `RCTReactNativeFactory` reads `delegate.bundleURL` more than once
+/// per launch and the template's `sourceURL(for:)` forwards to `bundleURL()` too, so an
+/// un-memoised resolve spends a boot attempt per call and trips the crash-loop breaker on the
+/// very first launch of a new bundle — which `gc()`s the slot directory out from under the running
+/// bundle (all bundled images vanish) and reverts the update on the next launch.
+///
 /// Usage in the host `AppDelegate.swift`:
 /// ```
 /// import DashOta
@@ -18,9 +24,18 @@ import Foundation
 /// ```
 @objc(DashOtaBundleLoader)
 public class DashOtaBundleLoader: NSObject {
+  private static let lock = NSLock()
+  private static var resolvedOnce = false
+  private static var resolved: URL?
+
   /// The active OTA bundle URL, or nil to fall back to the embedded bundle.
   @objc public static func bundleURL() -> URL? {
-    guard let path = DashOtaStore.shared.resolveBundleAtLaunch() else { return nil }
-    return URL(fileURLWithPath: path)
+    lock.lock()
+    defer { lock.unlock() }
+    if !resolvedOnce {
+      resolved = DashOtaStore.shared.resolveBundleAtLaunch().map { URL(fileURLWithPath: $0) }
+      resolvedOnce = true
+    }
+    return resolved
   }
 }

@@ -1,6 +1,9 @@
 package com.dashota
 
+import android.app.Activity
+import android.app.Application
 import android.content.Intent
+import android.os.Bundle
 import android.util.Base64
 import android.util.Log
 import com.facebook.react.ReactApplication
@@ -23,6 +26,35 @@ import javax.net.ssl.HttpsURLConnection
  */
 class DashOtaModule(private val reactContext: ReactApplicationContext) :
   NativeDashOtaSpec(reactContext) {
+
+  /**
+   * Called by React Native when JS first touches this module. Two jobs, both feeding the crash-loop
+   * breaker in [DashOtaStore.resolveBundleAtLaunch]:
+   *
+   *  - reaching here at all proves the running bundle got as far as its JS runtime (the *beacon*);
+   *  - registering the pause callback lets the store tell a user-driven exit from a crash.
+   *
+   * Without the pair, a user force-killing the app twice inside the health window walks a perfectly
+   * healthy bundle into the breaker and gets it blocklisted.
+   */
+  override fun initialize() {
+    super.initialize()
+    DashOtaStore.markBeacon(reactContext)
+    val app = reactContext.applicationContext as? Application ?: return
+    synchronized(DashOtaModule::class.java) {
+      if (lifecycleRegistered) return
+      lifecycleRegistered = true
+    }
+    app.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+      override fun onActivityPaused(activity: Activity) = DashOtaStore.markPaused(reactContext)
+      override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+      override fun onActivityStarted(activity: Activity) = Unit
+      override fun onActivityResumed(activity: Activity) = DashOtaStore.clearPaused(reactContext)
+      override fun onActivityStopped(activity: Activity) = Unit
+      override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+      override fun onActivityDestroyed(activity: Activity) = Unit
+    })
+  }
 
   override fun getName(): String = NAME
 
@@ -300,5 +332,9 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
 
   companion object {
     const val NAME = NativeDashOtaSpec.NAME
+
+    /** Process-wide: the module can be recreated across reloads, the callback must not stack up. */
+    @Volatile
+    private var lifecycleRegistered = false
   }
 }

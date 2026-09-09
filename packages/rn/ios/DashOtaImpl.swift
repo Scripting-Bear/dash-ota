@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Security
+import UIKit
 
 /// URLSession delegate that pins the server certificate for the bundle download: the request is
 /// rejected unless a certificate in the chain matches a configured `base64(SHA-256(DER cert))` pin.
@@ -44,6 +45,39 @@ private final class DashOtaPinningDelegate: NSObject, URLSessionDelegate {
 /// in native and off the JS thread. Throwing methods surface to Obj-C as `(NSError**)`.
 @objc(DashOtaImpl)
 public class DashOtaImpl: NSObject {
+  private var resignObserver: NSObjectProtocol?
+  private var activeObserver: NSObjectProtocol?
+
+  /// Constructed when React Native creates the TurboModule, i.e. the first time JS touches it.
+  /// Two jobs, both feeding the crash-loop breaker in `DashOtaStore.resolveBundleAtLaunch()`:
+  ///
+  ///  - being constructed at all proves the running bundle reached its JS runtime (the *beacon*);
+  ///  - the resign-active observer lets the store tell a user-driven exit from a crash.
+  ///
+  /// Without the pair, a user swiping the app away twice inside the health window walks a perfectly
+  /// healthy bundle into the breaker and gets it blocklisted. `willResignActive` is used rather
+  /// than `didEnterBackground` because a swipe-kill from the app switcher only guarantees the
+  /// former.
+  @objc public override init() {
+    super.init()
+    DashOtaStore.shared.markBeacon()
+    resignObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.willResignActiveNotification,
+      object: nil,
+      queue: nil
+    ) { _ in DashOtaStore.shared.markPaused() }
+    activeObserver = NotificationCenter.default.addObserver(
+      forName: UIApplication.didBecomeActiveNotification,
+      object: nil,
+      queue: nil
+    ) { _ in DashOtaStore.shared.clearPaused() }
+  }
+
+  deinit {
+    if let o = resignObserver { NotificationCenter.default.removeObserver(o) }
+    if let o = activeObserver { NotificationCenter.default.removeObserver(o) }
+  }
+
   @objc public static func runtimeVersion() -> String { DashOtaConfig.runtimeVersion }
   @objc public static func channel() -> String { DashOtaConfig.channel }
   @objc public static func serverUrl() -> String { DashOtaConfig.serverUrl }

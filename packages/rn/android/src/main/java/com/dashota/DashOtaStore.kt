@@ -14,6 +14,13 @@ object DashOtaStore {
   private const val MAX_BOOT_ATTEMPTS = 2
   private const val BUNDLE_FILE = "index.android.bundle"
 
+  /**
+   * Bumped when the on-disk state shape changes in a way older slots cannot survive. State written
+   * by a different schema is discarded on load rather than migrated.
+   */
+  private const val STATE_SCHEMA = 2
+  private const val STATE_SCHEMA_KEY = "stateSchema"
+
   fun baseDir(ctx: Context): File = File(ctx.filesDir, "dash-ota").apply { mkdirs() }
   fun bundlesDir(ctx: Context): File = File(baseDir(ctx), "bundles").apply { mkdirs() }
   fun tmpDir(ctx: Context): File = File(baseDir(ctx), "tmp").apply { mkdirs() }
@@ -21,8 +28,8 @@ object DashOtaStore {
 
   fun loadState(ctx: Context): JSONObject {
     val f = stateFile(ctx)
-    if (!f.exists()) return JSONObject()
-    return try {
+    if (!f.exists()) return freshState()
+    val parsed = try {
       JSONObject(f.readText())
     } catch (_: Exception) {
       // Corrupt state.json (torn write / disk pressure). Treat as fresh — the app keeps booting the
@@ -30,16 +37,66 @@ object DashOtaStore {
       // silently disables OTA on this install forever. Delete so later writes start clean.
       // (iOS already behaves this way via `try?` in DashOtaStore.swift.)
       f.delete()
-      JSONObject()
+      return freshState()
     }
+    // Slots written before schema 2 were staged by a loader that spent a boot attempt on every host
+    // read of the bundle path (RN reads it 5-6x per launch), so the breaker disabled them on their
+    // very first boot and deleted the slot dir under the running bundle. Discard, don't migrate:
+    // the embedded bundle runs and the next check re-downloads.
+    if (parsed.optInt(STATE_SCHEMA_KEY, 1) != STATE_SCHEMA) return freshState()
+    return parsed
   }
 
+  private fun freshState(): JSONObject = JSONObject().put(STATE_SCHEMA_KEY, STATE_SCHEMA)
+
   fun saveState(ctx: Context, state: JSONObject) {
+    state.put(STATE_SCHEMA_KEY, STATE_SCHEMA)
     val tmp = File(baseDir(ctx), "state.json.tmp")
     tmp.writeText(state.toString())
     if (!tmp.renameTo(stateFile(ctx))) {
       stateFile(ctx).writeText(state.toString())
       tmp.delete()
+    }
+  }
+
+  /**
+   * JS initialised the TurboModule in this process, so the running bundle reached its runtime.
+   * Half of the crash-loop forgiveness rule — see [resolveBundleAtLaunch].
+   */
+  fun markBeacon(ctx: Context) = markLaunch(ctx, "beaconAt")
+
+  /**
+   * The foreground was taken from us (Activity paused). A crash never gets to write this, which is
+   * what separates "the user swiped the app away" from "the bundle died".
+   */
+  fun markPaused(ctx: Context) = markLaunch(ctx, "pausedAt")
+
+  /**
+   * The app came back to the foreground, so whatever paused it was an interruption, not the user
+   * leaving. Without this a bundle that pauses, resumes and *then* crashes would be forgiven; it
+   * also discards the transient resign-active iOS raises for a banner or an incoming call.
+   */
+  fun clearPaused(ctx: Context) {
+    synchronized(this) {
+      val state = loadState(ctx)
+      val launch = state.optJSONObject("launch") ?: return
+      if (!launch.has("pausedAt")) return
+      launch.remove("pausedAt")
+      state.put("launch", launch)
+      saveState(ctx, state)
+    }
+  }
+
+  /** One-shot per process per key; cheap enough to write through to disk immediately. */
+  private fun markLaunch(ctx: Context, key: String) {
+    synchronized(this) {
+      val state = loadState(ctx)
+      val launch = state.optJSONObject("launch") ?: JSONObject()
+      if (!launch.has(key)) {
+        launch.put(key, System.currentTimeMillis())
+        state.put("launch", launch)
+        saveState(ctx, state)
+      }
     }
   }
 
@@ -90,7 +147,7 @@ object DashOtaStore {
     state.put("trial", false)
     state.put("bootAttempts", 0)
     saveState(ctx, state)
-    gc(ctx)
+    gc(ctx, state)
   }
 
   /** Manual revert to last-known-good (or embedded if none). */
@@ -101,7 +158,7 @@ object DashOtaStore {
     state.put("bootAttempts", 0)
     state.put("pending", JSONObject.NULL)
     saveState(ctx, state)
-    gc(ctx)
+    gc(ctx, state)
     return true
   }
 
@@ -141,7 +198,7 @@ object DashOtaStore {
       state.put("trial", false)
       state.put("bootAttempts", 0)
       saveState(ctx, state)
-      gc(ctx)
+      gc(ctx, state)
     }
     return dropped
   }
@@ -162,10 +219,17 @@ object DashOtaStore {
     // a perfectly healthy bundle into the crash-loop breaker and blocklists it. Genuine cold starts
     // still count, so a bundle that really crashes on boot is still caught.
     val userReload = state.optBoolean("userReload", false)
-    if (userReload) {
-      state.remove("userReload")
-      saveState(ctx, state)
-    }
+    if (userReload) state.remove("userReload")
+
+    // Marks left behind by the PREVIOUS process. Reaching JS and then being paused is what a user
+    // swiping the app away looks like; a crash cannot produce both, in either order, because the
+    // pause callback never runs. So that launch is refunded below instead of counting as a crash.
+    val prev = state.optJSONObject("launch")
+    val forgiven = prev != null && prev.has("beaconAt") && prev.has("pausedAt")
+    state.put("launch", JSONObject())
+
+    // The only safe moment to sweep slots: nothing is mapped yet this process.
+    gc(ctx, state)
 
     slot(state, "pending")?.let { pending ->
       // Apply the pending bundle on trial.
@@ -177,9 +241,10 @@ object DashOtaStore {
       return bundlePath(ctx, pending)
     }
 
-    val current = slot(state, "current") ?: return null
+    val current = slot(state, "current") ?: run { saveState(ctx, state); return null }
     if (state.optBoolean("trial", false)) {
-      val attempts = state.optInt("bootAttempts", 0)
+      var attempts = state.optInt("bootAttempts", 0)
+      if (forgiven && attempts > 0) attempts -= 1
       if (attempts >= MAX_BOOT_ATTEMPTS) {
         // Crash loop: the trial bundle never marked healthy → DISABLE it (never re-stage) and
         // revert to last-known-good; remember it so the recovered app can report the failure.
@@ -193,15 +258,14 @@ object DashOtaStore {
         state.put("trial", false)
         state.put("bootAttempts", 0)
         saveState(ctx, state)
-        gc(ctx)
         return lkg?.let { bundlePath(ctx, it) }
       }
-      if (!userReload) {
-        state.put("bootAttempts", attempts + 1)
-        saveState(ctx, state)
-      }
+      if (!userReload) attempts += 1
+      state.put("bootAttempts", attempts)
+      saveState(ctx, state)
       return bundlePath(ctx, current)
     }
+    saveState(ctx, state)
     return bundlePath(ctx, current)
   }
 
@@ -255,13 +319,22 @@ object DashOtaStore {
     return if (f.exists()) f.absolutePath else null
   }
 
-  private fun gc(ctx: Context) {
-    val state = loadState(ctx)
-    // Keep by bundleId (dir names), not stored absolute paths — parity with iOS.
-    val keep = listOfNotNull(
-      slot(state, "current")?.optString("bundleId"),
-      slot(state, "lastKnownGood")?.optString("bundleId")
-    ).toSet()
+  /**
+   * Delete slot dirs no state key still references. Keyed by bundleId (dir names), not stored
+   * absolute paths — parity with iOS.
+   *
+   * The keep-set covers `pending` and `staged` too: keeping only current + last-known-good meant a
+   * bundle downloaded inside the health window was deleted by the `markHealthy` sweep before it
+   * could ever be applied.
+   *
+   * NEVER call this from the crash-loop branch. The bundle being demoted there is memory-mapped by
+   * the process running it, so deleting its dir leaves the JS running with every require()d asset
+   * gone (ENOENT) — the 2026-09-08 production incident.
+   */
+  private fun gc(ctx: Context, state: JSONObject) {
+    val keep = listOf("current", "lastKnownGood", "pending", "staged")
+      .mapNotNull { key -> slot(state, key)?.optString("bundleId")?.takeIf { it.isNotEmpty() } }
+      .toSet()
     bundlesDir(ctx).listFiles()?.forEach { dir ->
       if (dir.name !in keep) dir.deleteRecursively()
     }
