@@ -24,8 +24,8 @@ order. If a session ends, the next agent resumes from the Status board below.
 |---|---|---|---|---|
 | 0 | Investigation, root cause, spec, loader fix | rn | this file + spec | ✅ done |
 | 1 | **M1** boot accounting (rn 0.3.2) | rn | `2026-09-09-m1-boot-accounting.md` (marked implemented) | ✅ done — `253b165` + `fa6694a`, verified both platforms |
-| 2 | **M2a** shared: manifest v2, zstd, per-blob crypto | shared | `2026-09-09-m2-shared-backend.md` Tasks 1–4 | ⬜ next |
-| 3 | **M2b** backend: router, providers, store, routes, tombstone | backend | same file Tasks 5–8; routes onward from spec §5.3–§5.5 | ⬜ |
+| 2 | **M2a** shared: manifest v2, zstd, per-blob crypto | shared | `2026-09-09-m2-shared-backend.md` Tasks 1–4 | ✅ done — `d97d3de` on **`feat/ota-v2`** |
+| 3 | **M2b** backend: router, providers, store, routes, tombstone | backend | same file Tasks 5–8; routes onward from spec §5.3–§5.5 | ⬜ **next — main is red until this lands** |
 | 4 | **M2c** CLI: 3-step publish, `verify-release` | cli | `2026-09-09-m2-cli-docs.md` Tasks 1–7 (full) | ⬜ |
 | 5 | **M2d** rn native + JS (0.4.0) | rn | none — spec §5.6, §5.7 | ⬜ |
 | 6 | **M2e** documentation site | website | `2026-09-09-m2-cli-docs.md` Tasks 8–13 (full) | ⬜ |
@@ -33,6 +33,20 @@ order. If a session ends, the next agent resumes from the Status board below.
 | 8 | Rollout in go-trade | consuming app | this file, Rollout section | ⬜ |
 
 Phases 2–6 are one wire migration and must ship together. Phase 1 ships on its own, first.
+
+**Phase 2 onward lives on the branch `feat/ota-v2`, not `main`.** Removing the v1 format from
+`@dash-ota/shared` breaks the backend's compile immediately (its `/admin/publish` reads
+`encryption.ciphertextSha256`, and two test files import `buildRelease`/`openRelease`), so the two
+phases cannot land separately without a red tree. Merge to `main` when phase 3 compiles and
+`npm run ci` is green again.
+
+**Measured on the real go-trade bundle (121 files) with phase 2 in place:**
+
+| Scenario | Before | After phase 2 | After phase 7 (deltas) |
+|---|---|---|---|
+| Full download | 27.92 MB | 9.44 MB | ~8 MB |
+| One-line JS change | 27.92 MB | 7.28 MB (120 of 121 files reused) | ~2.4 MB |
+| One asset changed | 27.92 MB | that asset alone | same |
 
 ---
 
