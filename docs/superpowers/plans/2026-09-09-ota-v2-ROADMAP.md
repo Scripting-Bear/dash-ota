@@ -29,7 +29,7 @@ order. If a session ends, the next agent resumes from the Status board below.
 | 1 | **M1** boot accounting (rn 0.3.2) | rn | `2026-09-09-m1-boot-accounting.md` (marked implemented) | ✅ done — `253b165` + `fa6694a`, verified both platforms |
 | 2 | **M2a** shared: manifest v2, zstd, per-blob crypto | shared | `2026-09-09-m2-shared-backend.md` Tasks 1–4 | ✅ done — `d97d3de` on **`feat/ota-v2`** |
 | 3 | **M2b** backend: router, providers, store, routes, tombstone | backend | built from spec §5.3–§5.5 | ✅ done — `8a8cbcd`, 27 e2e + 8 express checks |
-| 4 | **M2c** CLI: 3-step publish | cli | `2026-09-09-m2-cli-docs.md` Tasks 1–7 | ✅ publish done — `2b3e34f`. `verify-release` NOT built |
+| 4 | **M2c** CLI: 3-step publish | cli | `2026-09-09-m2-cli-docs.md` Tasks 1–7 | ✅ publish done — `2b3e34f`, proven against a live backend `7402fcc`. `verify-release` NOT built |
 | 5 | **M2d** rn native + JS (0.4.0) | rn | spec §5.6, §5.7 | 🟡 **Android + JS done** (`e02acb6`, 11 Kotlin tests). **iOS NOT started** |
 | 6 | **M2e** documentation site | website | `2026-09-09-m2-cli-docs.md` Tasks 8–13 (full) | ⬜ — docs still describe v1 |
 | 7 | **M3** bytecode deltas | all | none — spec §6, gated on spikes | ⬜ |
@@ -39,22 +39,32 @@ Phases 2–6 are one wire migration and must ship together. Phase 1 ships on its
 
 ## ⚠️ READ THIS BEFORE DOING ANYTHING — reassessed 2026-09-10
 
-**Do not start iOS next.** Backend, CLI and the Android client are each green against their own
-tests and have **never spoken to each other**. No device has ever fetched a v2 release. Porting ~600
-lines of Android design into Swift before the design is proven duplicates any error into a second
-language.
+**Stage 1 of the end-to-end proof is done** (`dde6000`, `5f3beff`, `7402fcc`). The real CLI binary
+has published to a real HTTP backend over a socket. What that run found, all fixed:
 
-**Do this first — the end-to-end proof:**
+1. `npm run ci` never touched the compiled artifacts — every suite ran under `--conditions source`.
+   `shared/dist` was a July v1 compile still holding `archive.js`; `cli/dist/index.mjs` was the
+   matching v1 binary. `npx dash-ota` would have published v1 against a v2 backend. `ci` now builds.
+2. The CLI build had been broken since the v2 port (esbuild cannot inline the native
+   `@mongodb-js/zstd`). Nothing in CI ran it, so nobody knew.
+3. The binary's usage text still documented v1 flags and omitted the now-required `--app-id`.
+4. `keygen` prompted unconditionally, hanging any scripted run with the private key already on disk.
+5. Server-side dedup did not exist and could not: blobs were namespaced per release. Fixed by a
+   global `blobs/<sha>` namespace plus convergent encryption — see spec §5.2 and §5.3.
 
-1. Run the v2 backend locally (`packages/backend/src/server.ts`), register the dev signing key.
-2. Point a go-trade devRelease build at it (`OTA_SERVER_URL` → `http://10.0.2.2:<port>` for the
-   emulator) and rebuild.
-3. Publish a real release with the **actual CLI binary** (never yet run as a binary):
-   `dash-ota publish --app-id com.kksl.gotradeindia.development …`.
-4. Install, check, download, apply. Assert every asset renders — that is the 2026-09-08 incident.
-5. **The money shot:** publish a second release with ONE asset changed and confirm the device
-   downloads only that blob. Device-side reuse has only ever been measured in a throwaway script,
-   never observed on hardware.
+**Measured on the wire, not in a script:**
+
+| | before | after |
+|---|---|---|
+| publish of a release differing by one asset | 6 of 6 blobs | **1 of 6 blobs** |
+| store holding two such releases | 12 blobs / 2.0 MB | **7 blobs / 1.0 MB** |
+| device holding release 1 fetching release 2 | — | **1 of 6 files, 30.3 KB of 1000.3 KB (97% saved)** |
+
+**Stage 2 — still to do, and still before iOS:** no Kotlin client has ever fetched a v2 release.
+Run a go-trade devRelease build against a local v2 backend (`OTA_SERVER_URL` →
+`http://10.0.2.2:<port>`), install, check, download, apply, and assert every asset renders — that
+is the 2026-09-08 incident. Then publish a second release with one asset changed and confirm the
+device fetches only that blob.
 
 **Then** fix the memory shape below, **then** port to iOS.
 
