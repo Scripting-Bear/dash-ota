@@ -115,9 +115,17 @@ is missing a promised file.
 ### iOS — done (`2c6f795`)
 
 Apple has no zstd, so upstream's single-file decompress-only build is vendored in
-`packages/rn/ios/vendor`, pinned to 1.5.7 to match `zstd-jni:1.5.7-4`. Rejected alternatives: a
-second codec for iOS only (~29% larger payloads, two code paths, and a complication for deltas),
-and a third-party pod.
+`packages/rn/ios/vendor`, pinned to 1.5.7 to match `zstd-jni:1.5.7-4`. **This reverses the plan's
+`libzstd` pod decision** — that pod is individually owned, has one version (1.5.5, pushed
+2023-11-22), cannot match 1.5.7, and shows no CVE response, which is a poor dependency for a
+library that verifies signatures before executing code. The other rejected option was a second
+codec for iOS only (~29% larger payloads, two code paths, a complication for deltas).
+
+The vendored symbols are **renamed** to `DashOtaZ_*` (`npm run gen:zstd-prefix`). Pods usually link
+statically, and an un-namespaced copy shares global `ZSTD_*` names with any libzstd in the host
+app; Apple's static linker may then satisfy our calls from the *other* archive, so the decoder we
+pinned would not be the one running. Visibility flags do not help — they govern who may see a
+symbol, not what it is called. `lint:native` fails if any un-prefixed global escapes.
 
 The zstd call is Objective-C because the pod builds as a framework, where Xcode refuses bridging
 headers outright. A public Objective-C header in the pod's umbrella is how Swift reaches C there.
@@ -213,7 +221,7 @@ boot-beacon design would let a crash-after-JS loop forever. See the spec for the
 | CLI bundling | esbuild `--packages=bundle` cannot inline the native addon; `--external:@mongodb-js/zstd` works alongside it | ran esbuild, import preserved |
 | zstd-jni Android artifact | `com.github.luben:zstd-jni:1.5.7-16@aar` exists on Maven Central | listed the repo |
 | **zstd-jni 16 KB alignment** | **Passes.** All four ABIs report LOAD align `0x4000` | parsed the ELF program headers from the AAR |
-| iOS zstd | `libzstd` CocoaPod available; `ZSTD_DCtx_refPrefix` present for M3 | vendor docs |
+| iOS zstd | ~~`libzstd` CocoaPod~~ **superseded 2026-09-10**: that pod is individually owned, one version (1.5.5), last pushed 2023-11-22, so it cannot match Android's 1.5.7 and shows no CVE response. Upstream's decompress-only amalgamation is vendored and symbol-namespaced instead. `ZSTD_DCtx_refPrefix` is present in it (compiled and called) so M3 is unaffected. | `a6f886a`, `packages/rn/ios/vendor/README.md` |
 | go-trade native policy gate | **Not rendered in the app.** `nativePolicy` is unused in its source | grepped the app |
 
 The 16 KB result means the "vendor a decompress-only libzstd" fallback is **not needed**. Drop it
@@ -261,7 +269,7 @@ No detailed plan. Build from spec §5.6 and §5.7. The shape:
 - Slot record gains `bundleSha256` and `files: {path: sha256}`.
 - Staging survives process death and resumes; a different `bundleId` clears it.
 - Typed error codes; progress events via `onDashOtaProgress`.
-- Android `implementation("com.github.luben:zstd-jni:1.5.7-16@aar")`; iOS `libzstd` pod.
+- Android `implementation("com.github.luben:zstd-jni:1.5.7-4@aar")`; iOS vendors upstream's decompress-only amalgamation (see `packages/rn/ios/vendor/README.md`) — **not** the `libzstd` pod.
 - **Exit:** fresh install downloads everything; a second update downloads far less; kill mid-download resumes; a corrupted blob yields a typed error and no partial slot.
 
 ### Phase 6 — M2e documentation
