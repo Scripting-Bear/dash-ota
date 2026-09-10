@@ -28,9 +28,10 @@
     "lint:fix": "eslint packages/shared packages/backend packages/cli --fix",
     "format": "prettier --write \"packages/*/src/**/*.{ts,tsx,mjs,js}\"",
     "format:check": "prettier --check \"packages/*/src/**/*.{ts,tsx,mjs,js}\"",
-    "ci": "npm run typecheck && npm run lint && npm run format:check && npm run build && npm run test",
+    "ci": "npm run typecheck && npm run lint && npm run lint:native && npm run format:check && npm run build && npm run test",
     "test:android": "cd packages/rn/example/android && ./gradlew :react-native-dash-ota:testDebugUnitTest",
-    "test:dist": "tsx packages/cli/src/dist.test.ts"
+    "test:dist": "tsx packages/cli/src/dist.test.ts",
+    "lint:native": "node scripts/check-native-sources.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

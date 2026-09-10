@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { ScrollView, Text, View, StyleSheet, Pressable, ActivityIndicator } from 'react-native';
+import { ScrollView, Text, View, StyleSheet, Pressable, ActivityIndicator, Image } from 'react-native';
 import {
   DashOtaProvider,
   useOtaUpdate,
@@ -19,6 +19,40 @@ function makeMemoryStorage(): OtaStorage {
       map.set(k, v);
     },
   };
+}
+
+/**
+ * The release marker. Bump it in the OTA bundle so the running release is visible on screen.
+ */
+const RELEASE_MARKER = 'embedded (APK)';
+
+/**
+ * Bundled images, the thing the 2026-09-08 incident destroyed: after an OTA applied, every
+ * `require`d image resolved to a path inside a slot directory the crash-loop breaker had already
+ * deleted, so all of them rendered blank. They are on screen here so any regression is visible
+ * rather than theoretical.
+ */
+const ASSETS = [
+  { name: 'logo', source: require('./assets/logo.png') },
+  { name: 'chart', source: require('./assets/chart.png') },
+  { name: 'avatar', source: require('./assets/avatar.png') },
+];
+
+function AssetStrip() {
+  return (
+    <View style={styles.card}>
+      <Text style={styles.label}>BUNDLED ASSETS</Text>
+      <Text style={styles.notes}>All three must render after an update. A blank tile is the incident.</Text>
+      <View style={styles.assetRow}>
+        {ASSETS.map((asset) => (
+          <View key={asset.name} style={styles.assetCell}>
+            <Image source={asset.source} style={styles.asset} resizeMode="cover" />
+            <Text style={styles.assetLabel}>{asset.name}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
 }
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -69,13 +103,16 @@ function Dashboard() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>dash-ota ⚡ OTA v1</Text>
+      <Text style={styles.title}>dash-ota ⚡ example</Text>
 
       <View style={[styles.channelBadge, channelStyle(ota.channel)]}>
         <Text style={styles.channelText}>{ota.channel.toUpperCase()} FLAVOUR</Text>
       </View>
 
+      <AssetStrip />
+
       <View style={styles.card}>
+        <Row label="release" value={RELEASE_MARKER} />
         <Row label="status" value={ota.status} />
         <Row label="bundle" value={ota.currentBundle ? `v${ota.currentBundle.bundleVersion} ${ota.currentBundle.isEmbedded ? '(embedded)' : ''}` : '—'} />
         <Row label="runtimeVersion" value={ota.currentBundle?.runtimeVersion ?? '—'} />
@@ -122,6 +159,10 @@ export default function App() {
 
 const styles = StyleSheet.create({
   container: { padding: 20, paddingTop: 64, gap: 16 },
+  assetRow: { flexDirection: 'row', gap: 10 },
+  assetCell: { alignItems: 'center', gap: 4 },
+  asset: { width: 84, height: 84, borderRadius: 8, backgroundColor: '#dfe3e8' },
+  assetLabel: { fontSize: 11, color: '#666' },
   title: { fontSize: 22, fontWeight: '700' },
   channelBadge: { alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
   channelText: { color: 'white', fontWeight: '800', letterSpacing: 1 },

@@ -155,6 +155,14 @@ interface CompiledRoute {
 }
 
 /** A minimal router supporting exact paths and `:name` parameters. */
+/**
+ * @param result - a handler's result.
+ * @returns the HTTP status it will be written with.
+ */
+function resultStatus(result: HandlerResult): number {
+  return 'status' in result && typeof result.status === 'number' ? result.status : 200;
+}
+
 export class Router {
   private readonly routes: CompiledRoute[] = [];
 
@@ -266,8 +274,20 @@ export class Router {
         return JSON.parse(rawBody.toString('utf8') || 'null') as T;
       },
     };
-    return matched.route.handler(ctx);
+    const result = await matched.route.handler(ctx);
+    this.accessLog?.(ctx.method, ctx.path, resultStatus(result));
+    return result;
   }
+
+  /**
+   * Optional access log, called once per dispatched request with its final status.
+   *
+   * Off by default: a library that writes to someone else's stdout is a nuisance. The standalone
+   * server turns it on when `OTA_ACCESS_LOG=true`, which is how you see which blobs a device
+   * actually fetched — the difference between a device reusing a file and re-downloading it is
+   * invisible from the client side.
+   */
+  accessLog?: (method: string, path: string, status: number) => void;
 
   private write(res: import('node:http').ServerResponse, result: HandlerResult): void {
     writeNodeResult(res, result);

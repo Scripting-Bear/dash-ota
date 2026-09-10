@@ -17,7 +17,11 @@ import { Store } from './store.js';
 
 /** Build the configured router. Exported so tests can dispatch in-process. */
 export function createRouter(store: Store, config: BackendConfig): Router {
-  return new Router().register(createOtaRoutes(store, config));
+  const router = new Router().register(createOtaRoutes(store, config));
+  if (process.env.OTA_ACCESS_LOG === 'true') {
+    router.accessLog = (method, path, status) => console.log(`[dash-ota] ${status} ${method} ${path}`);
+  }
+  return router;
 }
 
 /** Start the server from the environment (used by `npm run backend`). */

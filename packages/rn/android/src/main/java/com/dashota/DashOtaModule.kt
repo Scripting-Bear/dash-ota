@@ -155,7 +155,7 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
           val path = entries.getJSONObject(i).getString("path")
           val bad = invalidPath(path)
           if (bad != null) {
-            promise.reject("path_invalid", "manifest path ${'$'}path ${'$'}bad")
+            promise.reject("path_invalid", "manifest path $path $bad")
             return@Thread
           }
         }
@@ -167,6 +167,8 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
 
         var bytesDone = 0L
         var bytesTotal = 0L
+        // Set false the first time the platform refuses a hard link; see the reuse branch below.
+        var canHardLink = true
         for (i in 0 until entries.length()) {
           val e = entries.getJSONObject(i)
           if (!have.containsKey(e.getString("sha256"))) bytesTotal += e.getJSONObject("blob").getLong("size")
@@ -188,17 +190,26 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
 
           val reusable = have[plainSha]
           if (reusable != null) {
-            // Hard-link rather than copy: the bytes are already on this filesystem. Then re-hash
-            // anyway — "already on disk" is never evidence that a file is correct.
+            // The file is already on this device, so reuse the bytes instead of fetching them.
+            //
+            // A hard link would make that free, and it is tried once per download — but SELinux
+            // denies `link` to untrusted_app on app_data_file, so on a normal Android build it
+            // always fails with EACCES and the copy below is the real path. Measured on an
+            // API 34 emulator: `avc: denied { link } ... tclass=file`. Probing once rather than
+            // per file keeps a 120-asset reuse from emitting 120 identical failures.
             out.delete()
-            try {
-              Os.link(reusable.absolutePath, out.absolutePath)
-            } catch (_: Exception) {
-              reusable.copyTo(out, overwrite = true)
+            if (canHardLink) {
+              try {
+                Os.link(reusable.absolutePath, out.absolutePath)
+              } catch (e: Exception) {
+                canHardLink = false
+                Log.w(TAG, "reuse: hard links unavailable (${e.javaClass.simpleName}: ${e.message}); copying instead")
+              }
             }
+            if (!out.exists()) reusable.copyTo(out, overwrite = true)
             if (out.length() != size.toLong() || DashOtaCrypto.sha256HexOfFile(out) != plainSha) {
               out.delete()
-              promise.reject("file_hash_mismatch", "reused file ${'$'}path did not verify")
+              promise.reject("file_hash_mismatch", "reused file $path did not verify")
               return@Thread
             }
             continue
@@ -207,12 +218,12 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
           val blob = entry.getJSONObject("blob")
           val blobSha = blob.getString("sha256")
           val blobSize = blob.getLong("size")
-          val part = File(DashOtaStore.tmpDir(reactContext), "${'$'}blobSha.part")
+          val part = File(DashOtaStore.tmpDir(reactContext), "$blobSha.part")
 
-          downloadBlob("${'$'}blobBaseUrl/${'$'}blobSha", downloadToken, part, blobSize)
+          downloadBlob("$blobBaseUrl/$blobSha", downloadToken, part, blobSize)
           if (DashOtaCrypto.sha256HexOfFile(part) != blobSha) {
             part.delete()
-            promise.reject("blob_hash_mismatch", "blob ${'$'}blobSha did not verify")
+            promise.reject("blob_hash_mismatch", "blob $blobSha did not verify")
             return@Thread
           }
 
@@ -232,13 +243,13 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
           }
           if (blob.getString("compression") == "zstd") bytes = DashOtaCrypto.zstdDecompress(bytes, size)
           if (bytes.size != size || DashOtaCrypto.sha256Hex(bytes) != plainSha) {
-            promise.reject("file_hash_mismatch", "file ${'$'}path did not verify")
+            promise.reject("file_hash_mismatch", "file $path did not verify")
             return@Thread
           }
 
           // Write beside the target and rename, so a kill never leaves a short file that a later
           // resume would mistake for a complete one.
-          val tmpOut = File(staging, "${'$'}path.part")
+          val tmpOut = File(staging, "$path.part")
           tmpOut.parentFile?.mkdirs()
           tmpOut.writeBytes(bytes)
           if (!tmpOut.renameTo(out)) {
@@ -284,7 +295,7 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
     if (path.startsWith("/")) return "is absolute"
     for (segment in path.split("/")) {
       if (segment.isEmpty()) return "contains an empty segment"
-      if (segment == "." || segment == "..") return "contains a ${'$'}segment segment"
+      if (segment == "." || segment == "..") return "contains a $segment segment"
     }
     return null
   }
@@ -326,7 +337,7 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
     val conn = URL(urlStr).openConnection() as HttpURLConnection
     conn.requestMethod = "GET"
     conn.setRequestProperty("x-ota-download-token", token)
-    if (have > 0L) conn.setRequestProperty("Range", "bytes=${'$'}have-")
+    if (have > 0L) conn.setRequestProperty("Range", "bytes=$have-")
     conn.connectTimeout = 15000
     conn.readTimeout = 30000
     try {
@@ -336,13 +347,13 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
       // A server that ignores the Range header answers 200 with the whole object; start over
       // rather than appending it to what we already had.
       val append = code == 206
-      if (code != 200 && code != 206) throw RuntimeException("download HTTP ${'$'}code")
+      if (code != 200 && code != 206) throw RuntimeException("download HTTP $code")
       if (!append) have = 0L
 
       val remaining = expectedSize - have
       val declared = conn.contentLengthLong
       if (declared >= 0L && declared != remaining) {
-        throw RuntimeException("Content-Length ${'$'}declared != expected ${'$'}remaining")
+        throw RuntimeException("Content-Length $declared != expected $remaining")
       }
 
       conn.inputStream.use { input ->
@@ -356,7 +367,7 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
             if (total > expectedSize) throw RuntimeException("download exceeded the signed blob size")
             out.write(buf, 0, n)
           }
-          if (total != expectedSize) throw RuntimeException("download truncated: ${'$'}total != ${'$'}expectedSize")
+          if (total != expectedSize) throw RuntimeException("download truncated: $total != $expectedSize")
         }
       }
     } finally {
@@ -463,6 +474,9 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
 
   companion object {
     const val NAME = NativeDashOtaSpec.NAME
+
+    /** Shared with DashOtaStore so one `adb logcat -s DashOta` shows the whole update path. */
+    private const val TAG = "DashOta"
 
     /** Process-wide: the module can be recreated across reloads, the callback must not stack up. */
     @Volatile
