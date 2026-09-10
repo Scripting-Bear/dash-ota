@@ -205,27 +205,33 @@ Secondary problem: the payload is 29.9 MB uncompressed per update (27.4 MB bytec
 Two of these came from an adversarial review by an outside model, which also caught that the first
 boot-beacon design would let a crash-after-JS loop forever. See the spec for the corrected rule.
 
-## Facts already verified — do not re-derive
+## Facts ledger — re-swept 2026-09-10
 
-| Fact | Value | How verified |
+Every row below was re-checked on 2026-09-10 unless marked otherwise. **The previous table was
+stale**: it was written against an older go-trade build and its payload figures were ~5% high, and
+one number (`zstd -19` of the bytecode) disagreed with the rest of the docs. Anything not
+re-verified says so explicitly rather than carrying an unearned "verified" label.
+
+| Fact | Value | Checked how, 2026-09-10 |
 |---|---|---|
-| Payload split | 27.4 MB bytecode + 2.5 MB assets (121 files) = 29.9 MB | measured on a real publish |
-| gzip whole payload | 11.7 MB | `tar \| gzip -9` |
-| zstd -19 of bytecode | 7.6 MB | `zstd -19` |
-| zstd patch, small JS change | 2.4 MB at `--ultra -22 --long=27`, 2.8 MB at `-19` | `zstd --patch-from` |
-| zstd patch, near-identical builds | 48 KB | same |
-| Patch generation time | ~11 s for the 27 MB bytecode | `/usr/bin/time` |
-| Node zstd binding | `@mongodb-js/zstd@^7.0.0`, **async** `compress(buf, level?)` / `decompress(buf)` | read its `index.d.ts` from the npm tarball |
-| Its engine floor | `node >= 20.19.0` (dev machine runs 20.20) | its `package.json` |
-| Node built-in zstd | Unusable: no dictionary support, and only from Node 22.15 | Node docs |
-| CLI bundling | esbuild `--packages=bundle` cannot inline the native addon; `--external:@mongodb-js/zstd` works alongside it | ran esbuild, import preserved |
-| zstd-jni Android artifact | `com.github.luben:zstd-jni:1.5.7-16@aar` exists on Maven Central | listed the repo |
-| **zstd-jni 16 KB alignment** | **Passes.** All four ABIs report LOAD align `0x4000` | parsed the ELF program headers from the AAR |
-| iOS zstd | ~~`libzstd` CocoaPod~~ **superseded 2026-09-10**: that pod is individually owned, one version (1.5.5), last pushed 2023-11-22, so it cannot match Android's 1.5.7 and shows no CVE response. Upstream's decompress-only amalgamation is vendored and symbol-namespaced instead. `ZSTD_DCtx_refPrefix` is present in it (compiled and called) so M3 is unaffected. | `a6f886a`, `packages/rn/ios/vendor/README.md` |
-| go-trade native policy gate | **Not rendered in the app.** `nativePolicy` is unused in its source | grepped the app |
+| Payload split | **25.76 MB bytecode + 2.16 MB assets (121 files) = 27.92 MB** — was recorded as 27.4 + 2.5 = 29.9 | rebuilt the real go-trade bundle with the CLI and measured |
+| gzip whole payload | **11.15 MB** — was 11.7 | `tar \| gzip -9` |
+| zstd -19 of bytecode | **7.28 MB** — was 7.6. The 7.6 figure is stale and appears in three docs; 7.28 matches what the pipeline actually produces | `zstd -19` on the rebuilt bundle |
+| Hermes rebuild determinism | **NOT deterministic.** The same source rebuilt gives a different sha256 — but the two differ by only a **3.5 KB** zstd patch | built the same source twice and diffed |
+| Patch generation time | **8.4 s** for the 25.76 MB bytecode (was ~11 s for a larger bundle) | `/usr/bin/time zstd -19 --patch-from` |
+| zstd patch, small JS change | 2.4 MB at `--ultra -22 --long=27` | **NOT re-verified** — needs a source change in the consuming app, and its 27.4 MB base is now 25.76 MB, so treat as indicative only |
+| zstd patch, near-identical builds | 48 KB | **NOT re-verified**; the rebuild case measured 3.5 KB today |
+| Node zstd binding | `@mongodb-js/zstd@7.0.0`, async `compress` / `decompress`, both confirmed to return Promises and round-trip | ran it |
+| Its engine floor | `node >= 20.19.0`; this machine runs 20.20.0 | read `engines` from the installed package |
+| Node built-in zstd | Absent on Node 20 (`'zstdCompress' in zlib` is false); arrives in 22.15 | ran it |
+| CLI bundling | esbuild cannot inline the native addon; `--external:@mongodb-js/zstd` works | done for real — the CLI builds and its `dist` tests pass |
+| zstd-jni Android artifact | **`1.5.7-4` is what ships** (the old row said 1.5.7-16, which is not what `build.gradle` pins) | read `packages/rn/android/build.gradle` |
+| **16 KB alignment** | **Passes.** 1.5.7-4 *and* 1.5.7-16 report LOAD align `0x4000` on all four ABIs, and all **11** native libraries in the built APK are aligned | parsed ELF program headers from both AARs and from the shipped APK |
+| iOS zstd | ~~`libzstd` CocoaPod~~ **superseded**: individually owned, one version (1.5.5, pushed 2023-11-22), cannot match 1.5.7, no CVE response. Upstream's decompress-only amalgamation is vendored and symbol-namespaced. `ZSTD_DCtx_refPrefix` is present in it, so M3 is unaffected | queried the CocoaPods trunk API; compiled and called `refPrefix`; see `a6f886a` |
+| go-trade native policy gate | **Still not rendered.** `nativePolicy` appears 0 times in `src/`; dash-ota is used in `src/utils/ota.ts` and `ProfileMain.tsx` | grepped the app |
 
-The 16 KB result means the "vendor a decompress-only libzstd" fallback is **not needed**. Drop it
-from phase 5 unless a future zstd-jni bump regresses.
+The 16 KB result concerns **Android only**. iOS vendors a decoder for a different reason — Apple
+has no zstd at all — so that is not a fallback and is not optional.
 
 ---
 

@@ -14,7 +14,7 @@ memory-mapped bytecode kept running: `drawable-*/…png` beside it vanished (ENO
 Glide), and the bundle was blocklisted.
 
 Measured payload for the same app: 29.9 MB per update, uncompressed, single AES blob — 27.4 MB
-Hermes bytecode + 2.5 MB PNG (121 files). zstd -19 of the bytecode alone is 7.6 MB; a zstd
+Hermes bytecode + 2.5 MB PNG (121 files). zstd -19 of the bytecode alone is 7.28 MB (re-measured 2026-09-10); a zstd
 `--patch-from` frame between two builds with a small JS change is 2.4–2.8 MB, and 48 KB for
 near-identical builds.
 
@@ -307,10 +307,30 @@ Errors are typed (`sig_invalid`, `app_mismatch`, `path_invalid`, `blob_hash_mism
   --runtime-version R` extracts `assets/index.android.bundle` / `main.jsbundle`, uploads it to
   `native-builds/{platform}/{nativeBuild}` (encrypted with a server-side key when encryption is
   on), records its sha256.
-- Gates before implementation: (a) decode spike on Android emulator + iOS simulator with peak RSS
-  measured, (b) patch sizes across the real 1.0.3 → 1.0.4 → 1.0.5 bytecodes built from tags, (c)
-  zstd-jni 16 KB ELF alignment check, else vendor decompress-only libzstd built with
-  `-Wl,-z,max-page-size=16384`.
+- **Patches are computed over the plaintext bytecode, never over stored ciphertext.** The patch is
+  then sealed like any other blob. Diffing ciphertext would produce noise, not a delta.
+- **The content hash stays authoritative; a patch is only a way of obtaining it.** After applying,
+  the target's `sha256` must match the manifest before the file is installable — the patch tool
+  reporting success is not the correctness boundary. That keeps the door open to other patch
+  algorithms later without touching the update model.
+- **No patch chains on device.** Never apply A→B→C to reach C. Every patch is direct from a base
+  the device already holds; if none matches, download the full blob. Chaining multiplies CPU,
+  temp storage, failure points and rollback complexity for a case the full blob already covers.
+- **Patch bases are opportunistic and capped.** The device is never required to retain historical
+  bundles so a patch stays applicable, and the server keeps patches only for a bounded set of
+  recent bases.
+- Gates before implementation: (a) decode spike on Android emulator + iOS simulator with **peak RSS
+  measured, not just apply latency** — the base, the output and the patch buffers can be resident at
+  once, which on a 25.76 MB base is the real risk on a low-end device; (b) patch sizes across at
+  least three transition kinds (same source rebuilt, small JS change, large JS change) rather than
+  one; (c) a size threshold below which the patch is preferred, chosen from those measurements.
+
+**Hermes output is not reproducible** (measured 2026-09-10): rebuilding identical source yields a
+different sha256, so the bundle blob never dedupes across republishes — assets still do. This is a
+storage cost, not a correctness problem, and it is small: the two rebuilds differ by a **3.5 KB**
+zstd patch, which is also strong evidence that byte-level locality is excellent and therefore that
+delta patching should pay off. Chasing byte-reproducible Hermes is not a prerequisite for any of
+this and should not gate M3.
 
 ## 7. CLI
 

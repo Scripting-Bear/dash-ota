@@ -166,6 +166,38 @@ await check('the same file seals to the same blob in every release (cross-releas
   for (const [sha, bytes] of a.built.blobs) assert.deepEqual(b.built.blobs.get(sha), bytes);
 });
 
+await check('every distinct blob gets its own nonce, and identical blobs share one', async () => {
+  // Deterministic nonces are what make the store deduplicate, and they are also the one place this
+  // design could go catastrophically wrong: AES-GCM does not survive a nonce reused across two
+  // DIFFERENT messages under the same key. The nonce is derived from the hash of the bytes actually
+  // sealed, so equal nonce implies equal message. This pins that.
+  const files: ArchiveFile[] = [
+    { path: 'index.android.bundle', data: Buffer.from('bundle bytes', 'utf8') },
+    { path: 'a.txt', data: Buffer.from('one', 'utf8') },
+    { path: 'b.txt', data: Buffer.from('two', 'utf8') },
+    { path: 'c.bin', data: randomBytes(2048) },
+    { path: 'd.bin', data: randomBytes(2048) },
+    // Same bytes as a.txt at another path: must collapse to one blob, one nonce.
+    { path: 'nested/a-copy.txt', data: Buffer.from('one', 'utf8') },
+  ];
+  const { signed } = await makeSignedRelease({ files, bundlePath: 'index.android.bundle' });
+
+  const ivByBlob = new Map<string, string>();
+  for (const file of signed.manifest.files) {
+    const iv = file.blob.ivB64;
+    assert.ok(iv, `${file.path} has no nonce`);
+    const seen = ivByBlob.get(iv);
+    if (seen !== undefined) {
+      assert.equal(seen, file.blob.sha256, `two different blobs share nonce ${iv} — this breaks AES-GCM`);
+    }
+    ivByBlob.set(iv, file.blob.sha256);
+  }
+
+  const distinctBlobs = new Set(signed.manifest.files.map((f) => f.blob.sha256));
+  assert.equal(ivByBlob.size, distinctBlobs.size, 'nonce count must equal distinct blob count');
+  assert.equal(distinctBlobs.size, 5, 'the duplicated file should not have produced its own blob');
+});
+
 await check('a blob sealed under a different content key is rejected', async () => {
   const { publicKeyRawB64, signed } = await makeSignedRelease();
   const other = await makeSignedRelease({ bundleId: 'bnd_other', contentKey: Buffer.alloc(32, 9) });
