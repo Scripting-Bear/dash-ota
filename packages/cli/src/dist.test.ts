@@ -63,6 +63,15 @@ check('the CLI binary exists and runs', () => {
   assert.ok(usage.includes('--app-id'), 'binary usage has no --app-id — this is a pre-v2 build');
 });
 
+check('keygen never prompts without --interactive', () => {
+  const work = mkdtempSync(join(tmpdir(), 'dash-ota-keygen-'));
+  const out = runCli(['keygen', '--out', join(work, '.keys'), '--key-id', 'key_quiet', '--no-encrypt'], work);
+  // The prompt used to be unconditional: under a TTY that hangs a CI keygen forever, and it only
+  // looked harmless here because execFileSync hands the child a closed stdin.
+  assert.ok(!out.includes('Register this public key'), 'keygen asked a question in non-interactive mode');
+  assert.ok(existsSync(join(work, '.keys', 'key_quiet.private.pem')), 'keygen wrote no private key');
+});
+
 check('the binary publishes a schema-2 release offline', () => {
   const work = mkdtempSync(join(tmpdir(), 'dash-ota-dist-'));
   const bundleDir = join(work, 'bundle');

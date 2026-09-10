@@ -84,7 +84,12 @@ async function cmdKeygen(args: ParsedArgs): Promise<void> {
   console.log(`\n  keyId:            ${keyId}`);
   console.log(`  publicKeyRawB64:  ${kp.publicKeyRawB64}`);
   console.log(`\n  → Embed publicKeyRawB64 in the app (per channel) and KEEP THE PRIVATE KEY in CI secrets only.`);
-  if (await askYesNo('\nRegister this public key with the backend now?', false)) {
+  // Only ever prompt when the caller asked for a conversation. A bare `keygen` in CI must not
+  // block on a question nobody can answer; `--register` is the scripted way to say yes.
+  const register = flagBool(args, 'register')
+    ? true
+    : flagBool(args, 'interactive') && (await askYesNo('\nRegister this public key with the backend now?', false));
+  if (register) {
     const { server, adminToken } = resolveServer(args);
     await adminPost(server, '/admin/keys', { keyId, publicKeyRawB64: kp.publicKeyRawB64 }, adminToken);
     console.log(`✓ registered ${keyId} with ${server}`);
@@ -387,7 +392,7 @@ function printHelp(): void {
   console.log(`dash-ota <command> [flags]
 
   keygen          --out .keys --key-id key_dev_1 [--passphrase <p> | --no-encrypt]
-                  [--server --admin-token]
+                  [--register --server --admin-token] [--interactive]
   register-key    --key-id <id> (--pub <rawB64> | --key-file <.public.json>)
   fingerprint     --project <path>
   bundle          --project <path> --platform ios|android --out <dir> [--dev] [--hermes]
