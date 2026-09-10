@@ -28,14 +28,56 @@ order. If a session ends, the next agent resumes from the Status board below.
 | 0 | Investigation, root cause, spec, loader fix | rn | this file + spec | ✅ done |
 | 1 | **M1** boot accounting (rn 0.3.2) | rn | `2026-09-09-m1-boot-accounting.md` (marked implemented) | ✅ done — `253b165` + `fa6694a`, verified both platforms |
 | 2 | **M2a** shared: manifest v2, zstd, per-blob crypto | shared | `2026-09-09-m2-shared-backend.md` Tasks 1–4 | ✅ done — `d97d3de` on **`feat/ota-v2`** |
-| 3 | **M2b** backend: router, providers, store, routes, tombstone | backend | same file Tasks 5–8; routes onward from spec §5.3–§5.5 | ⬜ **next — main is red until this lands** |
-| 4 | **M2c** CLI: 3-step publish, `verify-release` | cli | `2026-09-09-m2-cli-docs.md` Tasks 1–7 (full) | ⬜ |
-| 5 | **M2d** rn native + JS (0.4.0) | rn | none — spec §5.6, §5.7 | ⬜ |
-| 6 | **M2e** documentation site | website | `2026-09-09-m2-cli-docs.md` Tasks 8–13 (full) | ⬜ |
+| 3 | **M2b** backend: router, providers, store, routes, tombstone | backend | built from spec §5.3–§5.5 | ✅ done — `8a8cbcd`, 27 e2e + 8 express checks |
+| 4 | **M2c** CLI: 3-step publish | cli | `2026-09-09-m2-cli-docs.md` Tasks 1–7 | ✅ publish done — `2b3e34f`. `verify-release` NOT built |
+| 5 | **M2d** rn native + JS (0.4.0) | rn | spec §5.6, §5.7 | 🟡 **Android + JS done** (`e02acb6`, 11 Kotlin tests). **iOS NOT started** |
+| 6 | **M2e** documentation site | website | `2026-09-09-m2-cli-docs.md` Tasks 8–13 (full) | ⬜ — docs still describe v1 |
 | 7 | **M3** bytecode deltas | all | none — spec §6, gated on spikes | ⬜ |
 | 8 | Rollout in go-trade | consuming app | this file, Rollout section | ⬜ |
 
 Phases 2–6 are one wire migration and must ship together. Phase 1 ships on its own, first.
+
+## ⚠️ READ THIS BEFORE DOING ANYTHING — reassessed 2026-09-10
+
+**Do not start iOS next.** Backend, CLI and the Android client are each green against their own
+tests and have **never spoken to each other**. No device has ever fetched a v2 release. Porting ~600
+lines of Android design into Swift before the design is proven duplicates any error into a second
+language.
+
+**Do this first — the end-to-end proof:**
+
+1. Run the v2 backend locally (`packages/backend/src/server.ts`), register the dev signing key.
+2. Point a go-trade devRelease build at it (`OTA_SERVER_URL` → `http://10.0.2.2:<port>` for the
+   emulator) and rebuild.
+3. Publish a real release with the **actual CLI binary** (never yet run as a binary):
+   `dash-ota publish --app-id com.kksl.gotradeindia.development …`.
+4. Install, check, download, apply. Assert every asset renders — that is the 2026-09-08 incident.
+5. **The money shot:** publish a second release with ONE asset changed and confirm the device
+   downloads only that blob. Device-side reuse has only ever been measured in a throwaway script,
+   never observed on hardware.
+
+**Then** fix the memory shape below, **then** port to iOS.
+
+### Known gap, deliberate and mine
+
+`DashOtaModule.downloadAndStage` reads each blob fully into memory, decrypts in memory and
+decompresses in memory — exactly the "naive in-memory pass" spec §5.6 warns against. Peak is about
+33 MB per update on the go-trade bundle (7.3 MB stored + 25.8 MB plaintext). Spec §5.6 says to
+decrypt to a temp file and stream the decompression. Either fix the code or correct the spec; fixing
+is preferred.
+
+### Rollout consequences not yet decided
+
+- Deploying the v2 backend **darkens the existing channel**: every installed app speaks v1, gets the
+  tombstone, and stops seeing updates. go-trade does not render the native-policy gate, so users see
+  nothing until a new store build ships.
+- **Re-running a failed publish re-uploads everything.** Fresh keys and IVs per build mean identical
+  files produce different blob bytes, so nothing from the earlier attempt is reusable. Retries
+  within one run cover transient failures. Device-side reuse is unaffected (it keys on the plaintext
+  hash).
+- `scripts/dash-ota-publish.mjs` in go-trade must pass `--app-id` before it can publish v2 at all.
+
+---
 
 **Phase 2 onward lives on the branch `feat/ota-v2`, not `main`.** Removing the v1 format from
 `@dash-ota/shared` breaks the backend's compile immediately (its `/admin/publish` reads
@@ -181,7 +223,12 @@ policy would be invisible to existing users.
 
 ## Working-tree state (as of 2026-09-09)
 
-**secure-ota**: Phase 1 is committed — `0be9174` (docs), `253b165` (the fix), `7851324` (status),
+**secure-ota**, branch `feat/ota-v2`, 12 commits ahead of `main`, working tree clean. Package
+versions: shared/backend/cli **0.3.0**, rn **0.3.2** (rn must go 0.4.0 before release — it now speaks
+a protocol its 0.3.x binaries cannot). `npm run ci` green: 21 shared, 7 cli, 27 e2e, 8 express,
+3 sqlite. `npm run test:android` green: 11 Kotlin tests.
+
+**Phase 1 is on `main`** and still unpushed (see below). Phase 1 is committed — `0be9174` (docs), `253b165` (the fix), `7851324` (status),
 `fa6694a` (QA follow-up). Only `package-lock.json` is dirty, and that predates this workstream —
 leave it.
 
