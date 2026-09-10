@@ -30,7 +30,7 @@ order. If a session ends, the next agent resumes from the Status board below.
 | 2 | **M2a** shared: manifest v2, zstd, per-blob crypto | shared | `2026-09-09-m2-shared-backend.md` Tasks 1–4 | ✅ done — `d97d3de` on **`feat/ota-v2`** |
 | 3 | **M2b** backend: router, providers, store, routes, tombstone | backend | built from spec §5.3–§5.5 | ✅ done — `8a8cbcd`, 27 e2e + 8 express checks |
 | 4 | **M2c** CLI: 3-step publish | cli | `2026-09-09-m2-cli-docs.md` Tasks 1–7 | ✅ publish done — `2b3e34f`, proven against a live backend `7402fcc`. `verify-release` NOT built |
-| 5 | **M2d** rn native + JS (0.4.0) | rn | spec §5.6, §5.7 | 🟡 **Android + JS done** (`e02acb6`, 11 Kotlin tests). **iOS NOT started** |
+| 5 | **M2d** rn native + JS (0.4.0) | rn | spec §5.6, §5.7 | 🟡 **Android done and proven on a device** (`e02acb6`, `fb62b1f`; 11 Kotlin tests + 4-generation emulator run). **iOS NOT started** |
 | 6 | **M2e** documentation site | website | `2026-09-09-m2-cli-docs.md` Tasks 8–13 (full) | ⬜ — docs still describe v1 |
 | 7 | **M3** bytecode deltas | all | none — spec §6, gated on spikes | ⬜ |
 | 8 | Rollout in go-trade | consuming app | this file, Rollout section | ⬜ |
@@ -60,13 +60,37 @@ has published to a real HTTP backend over a socket. What that run found, all fix
 | store holding two such releases | 12 blobs / 2.0 MB | **7 blobs / 1.0 MB** |
 | device holding release 1 fetching release 2 | — | **1 of 6 files, 30.3 KB of 1000.3 KB (97% saved)** |
 
-**Stage 2 — still to do, and still before iOS:** no Kotlin client has ever fetched a v2 release.
-Run a go-trade devRelease build against a local v2 backend (`OTA_SERVER_URL` →
-`http://10.0.2.2:<port>`), install, check, download, apply, and assert every asset renders — that
-is the 2026-09-08 incident. Then publish a second release with one asset changed and confirm the
-device fetches only that blob.
+**Stage 2 is done** (`fb62b1f`). A release build of the example app on an API 34 emulator ran four
+consecutive OTA generations against a local v2 backend. What it found:
 
-**Then** fix the memory shape below, **then** port to iOS.
+- **The Android client could never have downloaded anything.** Sixteen templates in
+  `DashOtaModule` were written `${'$'}name`, Kotlin's escape for a literal dollar. The blob URL was
+  literally `$blobBaseUrl/$blobSha`; temp files all collided on `$blobSha.part`; resume sent
+  `Range: bytes=$have-`. It compiled, type-checked, and passed all 11 Kotlin tests, because none of
+  them touch the download path. `npm run lint:native` now fails the whole class and is in `ci`.
+- **Hard-link reuse never worked and never can.** SELinux denies `link` to `untrusted_app` on
+  `app_data_file` (`avc: denied { link } … tclass=file`; `protected_hardlinks` is 0, so it is
+  policy, not the sysctl). Reuse falls back to a copy — correct, but it costs a second copy on
+  disk, and the old code hid it by swallowing the exception. Probed once per download now.
+
+**Proven on hardware, with the backend access log as evidence (`OTA_ACCESS_LOG=true`):**
+
+- The update applies, and **every bundled asset renders** — the 2026-09-08 incident does not
+  reproduce. Assets introduced in different releases and carried forward by reuse all render their
+  correct bytes.
+- `launch: applying pending … (attempt 1/2)` — exactly one boot attempt, which is the memoised
+  loader working. Un-memoised this read 1..6 and tripped the breaker.
+- On each release that changed one asset, the device issued **exactly 2 of 4 blob GETs** (the
+  changed asset and the bundle, which changes every release), and the publish uploaded **2 of 4
+  blobs** (the other two already in the store).
+
+**Next, in order:** the memory shape below, then iOS, then docs.
+
+**Follow-up noticed on device, not yet addressed:** `/ota/v2/confirm` returned 401 on every launch
+of the example. Its storage is in-memory, so each cold start mints a new `installId` and the
+server nonce cannot match. Correct server behaviour, but it means a host app that wires
+non-persistent storage silently loses all adoption and health telemetry. The library should
+notice and say so.
 
 ### Known gap, deliberate and mine
 
