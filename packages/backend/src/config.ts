@@ -1,5 +1,5 @@
 /**
- * Backend configuration. POC defaults are env-overridable; nothing here is a secret except
+ * Backend configuration. Every default is env-overridable; nothing here is a secret except
  * `ADMIN_TOKEN` (the CLI's publish/admin credential) — and crucially **not** the signing
  * private key, which the backend never has.
  *
@@ -63,13 +63,13 @@ export interface BackendHooks {
   logger?: OtaBackendLogger;
   /**
    * Validate the enroll session token against your auth service. Return `true` to allow the
-   * device to register its key. If omitted, the POC falls back to `requireEnrollAuth`
+   * device to register its key. If omitted, it falls back to `requireEnrollAuth`
    * (presence-only) checking.
    */
   verifyEnrollToken?: (token: string | undefined, principal: EnrollPrincipal) => boolean | Promise<boolean>;
   /** called after every `/confirm` (adoption/health telemetry, alerting). */
   onConfirm?: (event: ConfirmEvent) => void;
-  /** called after every successful `/admin/publish`. */
+  /** called once a release is finalized and becomes visible to devices. */
   onPublish?: (event: PublishEvent) => void;
 }
 
@@ -106,7 +106,7 @@ export interface BackendConfig extends BackendHooks {
   checkRateLimit: number;
   /** fixed rate-limit window in ms, shared by `/enroll` + `/check`. */
   rateLimitWindowMs: number;
-  /** require a valid device-key signature on /check + /confirm (POC can disable for quick tests). */
+  /** require a valid device-key signature on /check + /confirm. Disable only for local tests. */
   requireRequestSignature: boolean;
   /** require an authenticated session token (enrollToken) on /enroll. */
   requireEnrollAuth: boolean;
@@ -155,7 +155,7 @@ function envNum(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** Load configuration from the environment with safe POC defaults. */
+/** Load configuration from the environment, with defaults that fail closed. */
 export function loadConfig(): BackendConfig {
   return {
     port: envNum('OTA_PORT', 4455),
@@ -203,7 +203,7 @@ export type OtaBackendOptions = Partial<BackendConfig> & {
 
 /**
  * Resolve a complete {@link BackendConfig} by layering caller-supplied options over the
- * env/POC defaults. This is what makes the package config-driven: a host passes only the
+ * env defaults. This is what makes the package config-driven: a host passes only the
  * fields it cares about (e.g. `adminToken`, `verifyEnrollToken`) and inherits safe defaults
  * for the rest.
  *

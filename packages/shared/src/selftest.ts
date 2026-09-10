@@ -215,6 +215,69 @@ await check('a blob sealed under a different content key is rejected', async () 
   await assert.rejects(() => verifyReleaseV2(signed, swap, publicKeyFromRawB64(publicKeyRawB64)));
 });
 
+await check('a key ring accepts the new signing key and still accepts the old one', async () => {
+  // Signing-key rotation has to work without a store release, or a compromised key strands every
+  // installed app. Builds embed a comma-separated ring, and a release signed by ANY member must
+  // verify — that is what lets a new key be introduced before the old one is retired.
+  const oldKey = generateSigningKeyPair();
+  const newKey = generateSigningKeyPair();
+  const stranger = generateSigningKeyPair();
+
+  const files = fixtureFiles();
+  const build = async (keyId: string) =>
+    buildReleaseV2({
+      bundleId: `bnd_${keyId}`,
+      runtimeVersion: 'rt_v1',
+      bundleVersion: 2,
+      platform: 'android',
+      channel: 'dev',
+      appId: 'com.example.app',
+      mandatory: false,
+      files,
+      bundlePath: 'index.android.bundle',
+      keyId,
+      contentKey: TEST_CONTENT_KEY,
+    });
+
+  const signedOld = signManifest((await build('old')).manifest, oldKey.privateKeyPem);
+  const signedNew = signManifest((await build('new')).manifest, newKey.privateKeyPem);
+
+  // A device carrying both keys accepts either release.
+  for (const signed of [signedOld, signedNew]) {
+    const accepted = [oldKey.publicKeyRawB64, newKey.publicKeyRawB64].some((raw) =>
+      verifyManifest(signed, publicKeyFromRawB64(raw)),
+    );
+    assert.ok(accepted, 'a ring member must be able to verify its own release');
+  }
+
+  // A key outside the ring must not.
+  assert.ok(!verifyManifest(signedNew, publicKeyFromRawB64(stranger.publicKeyRawB64)));
+  // And the old key must not vouch for the new key's release.
+  assert.ok(!verifyManifest(signedNew, publicKeyFromRawB64(oldKey.publicKeyRawB64)));
+});
+
+await check('rotating the channel content key does not break older releases', async () => {
+  // Rotation is the case an OTA system usually gets wrong: an old release must stay installable
+  // (and rollback-able) after the key changes. It works here because a blob is addressed by the
+  // hash of its *ciphertext* and the key that opens it travels inside that release's own signed
+  // manifest — so K1 and K2 releases occupy disjoint blob ids and never overwrite each other.
+  const before = await makeSignedRelease({ bundleId: 'bnd_k1' });
+  const after = await makeSignedRelease({ bundleId: 'bnd_k2', contentKey: Buffer.alloc(32, 42) });
+
+  const idsBefore = new Set(before.signed.manifest.files.map((f) => f.blob.sha256));
+  const idsAfter = new Set(after.signed.manifest.files.map((f) => f.blob.sha256));
+  for (const id of idsAfter) {
+    assert.ok(!idsBefore.has(id), "a rotated release must not collide with the old one's blobs");
+  }
+
+  // The pre-rotation release still opens with the key its own manifest carries.
+  const oldOut = await verifyReleaseV2(before.signed, before.fetchBlob, publicKeyFromRawB64(before.publicKeyRawB64));
+  assert.equal(oldOut.files.length, before.files.length);
+  // And so does the post-rotation one.
+  const newOut = await verifyReleaseV2(after.signed, after.fetchBlob, publicKeyFromRawB64(after.publicKeyRawB64));
+  assert.equal(newOut.files.length, after.files.length);
+});
+
 await check('unencrypted releases still verify, and carry no iv/tag', async () => {
   const { signed, publicKeyRawB64, fetchBlob, files } = await makeSignedRelease({ encrypt: false });
   assert.equal(signed.manifest.encryption.mode, 'none');

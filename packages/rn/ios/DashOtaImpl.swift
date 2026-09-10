@@ -106,6 +106,8 @@ public class DashOtaImpl: NSObject {
   @objc public func isBundleDisabled(_ bundleId: String) -> Bool { DashOtaStore.shared.isDisabled(bundleId) }
   @objc public func consumeFailedReport() -> String { DashOtaStore.shared.consumeFailedReport() }
 
+  @objc public func consumeAppliedReport() -> String { DashOtaStore.shared.consumeAppliedReport() }
+
   @objc public func applyOnNextLaunch() -> Bool { DashOtaStore.shared.promoteStagedToPending() }
   @objc public func markUserReload() { DashOtaStore.shared.markUserReload() }
   @objc public func markHealthy() { DashOtaStore.shared.markHealthy() }

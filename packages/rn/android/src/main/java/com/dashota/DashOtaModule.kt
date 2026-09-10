@@ -418,6 +418,8 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
 
   override fun consumeFailedReport(): String = DashOtaStore.consumeFailedReport(reactContext)
 
+  override fun consumeAppliedReport(): String = DashOtaStore.consumeAppliedReport(reactContext)
+
   override fun applyOnNextLaunch(promise: Promise) {
     try {
       promise.resolve(DashOtaStore.promoteStagedToPending(reactContext))

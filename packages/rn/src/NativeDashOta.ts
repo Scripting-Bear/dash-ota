@@ -48,6 +48,14 @@ export interface Spec extends TurboModule {
    * Empty string if none.
    */
   consumeFailedReport(): string;
+  /**
+   * The bundleId applied on this launch, returned once and then cleared.
+   *
+   * Only the launch that promotes a pending bundle knows it happened; by the next one it looks like
+   * a bundle that has been running for days. Without this the server never sees an `applied`
+   * confirm, so adoption shows 0 applied however many devices took the release.
+   */
+  consumeAppliedReport(): string;
 
   /** Promote `pending` to apply on next cold start. */
   applyOnNextLaunch(): Promise<boolean>;

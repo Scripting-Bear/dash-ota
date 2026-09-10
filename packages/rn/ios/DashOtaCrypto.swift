@@ -80,9 +80,3 @@ enum DashOtaCrypto {
 
   static func hex(_ data: Data) -> String { data.map { String(format: "%02x", $0) }.joined() }
 }
-
-/// Simple error type carrying a code/message for the TurboModule promise rejection.
-enum DashOtaError: Error {
-  case message(String)
-  var text: String { if case .message(let m) = self { return m } else { return "dash-ota error" } }
-}

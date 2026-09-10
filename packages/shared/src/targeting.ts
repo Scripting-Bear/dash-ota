@@ -4,7 +4,7 @@
  * built for one native generation can never land on a different one (the store-vs-OTA bug).
  *
  * Includes a deliberately small **semver-subset** matcher for `targetAppVersions` (enough
- * for ranges like ">=1.2.0 <1.3.0", "1.2.x", "1.2.3", "*") so the POC has no external
+ * for ranges like ">=1.2.0 <1.3.0", "1.2.x", "1.2.3", "*") so the package has no external
  * semver dependency. Swap for the `semver` package if richer ranges are needed.
  *
  * @module targeting

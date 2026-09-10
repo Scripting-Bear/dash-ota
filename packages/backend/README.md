@@ -40,7 +40,7 @@ app.use(
 app.listen(4455);
 ```
 
-Mount at the **root** — routes are absolute (`/ota/v1/*`, `/admin/*`, `/health`) and anything the
+Mount at the **root** — routes are absolute (`/ota/v2/*`, `/admin/*`, `/health`) and anything the
 middleware doesn't own falls through to `next()`. Also available: `createOtaBackend(options)`
 (umbrella with `.middleware` / `.listen()`), a standalone `node:http` server, and a bring-your-own
 `store`.

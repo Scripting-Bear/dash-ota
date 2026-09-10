@@ -1,7 +1,7 @@
 /**
  * A tiny dependency-free HTTP router over `node:http`. Deliberately minimal — keeping the
  * backend's dependency (and supply-chain) surface near zero is on-theme for a security
- * project, and this layer is trivially replaceable when the POC becomes a real microservice.
+ * project, and this layer is trivially replaceable if you would rather route through your own framework.
  *
  * @module http
  */

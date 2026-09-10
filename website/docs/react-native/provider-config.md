@@ -45,7 +45,7 @@ export default function Root() {
 | `checkOnAppForeground` | `boolean` | `false` | Re-run a check when the app returns to the foreground (via `AppState`). |
 | `onStatusChange` | `(s: OtaStatus) => void` | — | Fires on every lifecycle status transition. |
 | `getEnrollToken` | `() => Promise<string \| undefined>` | — | Returns your app session token, attached to `/enroll` so a device key can only be registered by an authenticated user. |
-| `serverUrlOverride` | `string` | — | Override the native-embedded server URL (POC/testing only; prod URL must come from native). |
+| `serverUrlOverride` | `string` | — | Override the native-embedded server URL. Tests and local development only — a production build must take it from native, where JS cannot reach it. |
 | `logger` | `OtaLogger` | `console` | `{ info, warn, error }`. |
 | `transport` | `TransportSecurity` | no-op | Pluggable transport (TLS pinning) — see [pinning](/docs/security/pinning-attestation). |
 | `attestor` | `IntegrityAttestor` | no-op | Pluggable attestation (Play Integrity / App Attest). |

@@ -25,7 +25,7 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { URL } from 'node:url';
-import { httpError, type Handler, type OtaRoute, type ReqCtx, writeNodeResult } from './http.js';
+import { httpError, type OtaRoute, type ReqCtx, writeNodeResult } from './http.js';
 import { createOtaRoutes } from './routes.js';
 import { type OtaBackendOptions, resolveBackendConfig } from './config.js';
 import { Store } from './store.js';

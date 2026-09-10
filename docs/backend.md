@@ -50,7 +50,7 @@ app.use(
 app.listen(4455);
 ```
 
-> **Mount at the root.** The routes are absolute (`/ota/v1/*`, `/admin/*`, `/health`). Do not
+> **Mount at the root.** The routes are absolute (`/ota/v2/*`, `/admin/*`, `/health`). Do not
 > mount under a sub-path, or the signed request `path` won't match what the client signed.
 
 ### Raw body — important
@@ -144,17 +144,19 @@ dashOtaMiddleware({ store: new MyPostgresStore(config) });
 
 | Method | Path | Purpose |
 |---|---|---|
-| POST | `/ota/v1/enroll` | register the device's public key (gated by `verifyEnrollToken`) |
-| POST | `/ota/v1/check` | get an eligible update (manifest + one-time download token) |
-| GET | `/ota/v1/download` | stream the AES-GCM ciphertext (one-time token; **no S3 URL**) |
-| POST | `/ota/v1/confirm` | report apply result (drives adoption + auto-pause) |
+| POST | `/ota/v2/enroll` | register the device's public key (gated by `verifyEnrollToken`) |
+| POST | `/ota/v2/check` | get an eligible update (signed manifest + download token) |
+| GET | `/ota/v2/releases/:bundleId/blobs/:sha` | stream one file of the update (token; `Range`; **no S3 URL**) |
+| POST | `/ota/v2/confirm` | report apply result (drives adoption + auto-pause) |
 
 **Admin** (header `x-ota-admin-token`, used by the [CLI](./cli.md)):
 
 | Method | Path | Purpose |
 |---|---|---|
 | POST | `/admin/keys` | register a trusted Ed25519 **public** key |
-| POST | `/admin/publish` | store a pre-signed release (manifest + ciphertext) |
+| POST | `/admin/releases` | declare a release; replies with the blobs the store lacks |
+| PUT | `/admin/releases/:bundleId/blobs/:sha` | upload one blob, hash-checked as it streams |
+| POST | `/admin/releases/:bundleId/finalize` | make the release servable |
 | GET | `/admin/releases` | list releases + adoption/health |
 | POST | `/admin/rollout` | set rollout % |
 | POST | `/admin/pause` | pause / resume a release |
@@ -184,7 +186,7 @@ public key registered at `/enroll`. This is all handled for you by
   secret to intercept.
 - **Server-side safety net** — auto-pause when a release's failure rate crosses the threshold.
 
-See [POC.md](../POC.md) for the full threat model and design rationale.
+See [DESIGN.md](../DESIGN.md) for the full threat model and design rationale.
 
 ---
 

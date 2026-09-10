@@ -30,7 +30,7 @@ const ota = createOtaBackend({ store: new MyStore(config) });
 
 ## Recommended production mapping
 
-| POC (default disk) | Production |
+| Built-in (disk) | Production |
 |---|---|
 | `storage/*.bin` ciphertext | S3 / GCS / R2 object storage (proxy the stream) |
 | `releases.json` / `installs.json` | Postgres tables |

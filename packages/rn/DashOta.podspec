@@ -16,6 +16,9 @@ Pod::Spec.new do |s|
   # `.c` is here for ios/vendor/zstddeclib.c, upstream zstd's single-file decompressor. Apple has
   # no zstd and the wire format is zstd on every platform; see ios/vendor/README.md.
   s.source_files = "ios/**/*.{h,m,mm,c,swift,cpp}"
+  # The Swift store tests are top-level code with their own `main`; compiling them into the pod
+  # would break the host app's build. They run via `npm run test:ios`, not Xcode.
+  s.exclude_files = "ios/__tests__/**/*"
   # DashOtaZstd.h is deliberately public: the pod builds as a framework, where bridging headers are
   # rejected, so a public Objective-C header in the umbrella is how Swift reaches the vendored C.
   s.public_header_files = "ios/DashOtaZstd.h"

@@ -20,7 +20,7 @@ npm install express   # optional — only if you mount into an Express app
 |---|---|
 | [**Express/Connect middleware**](/docs/backend/express) — one `dashOtaMiddleware()` | Adding OTA to an existing API |
 | [**Umbrella factory**](/docs/backend/umbrella) — `createOtaBackend()` | Owning the store/config, getting every adapter from one object |
-| [**Standalone server**](/docs/backend/frameworks) — `node:http`, zero deps | A dedicated OTA service / quick POC |
+| [**Standalone server**](/docs/backend/frameworks) — `node:http`, zero deps | A dedicated OTA service, or a quick local run |
 
 All three share one **framework-agnostic route core**, so behaviour is identical.
 

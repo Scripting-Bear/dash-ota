@@ -25,8 +25,8 @@ dash-ota targets modern React Native and a Node backend.
 
 - **Node 18+**. Express is optional (the middleware works with any Connect-style framework, or
   standalone via `node:http`).
-- For production: a place to store ciphertext (filesystem for the POC; object storage later) and
-  release/install metadata (JSON for the POC; Postgres/Redis later).
+- For production: a place to store update blobs (the filesystem to start with; object storage or a
+  CDN later) and release/install metadata (JSON to start with; Postgres and Redis later).
 
 ## Knowledge
 

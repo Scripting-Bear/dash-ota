@@ -143,6 +143,15 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
         void confirm(ctx, failed, 'failed', resp.serverNonce, 'crash-loop revert').catch(() => undefined);
       }
 
+      // Report an apply exactly once, on the launch that performed it. `healthy` follows later,
+      // only if the bundle survives its trial, so without this a release that applied everywhere
+      // and then crashed everywhere would show zero adoption rather than a cliff.
+      const applied = DashOta.consumeAppliedReport();
+      if (applied) {
+        logger.info(`reporting applied ${applied}`);
+        void confirm(ctx, applied, 'applied', resp.serverNonce).catch(() => undefined);
+      }
+
       if (!resp.update || !resp.downloadToken) {
         setAvailableUpdate(null);
         setStatus('up-to-date');
@@ -273,11 +282,21 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
   }, [currentBundle, logger]);
 
   const rollback = useCallback(async (): Promise<void> => {
+    // Capture what we are leaving before the revert, so it can be reported.
+    const reverted = currentBundle?.isEmbedded === false ? currentBundle.bundleId : '';
     await DashOta.rollback();
     setIsPending(false);
     const meta = (await DashOta.getCurrentBundleMeta()) as unknown as BundleMeta;
     setCurrentBundle(meta);
-  }, []);
+
+    // A user-initiated revert is a signal about the release, and the server counts it toward the
+    // auto-pause failure rate. Without it a release people actively back out of looks healthy.
+    const ctx = ctxRef.current;
+    if (reverted && ctx && serverNonceRef.current) {
+      logger.warn(`reporting rollback of ${reverted}`);
+      void confirm(ctx, reverted, 'rolled_back', serverNonceRef.current, 'user rollback').catch(() => undefined);
+    }
+  }, [currentBundle, logger]);
 
   useEffect(() => {
     void (async () => {

@@ -17,7 +17,7 @@ breached backend cannot forge an update.
 | **[Backend integration](./docs/backend.md)** | Mount `@dash-ota/backend` into Express/Connect (or run standalone), config, hooks, endpoints |
 | **[React Native integration](./docs/react-native.md)** | Install `react-native-dash-ota`, native per-flavour config, `<DashOtaProvider>` + `useOtaUpdate()` |
 | **[CLI usage](./docs/cli.md)** | `dash-ota` commands: keygen → publish → rollout, per-env keys, key custody |
-| **[Design & threat model (POC)](./POC.md)** | Full architecture, security model, versioning/targeting, lifecycle, evidence |
+| **[Design & threat model](./DESIGN.md)** | Full architecture, security model, versioning/targeting, lifecycle, evidence |
 
 ---
 
@@ -49,11 +49,11 @@ Four packages over one shared core (npm workspaces monorepo):
 - **Reliability** — atomic apply on cold start, crash-loop circuit breaker (revert → last-known-good
   → embedded), monotonic downgrade guard, server-side auto-pause, fail-closed everywhere.
 
-Full threat model and rationale: **[POC.md](./POC.md)**.
+Full threat model and rationale: **[DESIGN.md](./DESIGN.md)**.
 
 ---
 
-## Quick start (local POC)
+## Quick start (local)
 
 ```bash
 npm install
@@ -80,7 +80,7 @@ packages/
   backend/   @dash-ota/backend       (distributor: Express middleware + standalone)
   shared/    @dash-ota/shared        (crypto/protocol core)
 docs/        integration guides (backend, react-native, cli)
-POC.md       design & threat model
+DESIGN.md       design & threat model
 ```
 
 > The CLI's Ed25519 **private** signing keys live only in CI/KMS — never committed (`.keys/`,

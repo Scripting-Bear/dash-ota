@@ -42,14 +42,14 @@ Three independently-owned packages + a shared core (monorepo, decoupled from the
    ┌─ dash-ota-cli  (CI / release machine — HOLDS the Ed25519 PRIVATE KEY) ─┐
    │  bundle → hermesc (HBC) → AES-256-GCM encrypt → SIGN manifest → upload   │
    └──────────────────────────────┬───────────────────────────────────────────┘
-                                   │  POST /admin/publish  (pre-signed manifest + ciphertext)
+                                   │  POST /admin/releases  (pre-signed manifest, then blobs)
                                    ▼
                             OUR API  (TLS today; pinning is a later modular plug-in)
-   ┌─────────────┐  POST /ota/v1/check   ┌──────────────────────────────┐
+   ┌─────────────┐  POST /ota/v2/check   ┌──────────────────────────────┐
    │  RN app     │ ── device-key sig ───▶ │  dash-ota-backend (Node)   │
    │ (uses the   │ ◀── signed manifest ── │  - verifies ECDSA/nonce/ts   │
    │  RN pkg)    │    (Ed25519 + AESkey)  │  - targeting + rollout match │
-   │  JS+native  │  GET /ota/v1/download  │  - serves PRE-SIGNED data     │
+   │  JS+native  │  GET  /ota/v2/…/blobs/:sha  │  - serves PRE-SIGNED data     │
    │             │ ──── one-time token ──▶ │  - NEVER holds the signing key│
    │             │ ◀── AES-GCM bytes ───── └──────────────────────────────┘
    └──────┬──────┘
@@ -152,8 +152,9 @@ enroll (once) ──▶ check ──▶ [eligible?] ──▶ download (token) �
 `pending`, plus boot-attempt counters and a `disabledBundles` list. State writes are
 crash-safe (temp + atomic rename); GC keeps only `current` + `lastKnownGood`.
 
-**Backend endpoints:** `POST /ota/v1/enroll`, `POST /ota/v1/check`, `GET /ota/v1/download`,
-`POST /ota/v1/confirm`, `POST /admin/publish`, `POST /admin/keys`, plus
+**Backend endpoints:** `POST /ota/v2/enroll`, `POST /ota/v2/check`,
+`GET /ota/v2/releases/{id}/blobs/{sha}`, `POST /ota/v2/confirm`, the three-step publish
+(`POST /admin/releases` → `PUT …/blobs/{sha}` → `POST …/finalize`), `POST /admin/keys`, plus
 `rollout`/`pause`/`rollback`/`native-policy`/`releases`.
 
 ---
@@ -185,7 +186,8 @@ native** (won't apply).
   the public key, gated by an authenticated session token (`verifyEnrollToken`)
 - Per-install **device-key ECDSA** request signing + nonce + timestamp (anti-replay)
 - Per-environment signing keys (dev/uat/prod isolation)
-- SOA1 payload archive with **per-file SHA-256** (bundle + every asset)
+- One content-addressed blob per distinct file, each with **its own SHA-256** for the stored bytes
+  and for the plaintext (bundle + every asset), so a device fetches only what it lacks
 - Fail-closed on every error
 
 **Reliability**
@@ -241,7 +243,7 @@ app.use(dashOtaMiddleware({
 app.listen(4455);
 ```
 
-The OTA routes are absolute (`/ota/v1/*`, `/admin/*`, `/health`); anything the middleware
+The OTA routes are absolute (`/ota/v2/*`, `/admin/*`, `/health`); anything the middleware
 doesn't own falls through to `next()`, so it coexists with your app. The same route core also
 runs **standalone** (`createOtaBackend(config).listen()` or the built-in `node:http` server) and
 is fully framework-agnostic, so a future Fastify/Koa adapter is a thin wrapper. The request

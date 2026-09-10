@@ -61,6 +61,10 @@
   return @([_impl isBundleDisabled:bundleId]);
 }
 
+- (NSString *)consumeAppliedReport {
+  return [_impl consumeAppliedReport];
+}
+
 - (NSString *)consumeFailedReport {
   return [_impl consumeFailedReport];
 }

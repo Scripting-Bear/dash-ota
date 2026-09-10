@@ -87,7 +87,7 @@ describe('createClientContext', () => {
       attestor: { getAttestationToken: async () => 'attest-123' },
     };
     await createClientContext(config, noopLogger);
-    expect(fetchImpl).toHaveBeenCalledWith('https://ota.example.com/ota/v1/enroll', expect.objectContaining({ method: 'POST' }));
+    expect(fetchImpl).toHaveBeenCalledWith('https://ota.example.com/ota/v2/enroll', expect.objectContaining({ method: 'POST' }));
     expect(sentBody.attestationToken).toBe('attest-123');
     expect(sentBody.devicePublicKeyB64).toBe('PUBKEY');
     expect(sentBody.keyHardwareBacked).toBe(true);
@@ -150,7 +150,7 @@ describe('checkForUpdate (signed request path)', () => {
     expect(typeof sentHeaders['x-ota-timestamp']).toBe('string');
     // The signature is over the exact canonical string, with the native body hash.
     expect(jest.mocked(DashOta.signWithDeviceKey)).toHaveBeenCalledWith(
-      expect.stringMatching(/^POST\n\/ota\/v1\/check\ninst\nNNONCE\n\d+\nBODYHASH$/),
+      expect.stringMatching(/^POST\n\/ota\/v2\/check\ninst\nNNONCE\n\d+\nBODYHASH$/),
     );
     const body = JSON.parse(sentBody) as { runtimeVersion: string; currentBundleVersion: number };
     expect(body.runtimeVersion).toBe('R2');

@@ -318,6 +318,9 @@ final class DashOtaStore {
       state["pending"] = nil
       state["trial"] = true
       state["bootAttempts"] = 1
+      // Report the apply exactly once. Only this launch knows a pending bundle became current; by
+      // the next one it is indistinguishable from a bundle that has been running for days.
+      state["appliedToReport"] = pending["bundleId"] as? String
       saveState(state)
       log.warning("launch: applying pending \((pending["bundleId"] as? String) ?? "?", privacy: .public) on trial (attempt 1/\(self.maxBootAttempts, privacy: .public))")
       return bundlePath(pending)
@@ -373,6 +376,17 @@ final class DashOtaStore {
   }
 
   /// Return + clear the bundleId most recently disabled by a crash-loop revert (report once).
+  /// Return + clear the bundleId applied on this launch (report once).
+  func consumeAppliedReport() -> String {
+    var state = loadState()
+    let applied = (state["appliedToReport"] as? String) ?? ""
+    if !applied.isEmpty {
+      state["appliedToReport"] = nil
+      saveState(state)
+    }
+    return applied
+  }
+
   func consumeFailedReport() -> String {
     var state = loadState()
     let failed = (state["failedToReport"] as? String) ?? ""

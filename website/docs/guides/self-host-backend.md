@@ -5,7 +5,7 @@ title: Self-host the backend
 
 # Self-host the backend
 
-The POC backend persists to disk (JSON + files). For production, run it behind your gateway with a
+Out of the box the backend persists to disk (JSON + files). For production, run it behind your gateway with a
 real store. The route core is unchanged — you swap the `Store` implementation.
 
 ## Production topology
@@ -22,7 +22,7 @@ flowchart LR
 
 ## Mapping the store
 
-| POC (default disk) | Production |
+| Built-in (disk) | Production |
 |---|---|
 | `releases.json` / `installs.json` | Postgres tables |
 | `storage/*.bin` ciphertext | S3 / GCS / R2 (stream through `/download`) |

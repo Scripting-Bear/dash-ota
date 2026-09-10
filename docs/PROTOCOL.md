@@ -1,11 +1,13 @@
-# dash-ota Wire Protocol — v1
+# dash-ota Wire Protocol — v2
 
 The contract between a dash-ota **client** (the RN app + native module) and a dash-ota
 **backend** (the distributor). It is small, JSON-over-HTTPS, and stack-agnostic: the reference
 backend is `@dash-ota/backend` (Node), but any server that honours this spec is conformant, and
 any client that honours it interoperates.
 
-- **Protocol version:** `v1` (URL prefix `/ota/v1`).
+- **Protocol version:** `v2` (URL prefix `/ota/v2`). A release is a set of content-addressed
+  blobs, one per distinct file. `/ota/v1/*` answers only with a tombstone telling pre-v2 clients to
+  update from the store.
 - **Manifest schema:** `1` (the `schema` field; bump on any breaking manifest shape change).
 - **Source of truth:** the types in `@dash-ota/shared` (`protocol.ts`, `manifest.ts`,
   `targeting.ts`, `request.ts`, `canonical.ts`). This document must match them.
@@ -16,9 +18,10 @@ any client that honours it interoperates.
 
 - **MUST NOT** hold any signing private key. The backend only stores and serves **pre-signed**
   manifests + AES-GCM ciphertext produced by the CLI/CI.
-- **MUST NOT** mint or alter a manifest. On `/admin/publish` it MUST verify the manifest's
+- **MUST NOT** mint or alter a manifest. On `/admin/releases` it MUST verify the manifest's
   Ed25519 signature against a registered public key and reject on mismatch, and MUST verify the
-  ciphertext SHA-256 equals `manifest.encryption.ciphertextSha256`.
+  signature against a registered key, and MUST verify each uploaded blob hashes to the
+  `blob.sha256` the signed manifest names.
 - **MUST** enforce eligibility server-side (§6) — above all the exact `runtimeVersion` gate — so a
   compromised or buggy client can never be *offered* a cross-generation bundle.
 - **MUST** authenticate `/check` + `/confirm` with the device key (§4) and reject replays.
@@ -37,7 +40,8 @@ any client that honours it interoperates.
 ## 2. Transport & encoding
 
 - HTTPS only. All request/response bodies are JSON (`Content-Type: application/json`), except
-  `GET /ota/v1/download` which returns `application/octet-stream`.
+  `GET /ota/v2/releases/{bundleId}/blobs/{blobSha256}` which returns `application/octet-stream`
+  and supports `Range`.
 - Timestamps are ISO-8601 strings (manifest) or unix-epoch-**milliseconds** as a decimal string
   (request `x-ota-timestamp`).
 - Binary values are base64 unless stated as hex.
@@ -82,7 +86,7 @@ backend verifies against the public key registered at `/enroll`.
 
 - `<METHOD>` upper-case (`POST`).
 - `<path>` the request **pathname** — exactly what the backend verifies (`ctx.path`, no query
-  string). The signed endpoints (`/ota/v1/check`, `/ota/v1/confirm`) carry no query; `/download`
+  string). The signed endpoints (`/ota/v2/check`, `/ota/v2/confirm`) carry no query; the blob route
   is token-authenticated, not signed.
 - `<bodySha256>` lowercase hex SHA-256 of the **raw** request body bytes (the SHA-256 of the empty
   buffer for an empty body). The backend MUST hash the raw bytes it received — if a JSON body
@@ -112,7 +116,7 @@ Readiness — can this instance serve? Touches the store. `200 { "ready": true, 
 when the backing store is reachable, else `503 { "ready": false, "error": "store unreachable" }`.
 No auth. Use this for load-balancer / orchestrator rotation.
 
-### `POST /ota/v1/enroll`
+### `POST /ota/v2/enroll`
 Register the device's **public** key (called once; re-call to rotate). Auth: `enrollToken`
 (the app's authenticated session), validated by the backend's `verifyEnrollToken` hook.
 
@@ -140,7 +144,7 @@ backed by the `CacheProvider`, so a shared cache (Redis) enforces it across inst
 in-memory default is per-process. Over-limit responses are `429` with a `Retry-After` header.
 Cross-install / IP-based flood protection is out of scope here — put it at the reverse proxy.
 
-### `POST /ota/v1/check`  *(signed, §4)*
+### `POST /ota/v2/check`  *(signed, §4)*
 Ask for an eligible update.
 
 ```jsonc
@@ -157,7 +161,7 @@ Ask for an eligible update.
 The backend applies §6 eligibility + rollout and returns the highest-`bundleVersion` match, or
 `update: null`. `serverNonce` is single-use and bound to this install.
 
-### `GET /ota/v1/download`  *(one-time token)*
+### `GET /ota/v2/releases/{bundleId}/blobs/{blobSha256}`  *(download token)*
 Stream the ciphertext archive. Token via `x-ota-download-token` header or `?token=`.
 
 ```
@@ -169,9 +173,10 @@ The response is **streamed** (the backend never buffers the whole ciphertext) an
 `Content-Length` equal to the signed `encryption.ciphertextSize`, so the client can pre-check the
 size before reading the body. The token is single-use and short-TTL (`downloadTokenTtlMs`, default
 2 min). The client verifies
-`ciphertextSha256`, the Ed25519 signature, then per-file hashes **natively** before applying.
+the blob hash, then the Ed25519 signature over the manifest, then each file's plaintext hash and
+size — all **natively**, before anything is applied.
 
-### `POST /ota/v1/confirm`  *(signed, §4)*
+### `POST /ota/v2/confirm`  *(signed, §4)*
 Report the apply outcome (drives adoption + server-side auto-pause).
 
 ```jsonc
@@ -188,14 +193,16 @@ Report the apply outcome (drives adoption + server-side auto-pause).
 | Method · Path | Body → effect |
 |---|---|
 | `POST /admin/keys` | `{ keyId, publicKeyRawB64 }` → register a trusted signing public key |
-| `POST /admin/publish` | `{ signedManifest, ciphertextB64, rolloutPercentage? }` → verify sig + ciphertext hash, store the release |
+| `POST /admin/releases` | `{ signedManifest, rolloutPercentage? }` → verify sig, store the record, reply `{ bundleId, missing[] }` |
+| `PUT /admin/releases/{bundleId}/blobs/{sha}` | raw body → verify it hashes to `sha` and matches the signed size, store it |
+| `POST /admin/releases/{bundleId}/finalize` | make the release servable; `409 incomplete` while any blob is missing |
 | `GET /admin/releases` | → list releases with rollout/pause/adoption state |
 | `POST /admin/rollout` | `{ bundleId, rolloutPercentage }` → set rollout % (clamped 0–100) |
 | `POST /admin/pause` | `{ bundleId, paused }` → pause/unpause |
 | `POST /admin/rollback` | `{ bundleId }` → mark rolled-back (+ pause) |
 | `POST /admin/native-policy` | `{ channel, minSupportedNativeVersion, severity, storeUrl? }` → set the force-update gate |
 
-`/admin/publish` MUST reject: unknown `keyId` (`400 unknown_key`), bad manifest signature
+`/admin/releases` MUST reject: unknown `keyId` (`400 unknown_key`), bad manifest signature
 (`400 bad_signature`), ciphertext hash ≠ manifest (`400 hash_mismatch`), ciphertext size ≠
 manifest `encryption.ciphertextSize` (`400 size_mismatch`), and ciphertext larger than the
 configured cap `maxBundleBytes` (`413 too_large`).
@@ -264,14 +271,14 @@ signed object.
     "algo": "AES-256-GCM",
     "ivB64": "…", "tagB64": "…",
     "contentKeyB64": "…",           // AES-256 key (see confidentiality note)
-    "ciphertextSha256": "<hex>",    // verified before decrypt
+    "mode": "aes-256-gcm",          // or { "mode": "none" }
     "ciphertextSize": 45678 },
   "releaseNotes": "…",              // optional "What's New"
   "keyId": "key_prod_1" }
 ```
 
 - `files[].sha256` / `.size` are of the **plaintext** file; verified per-file natively after
-  decrypt. `encryption.ciphertextSha256` / `.ciphertextSize` are of the encrypted archive;
+  decrypt. Each `files[].blob` carries its own `sha256`, `size`, `compression`, `ivB64` and `tagB64`;
   verified before decrypt.
 - **Confidentiality note:** in v1 `contentKeyB64` rides the TLS `/check` response, so AES-GCM
   gives confidentiality against passive sniffing / at-rest but **not** an active MITM until TLS
@@ -297,7 +304,7 @@ Errors are `{ "error": "<message>", "code": "<code>" }` with an HTTP status.
 | `bad_token` | 403 | download token missing / expired / already used |
 | `not_found` | 404 | ciphertext missing |
 | `unknown_key` | 400 | publish referenced an unregistered signing keyId |
-| `hash_mismatch` | 400 | ciphertext hash ≠ manifest.encryption.ciphertextSha256 |
+| `hash_mismatch` | 400 | an uploaded blob does not hash to the `sha` it was PUT under |
 | `size_mismatch` | 400 | ciphertext size ≠ manifest.encryption.ciphertextSize |
 | `too_large` | 413 | ciphertext exceeds the configured `maxBundleBytes` cap |
 | `rate_limited` | 429 | per-install rate limit exceeded on `/enroll` or `/check` (see `Retry-After`) |

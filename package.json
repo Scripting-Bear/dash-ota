@@ -10,7 +10,7 @@
     "packages/cli"
   ],
   "scripts": {
-    "test": "npm run test:core && npm run test:cli && npm run test:e2e && npm run test:express && npm run test:sqlite && npm run test:redis && npm run test:postgres && npm run test:s3 && npm run test:dist",
+    "test": "npm run test:core && npm run test:cli && npm run test:e2e && npm run test:express && npm run test:sqlite && npm run test:redis && npm run test:postgres && npm run test:s3 && npm run test:rn && npm run test:ios && npm run test:dist",
     "test:core": "tsx --conditions source packages/shared/src/selftest.ts",
     "test:cli": "tsx --conditions source packages/cli/src/cli.test.ts",
     "test:e2e": "tsx --conditions source packages/backend/src/e2e.test.ts",
@@ -32,7 +32,9 @@
     "test:android": "cd packages/rn/example/android && ./gradlew :react-native-dash-ota:testDebugUnitTest",
     "test:dist": "tsx packages/cli/src/dist.test.ts",
     "lint:native": "node scripts/check-native-sources.mjs",
-    "gen:zstd-prefix": "node scripts/generate-zstd-prefix.mjs"
+    "gen:zstd-prefix": "node scripts/generate-zstd-prefix.mjs",
+    "test:rn": "cd packages/rn && npx jest",
+    "test:ios": "sh scripts/test-ios.sh"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

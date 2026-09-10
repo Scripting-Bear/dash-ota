@@ -229,6 +229,22 @@ class DashOtaStoreTest {
     assertFalse(File(DashOtaStore.bundlesDir(ctx), "bnd_legacy").exists())
   }
 
+@Test
+  fun `an apply is reported exactly once, on the launch that performed it`() {
+    stage("bnd_1", 1)
+    DashOtaStore.promoteStagedToPending(ctx)
+    assertEquals("nothing applied yet", "", DashOtaStore.consumeAppliedReport(ctx))
+
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    assertEquals("the launch that applied it must report it", "bnd_1", DashOtaStore.consumeAppliedReport(ctx))
+    // Only this launch knows an apply happened; by the next one the bundle is indistinguishable
+    // from one that has been running for days, so the report must not repeat.
+    assertEquals("reported twice", "", DashOtaStore.consumeAppliedReport(ctx))
+
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    assertEquals("a later launch must not re-report", "", DashOtaStore.consumeAppliedReport(ctx))
+  }
+
   @Test
   fun `a corrupt state file does not brick OTA forever`() {
     File(DashOtaStore.baseDir(ctx), "state.json").writeText("{ this is not json")

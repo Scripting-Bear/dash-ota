@@ -65,7 +65,8 @@ export interface OtaConfig {
   checkOnAppForeground?: boolean;
   /** observability hook fired on every lifecycle status transition. */
   onStatusChange?: (status: OtaStatus) => void;
-  /** override the native-embedded server URL (POC/testing only). */
+  /** override the native-embedded server URL. Tests and local development only — a production
+   * build must take the URL from native, where JS cannot reach it. */
   serverUrlOverride?: string;
   /** returns the app's authenticated session token, attached to enroll (ties the device key to a user). */
   getEnrollToken?: () => Promise<string | undefined>;

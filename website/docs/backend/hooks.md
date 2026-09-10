@@ -50,7 +50,7 @@ onPublish?: (event: {
 }) => void;
 ```
 
-Fires after a successful `/admin/publish` — useful for audit logs and release notifications.
+Fires once a release is finalized — useful for audit logs and release notifications.
 
 ## `logger`
 

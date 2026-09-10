@@ -32,7 +32,7 @@ Where `server.js` mounts `dashOtaMiddleware()` into Express (or calls `createOta
 
 ## Storage
 
-Point `storageDir`/`dataDir` at persistent volumes for the POC store, or implement a
+Point `storageDir`/`dataDir` at persistent volumes for the built-in disk store, or implement a
 [custom store](/docs/backend/store) backed by Postgres/Redis/object storage for scale.
 
 ## Health & observability

@@ -67,7 +67,8 @@ server {
     proxy_pass http://ota:4455;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    client_max_body_size 120m;   # >= OTA_MAX_BUNDLE_BYTES for /admin/publish
+    client_max_body_size 120m;   # >= OTA_MAX_BLOB_BYTES for the blob upload route
+    proxy_buffering off;         # blob downloads stream and serve Range; buffering breaks resume
   }
 }
 ```

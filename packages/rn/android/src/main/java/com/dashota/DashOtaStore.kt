@@ -356,6 +356,9 @@ object DashOtaStore {
       state.put("pending", JSONObject.NULL)
       state.put("trial", true)
       state.put("bootAttempts", 1)
+      // Report the apply exactly once. Only this launch knows a pending bundle became current;
+      // by the next one it is indistinguishable from a bundle that has been running for days.
+      state.put("appliedToReport", pending.optString("bundleId"))
       saveState(ctx, state)
       logLaunch("applying pending ${pending.optString("bundleId")} on trial (attempt 1/$MAX_BOOT_ATTEMPTS)")
       return bundlePath(ctx, pending)
@@ -434,6 +437,17 @@ object DashOtaStore {
       saveState(ctx, state)
     }
     return failed
+  }
+
+  /** Return + clear the bundleId applied on this launch (report once). */
+  fun consumeAppliedReport(ctx: Context): String {
+    val state = loadState(ctx)
+    val applied = state.optString("appliedToReport", "")
+    if (applied.isNotEmpty()) {
+      state.remove("appliedToReport")
+      saveState(ctx, state)
+    }
+    return applied
   }
 
   private fun jsonArrayContains(arr: JSONArray, value: String): Boolean {

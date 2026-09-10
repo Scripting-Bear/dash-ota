@@ -28,7 +28,8 @@ dashOtaMiddleware({
 | `timestampSkewMs` | `OTA_TS_SKEW_MS` | `300000` | allowed client clock skew |
 | `downloadTokenTtlMs` | `OTA_DL_TTL_MS` | `120000` | one-time download token TTL |
 | `nonceTtlMs` | `OTA_NONCE_TTL_MS` | `600000` | replay-nonce cache TTL |
-| `maxBundleBytes` | `OTA_MAX_BUNDLE_BYTES` | `104857600` (100 MiB) | reject a ciphertext larger than this at `/admin/publish` |
+| `maxBundleBytes` | `OTA_MAX_BUNDLE_BYTES` | `104857600` (100 MiB) | cap on a whole release |
+| `maxBlobBytes` | `OTA_MAX_BLOB_BYTES` | `104857600` (100 MiB) | cap on one uploaded blob, enforced **as the body arrives** |
 | `enrollRateLimit` | `OTA_ENROLL_RATE` | `10` | max `/enroll` per install per window (`0` disables) |
 | `checkRateLimit` | `OTA_CHECK_RATE` | `60` | max `/check` per authenticated install per window (`0` disables) |
 | `rateLimitWindowMs` | `OTA_RATE_WINDOW_MS` | `60000` | fixed rate-limit window |

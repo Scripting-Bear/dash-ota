@@ -13,7 +13,9 @@ The crypto + protocol core shared by [dash-ota](https://github.com/Scripting-Bea
 ## What's inside
 
 - **Ed25519** manifest signing + verification (`signManifest`, `verifyManifest`)
-- **AES-256-GCM** payload encryption + the `SOA1` archive format (`buildRelease`, `openRelease`)
+- **Per-file content-addressed blobs**: zstd compression plus convergent AES-256-GCM sealing, so an
+  unchanged file produces identical bytes and is stored and downloaded once (`buildReleaseV2`,
+  `verifyReleaseV2`)
 - **ECDSA P-256** request verification for the hardware device-key auth (`verifyRequestEcdsa`)
 - Canonical JSON, the manifest schema, and **targeting** (exact `runtimeVersion` gate,
   `targetAppVersions` semver subset, deterministic rollout bucketing)
@@ -29,7 +31,7 @@ npm install @dash-ota/shared
 
 The trust split — signing only in the CLI, verification in native, a compromise-tolerant
 backend — is described in
-[POC.md](https://github.com/Scripting-Bear/dash-ota/blob/main/POC.md).
+[DESIGN.md](https://github.com/Scripting-Bear/dash-ota/blob/main/DESIGN.md).
 
 ## License
 
