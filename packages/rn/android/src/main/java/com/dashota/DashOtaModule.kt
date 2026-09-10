@@ -228,30 +228,57 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
           }
 
           // Verified bytes only from here: decrypt, then decompress, then check the plaintext.
-          var bytes = part.readBytes()
-          part.delete()
+          // Every step is file-to-file. Holding a decompressed Hermes bundle in a ByteArray costs
+          // tens of megabytes on a device that may already be under memory pressure, and it is the
+          // largest single allocation the update path would make.
+          val tmpOut = File(staging, "$path.part")
+          tmpOut.parentFile?.mkdirs()
+          var sealed = part
           if (contentKey != null) {
-            bytes = DashOtaCrypto.aesGcmDecrypt(
-              contentKey,
-              DashOtaCrypto.b64(blob.getString("ivB64")),
-              bytes,
-              DashOtaCrypto.b64(blob.getString("tagB64")),
-              // AAD binds the ciphertext to the plaintext it claims to be, and deliberately not to
-              // the release: one blob is shared by every release containing that file.
-              plainSha.toByteArray(Charsets.UTF_8),
-            )
+            val plainFile = File(DashOtaStore.tmpDir(reactContext), "$blobSha.dec")
+            try {
+              DashOtaCrypto.aesGcmDecryptToFile(
+                contentKey,
+                DashOtaCrypto.b64(blob.getString("ivB64")),
+                part,
+                DashOtaCrypto.b64(blob.getString("tagB64")),
+                // AAD binds the ciphertext to the plaintext it claims to be, and deliberately not
+                // to the release: one blob is shared by every release containing that file.
+                plainSha.toByteArray(Charsets.UTF_8),
+                plainFile,
+              )
+            } catch (e: Exception) {
+              part.delete()
+              promise.reject("decrypt_failed", "blob $blobSha did not authenticate: ${e.message}")
+              return@Thread
+            }
+            part.delete()
+            sealed = plainFile
           }
-          if (blob.getString("compression") == "zstd") bytes = DashOtaCrypto.zstdDecompress(bytes, size)
-          if (bytes.size != size || DashOtaCrypto.sha256Hex(bytes) != plainSha) {
+
+          val writtenSha =
+            try {
+              if (blob.getString("compression") == "zstd") {
+                DashOtaCrypto.zstdDecompressToFile(sealed, tmpOut, size)
+              } else {
+                if (!sealed.renameTo(tmpOut)) sealed.copyTo(tmpOut, overwrite = true)
+                DashOtaCrypto.sha256HexOfFile(tmpOut)
+              }
+            } catch (e: Exception) {
+              sealed.delete()
+              tmpOut.delete()
+              promise.reject("decompress_failed", "blob $blobSha could not be unpacked: ${e.message}")
+              return@Thread
+            }
+          sealed.delete()
+          if (tmpOut.length() != size.toLong() || writtenSha != plainSha) {
+            tmpOut.delete()
             promise.reject("file_hash_mismatch", "file $path did not verify")
             return@Thread
           }
 
-          // Write beside the target and rename, so a kill never leaves a short file that a later
-          // resume would mistake for a complete one.
-          val tmpOut = File(staging, "$path.part")
-          tmpOut.parentFile?.mkdirs()
-          tmpOut.writeBytes(bytes)
+          // Rename into place only now, so a kill never leaves a short file that a later resume
+          // would mistake for a complete one.
           if (!tmpOut.renameTo(out)) {
             tmpOut.copyTo(out, overwrite = true)
             tmpOut.delete()

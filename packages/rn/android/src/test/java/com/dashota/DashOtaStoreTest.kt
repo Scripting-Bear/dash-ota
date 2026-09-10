@@ -171,6 +171,52 @@ class DashOtaStoreTest {
   }
 
   @Test
+  fun `marking healthy never touches a download in progress`() {
+    stage("bnd_1", 1)
+    DashOtaStore.promoteStagedToPending(ctx)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markHealthy(ctx)
+
+    // A second update begins: its staging directory exists but nothing references it yet, because
+    // `staged` is only written at commit time.
+    val staging = DashOtaStore.stagingDir(ctx, "bnd_2")
+    File(staging, "drawable-mdpi").mkdirs()
+    File(staging, "drawable-mdpi/logo.png").writeText("reused asset bytes")
+
+    // The host app marks healthy while that download is still running — the example app does it on
+    // a timer, so this is the normal case, not an exotic one. It used to sweep the slots, which
+    // deleted the files already assembled; the update then committed with them missing and every
+    // one rendered blank.
+    DashOtaStore.markHealthy(ctx)
+
+    assertTrue(
+      "marking healthy deleted a staging directory belonging to an in-flight download",
+      File(staging, "drawable-mdpi/logo.png").exists(),
+    )
+  }
+
+  @Test
+  fun `a slot is never published while a promised file is missing`() {
+    val staging = DashOtaStore.stagingDir(ctx, "bnd_partial")
+    File(staging, "index.android.bundle").writeText("// bundle")
+    var threw = false
+    try {
+      DashOtaStore.commitStaged(
+        ctx,
+        "bnd_partial",
+        1,
+        "rt1",
+        "sha-bundle",
+        mapOf("index.android.bundle" to "sha-bundle", "drawable-mdpi/logo.png" to "sha-logo"),
+      )
+    } catch (_: IllegalStateException) {
+      threw = true
+    }
+    assertTrue("committing an incomplete slot must fail loudly", threw)
+    assertNull("a rejected commit must not become the staged slot", DashOtaStore.loadState(ctx).optJSONObject("staged"))
+  }
+
+  @Test
   fun `state written by an older schema is discarded rather than trusted`() {
     val legacy = JSONObject()
       .put("current", JSONObject().put("bundleId", "bnd_legacy").put("version", 99))

@@ -177,6 +177,20 @@ object DashOtaStore {
     files: Map<String, String>,
   ) {
     val staging = stagingDir(ctx, bundleId)
+
+    // Refuse to publish a slot that does not contain everything the manifest promised. Without
+    // this the state file can advertise a file the directory does not have, the bundle boots, and
+    // the missing asset shows up as a blank image at runtime with nothing in any log — which is
+    // precisely the 2026-09-08 incident's symptom arriving by a different route.
+    val missing = files.keys.filter { path ->
+      val f = File(staging, path)
+      !f.exists() || f.length() == 0L
+    }
+    if (missing.isNotEmpty()) {
+      staging.deleteRecursively()
+      throw IllegalStateException("staged bundle $bundleId is missing ${missing.size} file(s): ${missing.take(5)}")
+    }
+
     val dir = File(bundlesDir(ctx), bundleId)
     if (dir.exists()) dir.deleteRecursively()
     if (!staging.renameTo(dir)) {
@@ -246,7 +260,6 @@ object DashOtaStore {
     state.put("trial", false)
     state.put("bootAttempts", 0)
     saveState(ctx, state)
-    gc(ctx, state)
   }
 
   /** Manual revert to last-known-good (or embedded if none). */
@@ -257,7 +270,6 @@ object DashOtaStore {
     state.put("bootAttempts", 0)
     state.put("pending", JSONObject.NULL)
     saveState(ctx, state)
-    gc(ctx, state)
     return true
   }
 
@@ -297,7 +309,6 @@ object DashOtaStore {
       state.put("trial", false)
       state.put("bootAttempts", 0)
       saveState(ctx, state)
-      gc(ctx, state)
     }
     return dropped
   }
@@ -326,7 +337,17 @@ object DashOtaStore {
     val prev = consumeLaunchMarks(ctx)
     val forgiven = prev.has("beaconAt") && prev.has("pausedAt")
 
-    // The only safe moment to sweep slots: nothing is mapped yet this process.
+    // The only safe moment to sweep slots, and therefore the only place gc is called.
+    //
+    // Nothing is mapped yet this process and no download can be in flight, because JS has not
+    // started. `markHealthy`, `rollback` and the incompatible-slot drop used to call it too, from
+    // the JS thread, at arbitrary times — and gc deletes any staging directory it does not
+    // recognise. A download in progress has not written `staged` yet, so its directory was not
+    // recognised: marking healthy while an update was downloading silently deleted the files that
+    // had already been assembled. The update then committed with the missing files still listed in
+    // the state, and every one of them rendered blank — the 2026-09-08 symptom, reached by a
+    // second route. Observed on an emulator: the example app marks healthy 1.5s after mount, and
+    // the two files reused before that instant were gone by commit time.
     gc(ctx, state)
 
     slot(state, "pending")?.let { pending ->

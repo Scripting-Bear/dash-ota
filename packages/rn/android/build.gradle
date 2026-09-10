@@ -74,4 +74,7 @@ dependencies {
   testImplementation "org.robolectric:robolectric:4.14.1"
   // The JVM's org.json stub throws; the real implementation is needed to parse manifests in tests.
   testImplementation "org.json:json:20240303"
+  // The runtime dependency is the @aar, whose natives are Android-only. Unit tests run on the JVM,
+  // so they need the plain jar's host natives to exercise the real zstd rather than a stub.
+  testImplementation "com.github.luben:zstd-jni:1.5.7-4"
 }
