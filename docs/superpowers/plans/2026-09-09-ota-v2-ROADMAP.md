@@ -37,60 +37,44 @@ order. If a session ends, the next agent resumes from the Status board below.
 
 Phases 2–6 are one wire migration and must ship together. Phase 1 ships on its own, first.
 
-## ⚠️ READ THIS BEFORE DOING ANYTHING — reassessed 2026-09-10
+## ⚠️ STATE AS OF 2026-09-10 EVENING — read before anything
 
-**Stage 1 of the end-to-end proof is done** (`dde6000`, `5f3beff`, `7402fcc`). The real CLI binary
-has published to a real HTTP backend over a socket. What that run found, all fixed:
+**0.4 IS PUBLISHED TO NPM.** `@dash-ota/shared@0.4.0`, `@dash-ota/backend@0.4.0`,
+`@dash-ota/cli@0.4.1`, `react-native-dash-ota@0.4.0`. Verified by querying registry.npmjs.org
+directly — do **not** trust `npm publish`'s own success line or `npm view`: two of the four sat in a
+*staged* state for minutes after printing `+ pkg@version`, and one needed a retry that returned
+`409 Cannot publish over previously staged version`.
 
-1. `npm run ci` never touched the compiled artifacts — every suite ran under `--conditions source`.
-   `shared/dist` was a July v1 compile still holding `archive.js`; `cli/dist/index.mjs` was the
-   matching v1 binary. `npx dash-ota` would have published v1 against a v2 backend. `ci` now builds.
-2. The CLI build had been broken since the v2 port (esbuild cannot inline the native
-   `@mongodb-js/zstd`). Nothing in CI ran it, so nobody knew.
-3. The binary's usage text still documented v1 flags and omitted the now-required `--app-id`.
-4. `keygen` prompted unconditionally, hanging any scripted run with the private key already on disk.
-5. Server-side dedup did not exist and could not: blobs were namespaced per release. Fixed by a
-   global `blobs/<sha>` namespace plus convergent encryption — see spec §5.2 and §5.3.
+**The UAT backend is ALREADY on v2** (probed 2026-09-10): `/admin/publish` → 404, `/admin/releases`
+→ 403, `/ota/v1/check` → the tombstone. Nobody scheduled that, so check how prod deploys — if it
+pulls `@dash-ota/backend@latest` the same way, **prod will darken itself without a cutover**.
+Prod was still v1 at last check, with 51 enrolled devices and 2 active releases at 10%.
 
-**Measured on the wire, not in a script:**
+**Every installed app is dark on UAT.** They run client 0.3.x and get the tombstone. Harmless in
+practice: the shipped build does not render the native-policy gate, so the OTA channel just goes
+quiet — no prompt, no disruption. That gate now exists (`OtaUpdateGate`) and ships with the 0.4
+build.
 
-| | before | after |
-|---|---|---|
-| publish of a release differing by one asset | 6 of 6 blobs | **1 of 6 blobs** |
-| store holding two such releases | 12 blobs / 2.0 MB | **7 blobs / 1.0 MB** |
-| device holding release 1 fetching release 2 | — | **1 of 6 files, 30.3 KB of 1000.3 KB (97% saved)** |
+### Where the code is
 
-**Stage 2 is done** (`fb62b1f`). A release build of the example app on an API 34 emulator ran four
-consecutive OTA generations against a local v2 backend. What it found:
+- **secure-ota**: branch `feat/ota-v2`, 32 commits ahead of `main`, tree clean, **never pushed**.
+- **go-trade**: the OTA work is inside commit `9ef9bd6e` on branch **`fix/ota-revamp`** — note its
+  message is about IPO bottom sheets, but it carries `OtaUpdateGate`, `AppUpdateSheet`, the publish
+  script and the BE doc. The original standalone commit `95c88ee0` still exists on
+  `feat/reports-changes`. **Uncommitted there: the three `.ota-keys/*.content.key` files** — CI
+  cannot publish without them.
 
-- **The Android client could never have downloaded anything.** Sixteen templates in
-  `DashOtaModule` were written `${'$'}name`, Kotlin's escape for a literal dollar. The blob URL was
-  literally `$blobBaseUrl/$blobSha`; temp files all collided on `$blobSha.part`; resume sent
-  `Range: bytes=$have-`. It compiled, type-checked, and passed all 11 Kotlin tests, because none of
-  them touch the download path. `npm run lint:native` now fails the whole class and is in `ci`.
-- **Hard-link reuse never worked and never can.** SELinux denies `link` to `untrusted_app` on
-  `app_data_file` (`avc: denied { link } … tclass=file`; `protected_hardlinks` is 0, so it is
-  policy, not the sysctl). Reuse falls back to a copy — correct, but it costs a second copy on
-  disk, and the old code hid it by swallowing the exception. Probed once per download now.
+### Next: ship the app
 
-**Proven on hardware, with the backend access log as evidence (`OTA_ACCESS_LOG=true`):**
+1. `npm i` in go-trade — node_modules still has **0.3.2** while the pin says `^0.4.0`.
+2. `npm run pod:install` (iOS vendored zstd) + a Gradle sync (zstd-jni).
+3. **Bump `OTA_RUNTIME_VERSION`** in `.env.uat` / `.env.prod` — it is the compatibility boundary
+   between the old and new native contract.
+4. Build and distribute to the stores. This cannot be an OTA; the client change is native.
+5. Then publish normally: `node scripts/dash-ota-publish.mjs --variant uat --platform both`.
 
-- The update applies, and **every bundled asset renders** — the 2026-09-08 incident does not
-  reproduce. Assets introduced in different releases and carried forward by reuse all render their
-  correct bytes.
-- `launch: applying pending … (attempt 1/2)` — exactly one boot attempt, which is the memoised
-  loader working. Un-memoised this read 1..6 and tripped the breaker.
-- On each release that changed one asset, the device issued **exactly 2 of 4 blob GETs** (the
-  changed asset and the bundle, which changes every release), and the publish uploaded **2 of 4
-  blobs** (the other two already in the store).
-
-**Next, in order:** `verify-release` in the CLI, then bytecode deltas (phase 7) behind the gates in spec §6.
-
-**Follow-up noticed on device, not yet addressed:** `/ota/v2/confirm` returned 401 on every launch
-of the example. Its storage is in-memory, so each cold start mints a new `installId` and the
-server nonce cannot match. Correct server behaviour, but it means a host app that wires
-non-persistent storage silently loses all adoption and health telemetry. The library should
-notice and say so.
+Ask the BE to pause/rollback the two active prod v1 releases regardless of timing — the v1 client
+loses every bundled image on apply and reverts, so those releases are not worth protecting.
 
 ### Memory shape — fixed (`ad6c0d2`)
 
