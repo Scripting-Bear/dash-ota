@@ -138,6 +138,45 @@ the global namespace shares identical files across platforms as well as across r
 **Still missing on iOS: any unit tests.** There is no Swift test target. The gc invariant is
 guarded by `npm run lint:native` instead, which asserts each client calls `gc` exactly once.
 
+### Phase 7 gates — measured 2026-09-10
+
+**Gate (b), patch sizes across three transition kinds.** Measured on the example app
+(1.41 MB bytecode, 0.47 MB as a full zstd-19 blob), which is the size that could be changed freely:
+
+| transition | patch | vs the full blob |
+|---|---|---|
+| same source rebuilt | 0.2 KB | 0.05% |
+| one string changed | 12.6 KB | **2.63%** |
+| a 400-row table added | 136.5 KB | 28.56% |
+
+A typical release costs a few percent of the full blob. Extrapolated to go-trade's 7.28 MB bundle
+that is roughly 200 KB rather than 7.28 MB. **Deltas are worth building.** Note the largest case
+already reaches 28.6%, so a "use the patch if it is under 30% of the full blob" rule would accept
+almost everything; pick the threshold nearer 50%, or simply "whichever is smaller".
+
+At go-trade scale only the rebuild-noise case is measured (3.5 KB on a 25.76 MB bundle, 8.4 s to
+generate). Measuring a real small/large change there needs two adjacent releases of the app;
+building an old commit in a worktree failed because Metro cannot resolve a shared `node_modules`
+through a symlink, and copying it was not worth it. Re-run the gate when the app next ships two
+releases in a row.
+
+**Gate (a), the decode spike.** Two constraints found, both settled:
+
+- **No Node binding can generate patches.** `@mongodb-js/zstd` exposes only `compress`/`decompress`
+  with no dictionary support, and Node's built-in zstd has none either. The CLI must shell out to
+  the `zstd` binary — the same treatment `hermesc` already gets — and must fail loudly when it is
+  absent.
+- **zstd-jni has `loadDict`, not `refPrefix`.** For raw bytes those are the same thing, and
+  `DashOtaPatchSpikeTest` proves it: a real `zstd --patch-from` frame applies through
+  `ZstdDecompressCtx.loadDict(base)` and reproduces the target byte for byte. A second test pins
+  that applying a patch against the **wrong** base does not silently yield the target.
+- Window sizes are fine by default: `--patch-from` frames declare windowLog 27, which is exactly
+  zstd's default `windowLogMax`, so no decoder tuning is needed for bases up to 128 MB.
+
+**Still unmeasured: peak RSS on a device.** `loadDict` takes the whole base as a byte array, so the
+base, the output and the patch buffers can be resident together — on a 25.76 MB base that is the
+real risk, and it can only be measured once the client applies a patch for real.
+
 ### Rollout consequences not yet decided
 
 - **Installed apps are explicitly not a concern** (owner, 2026-09-10): a new store build will be
