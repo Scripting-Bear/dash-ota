@@ -31,5 +31,19 @@ target 'DashOtaExample' do
       :mac_catalyst_enabled => false,
       # :ccache_enabled => true
     )
+
+    # Xcode 26.4+ (Apple clang 21) rejects fmt 11.0.2's consteval format-string checks
+    # (facebook/react-native#55601; fixed upstream in fmt 12, shipped in RN >= 0.83). Extend fmt's
+    # own "consteval is broken in Apple clang" escape hatch to all Apple clang versions so the
+    # checks fall back to runtime. Unrelated to dash-ota; drop it when this example moves past
+    # RN 0.83.
+    fmt_base = File.join(installer.sandbox.root, 'fmt/include/fmt/base.h')
+    if File.exist?(fmt_base)
+      File.chmod(0644, fmt_base) # CocoaPods checks out git-sourced pods read-only
+      File.write(fmt_base, File.read(fmt_base).gsub(
+        'defined(__apple_build_version__) && __apple_build_version__ < 14000029L',
+        'defined(__apple_build_version__)'
+      ))
+    end
   end
 end

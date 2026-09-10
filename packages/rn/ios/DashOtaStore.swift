@@ -121,15 +121,77 @@ final class DashOtaStore {
 
   func currentBundleVersion() -> Int { (slot(loadState(), "current")?["version"] as? Int) ?? 0 }
 
-  func stage(bundleId: String, version: Int, runtimeVersion: String, files: [(path: String, data: Data)]) throws {
+  /// Where a download assembles a release before it becomes a real slot.
+  ///
+  /// It survives process death on purpose, so an interrupted download resumes instead of starting
+  /// over.
+  func stagingDir(_ bundleId: String) -> URL {
+    let dir = stagingRoot.appendingPathComponent(bundleId)
+    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir
+  }
+
+  var stagingRoot: URL { baseDir.appendingPathComponent("staging") }
+
+  /// Files this device already holds, keyed by plaintext hash, for the next update to reuse.
+  ///
+  /// Only slots that are actually loadable count: `current` and `lastKnownGood`. Each entry is
+  /// checked for existence, because a slot record outliving its directory is exactly the state a
+  /// half-finished update leaves behind.
+  func haveFiles() -> [String: URL] {
+    var out: [String: URL] = [:]
+    let state = loadState()
+    for key in ["current", "lastKnownGood"] {
+      guard let slot = slot(state, key),
+            let bundleId = slot["bundleId"] as? String, !bundleId.isEmpty,
+            let files = slot["files"] as? [String: String] else { continue }
+      let dir = bundlesDir.appendingPathComponent(bundleId)
+      for (path, sha) in files where !sha.isEmpty && out[sha] == nil {
+        let url = dir.appendingPathComponent(path)
+        if fm.fileExists(atPath: url.path) { out[sha] = url }
+      }
+    }
+    return out
+  }
+
+  /// Promote a fully-assembled staging directory into a real slot, atomically.
+  ///
+  /// A kill in between leaves the staging dir for the next attempt, never a half-written slot.
+  ///
+  /// - Throws: if the staging directory does not contain every file the manifest promised. Without
+  ///   that check the state file can advertise a file the directory lacks, the bundle boots, and
+  ///   the missing asset renders blank with nothing in any log — the 2026-09-08 symptom arriving
+  ///   by a different route.
+  func commitStaged(
+    bundleId: String,
+    version: Int,
+    runtimeVersion: String,
+    bundleSha256: String,
+    files: [String: String]
+  ) throws {
+    let staging = stagingDir(bundleId)
+
+    let missing = files.keys.filter { path in
+      let url = staging.appendingPathComponent(path)
+      guard let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? NSNumber else { return true }
+      return size.intValue == 0
+    }
+    if !missing.isEmpty {
+      try? fm.removeItem(at: staging)
+      throw DashOtaError.message("staged bundle \(bundleId) is missing \(missing.count) file(s): \(missing.prefix(5))")
+    }
+
     let dir = bundlesDir.appendingPathComponent(bundleId)
     try? fm.removeItem(at: dir)
-    try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-    for f in files {
-      let out = dir.appendingPathComponent(f.path)
-      try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
-      try f.data.write(to: out)
+    try fm.createDirectory(at: dir.deletingLastPathComponent(), withIntermediateDirectories: true)
+    do {
+      try fm.moveItem(at: staging, to: dir)
+    } catch {
+      // Across-filesystem move can fail; fall back to a copy, then drop the staging copy.
+      try fm.copyItem(at: staging, to: dir)
+      try? fm.removeItem(at: staging)
     }
+
     var state = loadState()
     // `nativeBuild` stamps the binary this bundle was staged against — see `isCompatible`.
     state["staged"] = [
@@ -137,6 +199,8 @@ final class DashOtaStore {
       "version": version,
       "runtimeVersion": runtimeVersion,
       "nativeBuild": DashOtaConfig.nativeBuild,
+      "bundleSha256": bundleSha256,
+      "files": files,
       "dir": dir.path,
     ]
     saveState(state)
@@ -158,7 +222,6 @@ final class DashOtaStore {
     state["trial"] = false
     state["bootAttempts"] = 0
     saveState(state)
-    gc(state)
   }
 
   func rollback() -> Bool {
@@ -168,7 +231,6 @@ final class DashOtaStore {
     state["bootAttempts"] = 0
     state["pending"] = nil
     saveState(state)
-    gc(state)
     return true
   }
 
@@ -241,7 +303,14 @@ final class DashOtaStore {
     let prev = consumeLaunchMarks()
     let forgiven = prev["beaconAt"] != nil && prev["pausedAt"] != nil
 
-    // The only safe moment to sweep slots: nothing is mapped yet this process.
+    // The only safe moment to sweep slots, and therefore the only place gc is called.
+    //
+    // Nothing is mapped yet this process and no download can be in flight, because JS has not
+    // started. `markHealthy` and `rollback` used to call it too, at arbitrary times, and gc
+    // deletes any staging directory it does not recognise — a download in progress has not
+    // written `staged` yet. Marking healthy mid-download therefore deleted files that had already
+    // been assembled; the update committed with them still listed in its state and each rendered
+    // blank. Reproduced on Android 2026-09-10; this side is the same shape.
     gc(state)
 
     if let pending = slot(state, "pending") {
@@ -346,5 +415,10 @@ final class DashOtaStore {
     )
     let dirs = (try? fm.contentsOfDirectory(at: bundlesDir, includingPropertiesForKeys: nil)) ?? []
     for d in dirs where !keep.contains(d.lastPathComponent) { try? fm.removeItem(at: d) }
+
+    // Staging dirs for releases nobody references any more. Safe here and nowhere else: see the
+    // call site in resolveBundleAtLaunch.
+    let staged = (try? fm.contentsOfDirectory(at: stagingRoot, includingPropertiesForKeys: nil)) ?? []
+    for d in staged where !keep.contains(d.lastPathComponent) { try? fm.removeItem(at: d) }
   }
 }

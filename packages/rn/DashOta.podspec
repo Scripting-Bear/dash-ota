@@ -13,8 +13,19 @@ Pod::Spec.new do |s|
   s.platforms    = { :ios => min_ios_version_supported }
   s.source       = { :git => "https://github.com/dash-ota/react-native-dash-ota.git", :tag => "#{s.version}" }
 
-  s.source_files = "ios/**/*.{h,m,mm,swift,cpp}"
-  s.private_header_files = "ios/**/*.h"
+  # `.c` is here for ios/vendor/zstddeclib.c, upstream zstd's single-file decompressor. Apple has
+  # no zstd and the wire format is zstd on every platform; see ios/vendor/README.md.
+  s.source_files = "ios/**/*.{h,m,mm,c,swift,cpp}"
+  # DashOtaZstd.h is deliberately public: the pod builds as a framework, where bridging headers are
+  # rejected, so a public Objective-C header in the umbrella is how Swift reaches the vendored C.
+  s.public_header_files = "ios/DashOtaZstd.h"
+  s.private_header_files = ["ios/DashOta.h", "ios/vendor/*.h"]
+
+  s.pod_target_xcconfig = {
+    "HEADER_SEARCH_PATHS" => "${PODS_TARGET_SRCROOT}/ios/vendor",
+    # The vendored decoder is upstream code; do not fail the build on its warnings.
+    "GCC_WARN_INHIBIT_ALL_WARNINGS" => "YES",
+  }
 
   install_modules_dependencies(s)
 end

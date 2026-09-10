@@ -24,7 +24,7 @@ function makeMemoryStorage(): OtaStorage {
 /**
  * The release marker. Bump it in the OTA bundle so the running release is visible on screen.
  */
-const RELEASE_MARKER = 'embedded (APK)';
+const RELEASE_MARKER = 'embedded (native build)';
 
 /**
  * Bundled images, the thing the 2026-09-08 incident destroyed: after an OTA applied, every

@@ -132,7 +132,9 @@ public class DashOtaImpl: NSObject {
 
   /// Download → Ed25519-verify → AES-GCM decrypt → unpack → per-file hash → stage. Throws on
   /// any failure (fail closed). Returns `{ bundleId, bundleVersion }`.
-  @objc public func downloadAndStage(_ downloadUrl: String, downloadToken: String, manifestJson: String, signatureB64: String) throws -> NSDictionary {
+  @objc public func downloadAndStage(_ blobBaseUrl: String, downloadToken: String, manifestJson: String, signatureB64: String) throws -> NSDictionary {
+    // Signature first: nothing in the manifest is trustworthy until it verifies, including the
+    // sizes used to bound every download below.
     let keys = DashOtaConfig.publicKeysB64.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     let manifestData = Data(manifestJson.utf8)
     guard let sig = DashOtaCrypto.b64(signatureB64),
@@ -142,49 +144,173 @@ public class DashOtaImpl: NSObject {
     guard let manifest = try JSONSerialization.jsonObject(with: manifestData) as? [String: Any] else {
       throw DashOtaError.message("bad manifest json")
     }
+    guard (manifest["schema"] as? Int) == 2 else {
+      throw DashOtaError.message("manifest schema is not 2 — this binary speaks the v2 wire format only")
+    }
+    guard let appId = manifest["appId"] as? String, appId == Bundle.main.bundleIdentifier else {
+      throw DashOtaError.message("manifest was built for a different app")
+    }
     guard (manifest["runtimeVersion"] as? String) == DashOtaConfig.runtimeVersion else {
       throw DashOtaError.message("runtimeVersion does not match this binary")
     }
     guard let version = manifest["bundleVersion"] as? Int, version > DashOtaStore.shared.currentBundleVersion() else {
       throw DashOtaError.message("bundleVersion is not newer")
     }
-    guard let bundleId = manifest["bundleId"] as? String, let enc = manifest["encryption"] as? [String: Any] else {
+    guard let bundleId = manifest["bundleId"] as? String,
+          let encryption = manifest["encryption"] as? [String: Any],
+          let entries = manifest["files"] as? [[String: Any]], !entries.isEmpty else {
       throw DashOtaError.message("malformed manifest")
     }
     if DashOtaStore.shared.isDisabled(bundleId) {
       throw DashOtaError.message("bundle was disabled after a crash loop")
     }
 
-    // The manifest is already Ed25519-verified, so its signed ciphertextSize is trustworthy — use
-    // it to bound the download (rejects a MITM-swapped/oversized body).
-    guard let expectedSize = enc["ciphertextSize"] as? Int else {
-      throw DashOtaError.message("manifest missing encryption.ciphertextSize")
-    }
-    let ciphertext = try downloadSync(downloadUrl, token: downloadToken, expectedSize: expectedSize)
-    guard DashOtaCrypto.sha256Hex(ciphertext) == (enc["ciphertextSha256"] as? String) else {
-      throw DashOtaError.message("ciphertext hash mismatch")
-    }
-    guard let keyData = DashOtaCrypto.b64(enc["contentKeyB64"] as? String ?? ""),
-          let iv = DashOtaCrypto.b64(enc["ivB64"] as? String ?? ""),
-          let tag = DashOtaCrypto.b64(enc["tagB64"] as? String ?? "") else {
-      throw DashOtaError.message("bad encryption params")
-    }
-    let archive = try DashOtaCrypto.aesGcmDecrypt(key: keyData, iv: iv, ciphertext: ciphertext, tag: tag)
-    let files = try DashOtaCrypto.unpackArchive(archive)
-
-    guard let manifestFiles = manifest["files"] as? [[String: Any]], manifestFiles.count == files.count else {
-      throw DashOtaError.message("file count mismatch")
-    }
-    var expected: [String: [String: Any]] = [:]
-    for fe in manifestFiles { if let p = fe["path"] as? String { expected[p] = fe } }
-    for f in files {
-      guard let fe = expected[f.path], (fe["size"] as? Int) == f.data.count, (fe["sha256"] as? String) == DashOtaCrypto.sha256Hex(f.data) else {
-        throw DashOtaError.message("file hash/size mismatch: \(f.path)")
+    // Every path is checked before anything is written: a valid signature over "../../x" is still
+    // a valid signature.
+    for entry in entries {
+      guard let path = entry["path"] as? String else { throw DashOtaError.message("manifest entry has no path") }
+      if let reason = Self.invalidPath(path) {
+        throw DashOtaError.message("manifest path \(path) \(reason)")
       }
     }
 
-    try DashOtaStore.shared.stage(bundleId: bundleId, version: version, runtimeVersion: DashOtaConfig.runtimeVersion, files: files)
+    var contentKey: Data?
+    if (encryption["mode"] as? String) == "aes-256-gcm" {
+      guard let key = DashOtaCrypto.b64(encryption["contentKeyB64"] as? String ?? "") else {
+        throw DashOtaError.message("bad content key")
+      }
+      contentKey = key
+    }
+
+    let fm = FileManager.default
+    let staging = DashOtaStore.shared.stagingDir(bundleId)
+    let have = DashOtaStore.shared.haveFiles()
+    var fileMap: [String: String] = [:]
+    var bundleSha = ""
+
+    for entry in entries {
+      guard let path = entry["path"] as? String,
+            let plainSha = entry["sha256"] as? String,
+            let size = entry["size"] as? Int,
+            let blob = entry["blob"] as? [String: Any],
+            let blobSha = blob["sha256"] as? String,
+            let blobSize = blob["size"] as? Int else {
+        throw DashOtaError.message("malformed file entry")
+      }
+      if (entry["role"] as? String) == "bundle" { bundleSha = plainSha }
+      fileMap[path] = plainSha
+
+      let out = staging.appendingPathComponent(path)
+      try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+
+      // Already assembled by an earlier, interrupted attempt.
+      if let existing = (try? fm.attributesOfItem(atPath: out.path))?[.size] as? NSNumber,
+         existing.intValue == size,
+         (try? DashOtaCrypto.sha256HexOfFile(out)) == plainSha {
+        continue
+      }
+
+      // The file is already on this device: copy it instead of fetching it, then re-hash anyway,
+      // because "already on disk" is never evidence that a file is correct.
+      if let reusable = have[plainSha] {
+        try? fm.removeItem(at: out)
+        try fm.copyItem(at: reusable, to: out)
+        guard (try? DashOtaCrypto.sha256HexOfFile(out)) == plainSha else {
+          try? fm.removeItem(at: out)
+          throw DashOtaError.message("reused file \(path) did not verify")
+        }
+        continue
+      }
+
+      let part = DashOtaStore.shared.tmpDir.appendingPathComponent("\(blobSha).part")
+      let body = try downloadSync("\(blobBaseUrl)/\(blobSha)", token: downloadToken, expectedSize: blobSize)
+      try body.write(to: part, options: .atomic)
+      guard (try? DashOtaCrypto.sha256HexOfFile(part)) == blobSha else {
+        try? fm.removeItem(at: part)
+        throw DashOtaError.message("blob \(blobSha) did not verify")
+      }
+
+      // Verified bytes only from here: decrypt, then decompress, then check the plaintext. Every
+      // step is file-to-file — a decompressed Hermes bundle is the largest single allocation this
+      // path could make, and it is never held in memory.
+      let tmpOut = staging.appendingPathComponent("\(path).part")
+      var sealed = part
+      if let contentKey {
+        guard let iv = DashOtaCrypto.b64(blob["ivB64"] as? String ?? ""),
+              let tag = DashOtaCrypto.b64(blob["tagB64"] as? String ?? "") else {
+          try? fm.removeItem(at: part)
+          throw DashOtaError.message("blob \(blobSha) is missing its iv or tag")
+        }
+        let decrypted = DashOtaStore.shared.tmpDir.appendingPathComponent("\(blobSha).dec")
+        do {
+          try DashOtaCrypto.aesGcmDecryptToFile(
+            key: contentKey, iv: iv, src: part, tag: tag,
+            // AAD binds the ciphertext to the plaintext it claims to be, and deliberately not to
+            // the release: one blob is shared by every release containing that file.
+            aad: Data(plainSha.utf8), dest: decrypted
+          )
+        } catch {
+          try? fm.removeItem(at: part)
+          throw DashOtaError.message("blob \(blobSha) did not authenticate")
+        }
+        try? fm.removeItem(at: part)
+        sealed = decrypted
+      }
+
+      let writtenSha: String
+      do {
+        if (blob["compression"] as? String) == "zstd" {
+          writtenSha = try DashOtaCrypto.zstdDecompressToFile(src: sealed, dest: tmpOut, expectedSize: size)
+        } else {
+          try? fm.removeItem(at: tmpOut)
+          try fm.moveItem(at: sealed, to: tmpOut)
+          writtenSha = try DashOtaCrypto.sha256HexOfFile(tmpOut)
+        }
+      } catch {
+        try? fm.removeItem(at: sealed)
+        try? fm.removeItem(at: tmpOut)
+        throw error
+      }
+      try? fm.removeItem(at: sealed)
+
+      let written = ((try? fm.attributesOfItem(atPath: tmpOut.path))?[.size] as? NSNumber)?.intValue ?? -1
+      guard written == size, writtenSha == plainSha else {
+        try? fm.removeItem(at: tmpOut)
+        throw DashOtaError.message("file \(path) did not verify")
+      }
+
+      // Rename into place only now, so a kill never leaves a short file that a later resume would
+      // mistake for a complete one.
+      try? fm.removeItem(at: out)
+      try fm.moveItem(at: tmpOut, to: out)
+    }
+
+    try DashOtaStore.shared.commitStaged(
+      bundleId: bundleId,
+      version: version,
+      runtimeVersion: DashOtaConfig.runtimeVersion,
+      bundleSha256: bundleSha,
+      files: fileMap
+    )
     return ["bundleId": bundleId, "bundleVersion": version] as NSDictionary
+  }
+
+  /// Reject anything that could escape the staging directory or confuse the file system.
+  ///
+  /// Mirrors `validatePath` in `@dash-ota/shared` and `invalidPath` on Android; all three must
+  /// agree, or a release that publishes cleanly fails on one platform only.
+  static func invalidPath(_ path: String) -> String? {
+    if path.isEmpty { return "is empty" }
+    if path.utf8.count > 512 { return "is longer than 512 bytes" }
+    if path.contains("\0") { return "contains NUL" }
+    if path.contains("\\") { return "contains a backslash" }
+    if path.hasPrefix("/") { return "is absolute" }
+    if path.count >= 2, path[path.index(path.startIndex, offsetBy: 1)] == ":" { return "has a drive letter" }
+    for segment in path.split(separator: "/", omittingEmptySubsequences: false) {
+      if segment.isEmpty { return "has an empty segment" }
+      if segment == "." || segment == ".." { return "contains a \(segment) segment" }
+    }
+    return nil
   }
 
   private func downloadSync(_ urlStr: String, token: String, expectedSize: Int) throws -> Data {
@@ -229,7 +355,7 @@ public class DashOtaImpl: NSObject {
     // streaming bounded download (a URLSessionDataDelegate that cancels past the cap) is the
     // stronger memory-DoS fix; this equality check already rejects a swapped/oversized bundle.
     guard data.count == expectedSize else {
-      throw DashOtaError.message("download size \(data.count) != signed ciphertextSize \(expectedSize)")
+      throw DashOtaError.message("download size \(data.count) != the \(expectedSize) bytes the signed manifest promised")
     }
     return data
   }

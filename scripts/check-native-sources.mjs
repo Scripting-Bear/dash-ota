@@ -35,22 +35,58 @@ function walk(dir, out = []) {
   return out;
 }
 
-const failures = [];
-for (const root of ROOTS) {
-  for (const file of walk(root)) {
-    if (!file.endsWith('.kt')) continue;
-    readFileSync(file, 'utf8')
-      .split('\n')
-      .forEach((line, i) => {
-        if (line.includes(ESCAPED_DOLLAR)) failures.push(`${file}:${i + 1}: ${line.trim()}`);
-      });
+const files = ROOTS.flatMap((root) => walk(root));
+let failed = false;
+
+/**
+ * @param title - what went wrong.
+ * @param lines - offending locations.
+ */
+function report(title, lines) {
+  failed = true;
+  console.error(`\n${title}\n`);
+  for (const line of lines) console.error(`  ${line}`);
+}
+
+const dollars = [];
+for (const file of files.filter((f) => f.endsWith('.kt'))) {
+  readFileSync(file, 'utf8')
+    .split('\n')
+    .forEach((line, i) => {
+      if (line.includes(ESCAPED_DOLLAR)) dollars.push(`${file}:${i + 1}: ${line.trim()}`);
+    });
+}
+if (dollars.length > 0) {
+  report(
+    `${dollars.length} escaped dollar(s) in Kotlin source — these emit literal text, not values. Use a plain $:`,
+    dollars,
+  );
+}
+
+// Sweeping slots is safe only at launch, before JS starts and before any download is in flight.
+// `markHealthy` used to call it from a timer mid-download and deleted files a staging directory had
+// already assembled; the update then committed with them missing and each rendered blank. Both
+// clients must therefore have exactly one call site, in the launch path.
+for (const [file, pattern] of [
+  ['packages/rn/android/src/main/java/com/dashota/DashOtaStore.kt', /^\s*gc\(ctx, state\)/gm],
+  ['packages/rn/ios/DashOtaStore.swift', /^\s*gc\(state\)/gm],
+]) {
+  let body;
+  try {
+    body = readFileSync(file, 'utf8');
+  } catch {
+    continue;
+  }
+  const calls = body.split('\n').filter((line) => pattern.test(line.concat('\n')));
+  pattern.lastIndex = 0;
+  const count = (body.match(pattern) ?? []).length;
+  if (count !== 1) {
+    report(`${file}: gc() is called ${count} times; it must be called exactly once, from the launch path:`, calls);
   }
 }
 
-if (failures.length > 0) {
-  console.error(`\n${failures.length} escaped dollar(s) in Kotlin source — these emit literal text, not values:\n`);
-  for (const f of failures) console.error(`  ${f}`);
-  console.error('\nUse a plain $ for interpolation.\n');
+if (failed) {
+  console.error('');
   process.exit(1);
 }
 console.log('native source checks passed.');

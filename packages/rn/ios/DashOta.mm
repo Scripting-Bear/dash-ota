@@ -36,7 +36,7 @@
 }
 
 // --- Download + verify + stage (off the JS thread) ---
-- (void)downloadAndStage:(NSString *)downloadUrl
+- (void)downloadAndStage:(NSString *)blobBaseUrl
            downloadToken:(NSString *)downloadToken
             manifestJson:(NSString *)manifestJson
             signatureB64:(NSString *)signatureB64
@@ -44,7 +44,7 @@
                   reject:(RCTPromiseRejectBlock)reject {
   dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
     NSError *err = nil;
-    NSDictionary *res = [self->_impl downloadAndStage:downloadUrl
+    NSDictionary *res = [self->_impl downloadAndStage:blobBaseUrl
                                         downloadToken:downloadToken
                                          manifestJson:manifestJson
                                          signatureB64:signatureB64
