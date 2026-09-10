@@ -238,10 +238,31 @@ server URL. Steps, both platforms, identical semantics:
    is renamed into place); verify plaintext `sha256` + `size`; rename to `staging/{path}`.
    Blobs already complete in `staging/` are skipped on resume.
 
+   **Reuse copies; it cannot link.** SELinux denies `link` to `untrusted_app` on `app_data_file`,
+   so `Os.link` always fails with `EACCES` on a normal Android build (`avc: denied { link } …
+   tclass=file`, measured on API 34; `protected_hardlinks` is 0, so this is policy, not the
+   sysctl). A link is still attempted once per download and the result remembered, so a platform
+   that does allow it gets the free path. Budget disk for a full copy of every reused file.
+
+   **Nothing may sweep slots while this is running.** `gc` deletes staging directories it does not
+   recognise, and a download in flight has not written `staged` yet. It must therefore be called
+   only from the launch path, before JS starts — see invariant 3. `markHealthy` calling it (from a
+   timer, mid-download) deleted files that had already been assembled; the update then committed
+   with them still listed in its state and each rendered blank. `commitStaged` refuses to publish a
+   slot that is missing any file its manifest promised, so this class of failure is loud.
+
    **Memory.** The peak is set by the bytecode blob, not by an average asset: 7.3 MB stored, 25.8 MB
    decompressed on the real go-trade bundle. Decrypt into a temp file, then stream the decompression
    from that file to `staging/{path}.tmp`, so the 25.8 MB never has to be resident. A naive
    in-memory pass peaks around 33 MB and will be felt on a low-end device.
+
+   One copy of the *compressed* blob is unavoidable on Android, and the earlier wording that the
+   decryption itself streams was wrong. `Cipher.update` releases nothing during GCM decryption: the
+   tag is only known at the end, and the API will not return plaintext it has not authenticated.
+   Measured on SunJCE — `update` returned 0 bytes of a 1 MB message and `doFinal` returned all of
+   it. Conscrypt behaves the same. Streaming the decryption too would need a segmented AEAD (Tink's
+   `StreamingAead`), which is a wire-format change; it is not worth it while the compressed blob is
+   a few MB and the decompressed one was the term that dominated.
 
    **Android trap — do not use `CipherInputStream` for GCM.** Several implementations swallow
    `AEADBadTagException` at end of stream and simply return truncated plaintext, so a tampered blob

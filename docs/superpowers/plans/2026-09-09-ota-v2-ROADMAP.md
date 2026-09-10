@@ -92,23 +92,33 @@ server nonce cannot match. Correct server behaviour, but it means a host app tha
 non-persistent storage silently loses all adoption and health telemetry. The library should
 notice and say so.
 
-### Known gap, deliberate and mine
+### Memory shape — fixed (`ad6c0d2`)
 
-`DashOtaModule.downloadAndStage` reads each blob fully into memory, decrypts in memory and
-decompresses in memory — exactly the "naive in-memory pass" spec §5.6 warns against. Peak is about
-33 MB per update on the go-trade bundle (7.3 MB stored + 25.8 MB plaintext). Spec §5.6 says to
-decrypt to a temp file and stream the decompression. Either fix the code or correct the spec; fixing
-is preferred.
+Unpacking was three whole-file allocations (read, decrypt, decompress), peaking near 33 MB on the
+go-trade bundle. It is file-to-file end to end now, one 64 KB buffer.
+
+One copy of the *compressed* blob is unavoidable: `Cipher.update` releases nothing during GCM
+decryption, because the tag is only known at the end and the API will not hand back plaintext it
+has not authenticated. Measured on SunJCE — `update` returned 0 bytes of a 1 MB message, `doFinal`
+returned all of it. The large decompressed allocation, which is what actually dominated, is gone.
+
+### The gc race — fixed (`ad6c0d2`)
+
+`markHealthy` called `gc`, as did `rollback` and the incompatible-slot drop. `gc` deletes any
+staging directory it does not recognise, and a download in flight has not written `staged` yet.
+The example app marks healthy 1.5s after mount, mid-download: files already assembled were deleted,
+the update committed with them still listed in its state, and each one rendered blank. **A second,
+independent route to the 2026-09-08 symptom**, and a violation of the spec's own third invariant.
+`resolveBundleAtLaunch` is the only caller now, and `commitStaged` refuses to publish a slot that
+is missing a promised file.
 
 ### Rollout consequences not yet decided
 
-- Deploying the v2 backend **darkens the existing channel**: every installed app speaks v1, gets the
-  tombstone, and stops seeing updates. go-trade does not render the native-policy gate, so users see
-  nothing until a new store build ships.
-- **Re-running a failed publish re-uploads everything.** Fresh keys and IVs per build mean identical
-  files produce different blob bytes, so nothing from the earlier attempt is reusable. Retries
-  within one run cover transient failures. Device-side reuse is unaffected (it keys on the plaintext
-  hash).
+- **Installed apps are explicitly not a concern** (owner, 2026-09-10): a new store build will be
+  cut and distributed once every phase is done, and the backend team asked for changes after that.
+  Do not plan around the currently installed population.
+- Re-running a failed publish now re-uploads only what is genuinely missing — the content key is
+  per channel and encryption is convergent, so an interrupted publish resumes.
 - `scripts/dash-ota-publish.mjs` in go-trade must pass `--app-id` before it can publish v2 at all.
 
 ---
