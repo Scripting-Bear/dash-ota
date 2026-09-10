@@ -38,6 +38,8 @@ android {
 
   defaultConfig {
     minSdkVersion getExtOrDefault("minSdkVersion")
+    // Shipped to consuming apps so a minified release build does not break zstd decompression.
+    consumerProguardFiles "consumer-rules.pro"
   }
 
   compileOptions {

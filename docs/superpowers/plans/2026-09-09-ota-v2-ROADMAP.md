@@ -40,15 +40,33 @@ Phases 2–6 are one wire migration and must ship together. Phase 1 ships on its
 ## ⚠️ STATE AS OF 2026-09-10 EVENING — read before anything
 
 **0.4 IS PUBLISHED TO NPM.** `@dash-ota/shared@0.4.0`, `@dash-ota/backend@0.4.0`,
-`@dash-ota/cli@0.4.1`, `react-native-dash-ota@0.4.0`. Verified by querying registry.npmjs.org
+`@dash-ota/cli@0.4.1`, `react-native-dash-ota@0.4.1` (0.4.1 adds the zstd-jni consumer ProGuard
+rule — see the R8 section below; 0.4.0 does not have it). Verified by querying registry.npmjs.org
 directly — do **not** trust `npm publish`'s own success line or `npm view`: two of the four sat in a
 *staged* state for minutes after printing `+ pkg@version`, and one needed a retry that returned
 `409 Cannot publish over previously staged version`.
 
-**The UAT backend is ALREADY on v2** (probed 2026-09-10): `/admin/publish` → 404, `/admin/releases`
-→ 403, `/ota/v1/check` → the tombstone. Nobody scheduled that, so check how prod deploys — if it
-pulls `@dash-ota/backend@latest` the same way, **prod will darken itself without a cutover**.
-Prod was still v1 at last check, with 51 enrolled devices and 2 active releases at 10%.
+**Backend versions — re-probed 2026-09-10, this supersedes any earlier note.**
+
+| Host | Backend | Evidence |
+|---|---|---|
+| `ota-uat.gotradeindia.com` | **v2** | `/ota/v1/download` → 410 tombstone; `/ota/v2/releases/:id/blobs/:sha` → 403 `bad_token` (route present) |
+| `ota.gotradeindia.com` | **still v1** | `/ota/v1/download` → 403 `bad_token` (route live); `/ota/v2/releases/:id/blobs/:sha` → 404 `Cannot GET` (route absent) |
+
+**Do not fingerprint with `/admin/publish`.** It was POST-only in v1, so a GET returns Express's
+404 on *both* versions — it looks like a discriminator and is not. The pair above is the real test:
+one v2-only GET route, one v1 route that v2 replaces with a tombstone.
+
+So prod did **not** self-upgrade, and there is no rush: the 0.4 client speaks only `/ota/v2/*`, so
+against prod's v1 backend it simply gets 404s and stays quiet. Either order of (ship the app) and
+(upgrade prod's backend) is safe; OTA is only *functional* on prod once both are done.
+
+**Prod's two live releases are `rt=3 v1` at 10% rollout, on both platforms** — the same
+runtimeVersion `.env.prod` shipped before today. That is precisely why the runtimeVersion bump
+below is not cosmetic: without it the new v2 client would ask prod for rt=3 and be a candidate for
+schema-1 releases the moment prod's backend upgrades. (`store.pickEligible` does filter
+`schema !== 2`, but that is an implementation detail of the current backend, not a contract, and
+it evaporates on a rollback.) Prod also has 4 rolled-back releases; 51 enrolled devices.
 
 **Every installed app is dark on UAT.** They run client 0.3.x and get the tombstone. Harmless in
 practice: the shipped build does not render the native-policy gate, so the OTA channel just goes
@@ -66,15 +84,59 @@ build.
 
 ### Next: ship the app
 
-1. `npm i` in go-trade — node_modules still has **0.3.2** while the pin says `^0.4.0`.
-2. `npm run pod:install` (iOS vendored zstd) + a Gradle sync (zstd-jni).
-3. **Bump `OTA_RUNTIME_VERSION`** in `.env.uat` / `.env.prod` — it is the compatibility boundary
-   between the old and new native contract.
-4. Build and distribute to the stores. This cannot be an OTA; the client change is native.
-5. Then publish normally: `node scripts/dash-ota-publish.mjs --variant uat --platform both`.
+Steps 1–3 are **done** (2026-09-10, uncommitted in go-trade):
+
+1. ✅ `npm i` — `react-native-dash-ota` 0.3.1→**0.4.0**, `@dash-ota/cli` 0.2.0→**0.4.1**
+   (the CLI pin was stale and 0.2.0 rejects `--app-id`/`--content-key`, so publishing would have
+   failed), plus `@mongodb-js/zstd` as the CLI's native addon.
+2. ✅ `pod install` — DashOta 0.4.0 in `Podfile.lock`. Android: `assembleDevDebug` green;
+   `libzstd-jni-1.5.7-4.so` present for all four ABIs and `com/dashota/*` in the dex.
+3. ✅ **`OTA_RUNTIME_VERSION` bumped**: dev 2→3, uat 5→6, prod 3→4. Verified baked into the
+   binary — `aapt2 dump resources` shows `string/ota_runtime_version = "3"` in the dev APK.
+   `scripts/dash-ota-publish.mjs` reads it from the flavour env, so publishing follows automatically.
+4. ⬜ Build and distribute to the stores. This cannot be an OTA; the client change is native.
+5. ⬜ Then publish normally: `node scripts/dash-ota-publish.mjs --variant uat --platform both`.
+
+Because every channel's runtimeVersion moved, **each channel is empty until its first 0.4 publish** —
+expected, and the reason step 5 follows step 4 rather than preceding it.
 
 Ask the BE to pause/rollback the two active prod v1 releases regardless of timing — the v1 client
 loses every bundled image on apply and reverts, so those releases are not worth protecting.
+
+### R8 / zstd-jni — a release-only trap, found and fixed 2026-09-10
+
+zstd-jni is **new** with 0.4 (it does not appear in the previous release's `mapping.txt`) and ships
+**no consumer ProGuard rules**. Its native library resolves Java members by name through JNI: the
+`.so` contains the literal strings `srcPos`, `dstPos`, `nativePtr`, `consumed`, `produced` and
+`com/github/luben/zstd/ZstdFrameProgression`.
+
+The rule an app inherits from AGP is
+
+```
+-keepclasseswithmembernames,includedescriptorclasses class * { native <methods>; }
+```
+
+which keeps a class name and its **native method** names — not its other members, and it does not
+match a class with no native methods at all. So `ZstdInputStreamNoFinalizer`'s *private*
+`srcPos`/`dstPos` were unprotected and `ZstdFrameProgression` was not matched. R8 renames freely
+here: in go-trade's last shipped build `DashOtaCrypto` became `m3.c`. The result would have been
+`GetFieldID` returning null and **every OTA download failing, in release builds only**.
+
+Fixed in two places:
+
+- **Library — shipped in `react-native-dash-ota@0.4.1`:** `packages/rn/android/consumer-rules.pro`
+  plus `consumerProguardFiles` in `packages/rn/android/build.gradle`, so every consumer gets it
+  automatically. 0.4.0 does not carry it.
+- **go-trade:** on `^0.4.1`, so it inherits the consumer rule; no app-level rule needed.
+
+Verified in the shipped artifact, not just the config: `seeds.txt` lists
+`ZstdInputStreamNoFinalizer: long srcPos` / `long dstPos` as kept, `usage.txt` strips nothing
+zstd-related, and the R8-minified release dex still contains all three class names and all five
+field names.
+
+dash-ota's own classes need no rule — RN ships
+`-keep class * implements com.facebook.react.bridge.NativeModule { *; }`, and the previous shipped
+mapping confirms `DashOtaModule -> com.dashota.DashOtaModule` survived unrenamed.
 
 ### Memory shape — fixed (`ad6c0d2`)
 
