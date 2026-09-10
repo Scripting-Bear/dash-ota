@@ -30,7 +30,7 @@ order. If a session ends, the next agent resumes from the Status board below.
 | 2 | **M2a** shared: manifest v2, zstd, per-blob crypto | shared | `2026-09-09-m2-shared-backend.md` Tasks 1–4 | ✅ done — `d97d3de` on **`feat/ota-v2`** |
 | 3 | **M2b** backend: router, providers, store, routes, tombstone | backend | built from spec §5.3–§5.5 | ✅ done — `8a8cbcd`, 27 e2e + 8 express checks |
 | 4 | **M2c** CLI: 3-step publish | cli | `2026-09-09-m2-cli-docs.md` Tasks 1–7 | ✅ publish done — `2b3e34f`, proven against a live backend `7402fcc`. `verify-release` NOT built |
-| 5 | **M2d** rn native + JS (0.4.0) | rn | spec §5.6, §5.7 | 🟡 **Android done and proven on a device** (`e02acb6`, `fb62b1f`; 11 Kotlin tests + 4-generation emulator run). **iOS NOT started** |
+| 5 | **M2d** rn native + JS (0.4.0) | rn | spec §5.6, §5.7 | ✅ **both platforms done and proven on devices** — Android `e02acb6`/`fb62b1f`/`ad6c0d2` (18 Kotlin tests, 7-generation emulator run), iOS `2c6f795` (simulator, 2 releases) |
 | 6 | **M2e** documentation site | website | `2026-09-09-m2-cli-docs.md` Tasks 8–13 (full) | ⬜ — docs still describe v1 |
 | 7 | **M3** bytecode deltas | all | none — spec §6, gated on spikes | ⬜ |
 | 8 | Rollout in go-trade | consuming app | this file, Rollout section | ⬜ |
@@ -84,7 +84,7 @@ consecutive OTA generations against a local v2 backend. What it found:
   changed asset and the bundle, which changes every release), and the publish uploaded **2 of 4
   blobs** (the other two already in the store).
 
-**Next, in order:** the memory shape below, then iOS, then docs.
+**Next, in order:** documentation (phase 6), then `verify-release`, then bytecode deltas.
 
 **Follow-up noticed on device, not yet addressed:** `/ota/v2/confirm` returned 401 on every launch
 of the example. Its storage is in-memory, so each cold start mints a new `installId` and the
@@ -111,6 +111,24 @@ the update committed with them still listed in its state, and each one rendered 
 independent route to the 2026-09-08 symptom**, and a violation of the spec's own third invariant.
 `resolveBundleAtLaunch` is the only caller now, and `commitStaged` refuses to publish a slot that
 is missing a promised file.
+
+### iOS — done (`2c6f795`)
+
+Apple has no zstd, so upstream's single-file decompress-only build is vendored in
+`packages/rn/ios/vendor`, pinned to 1.5.7 to match `zstd-jni:1.5.7-4`. Rejected alternatives: a
+second codec for iOS only (~29% larger payloads, two code paths, and a complication for deltas),
+and a third-party pod.
+
+The zstd call is Objective-C because the pod builds as a framework, where Xcode refuses bridging
+headers outright. A public Objective-C header in the pod's umbrella is how Swift reaches C there.
+
+Proven on an iPhone 17 Pro simulator (iOS 26.5, Release): 4 of 4 blobs on a fresh install, then
+**2 of 4** on a release changing one asset, every asset rendering. Publishing the iOS release
+uploaded only **1 of 4** blobs — the assets were already in the store from the Android release, so
+the global namespace shares identical files across platforms as well as across releases.
+
+**Still missing on iOS: any unit tests.** There is no Swift test target. The gc invariant is
+guarded by `npm run lint:native` instead, which asserts each client calls `gc` exactly once.
 
 ### Rollout consequences not yet decided
 
