@@ -9,7 +9,9 @@
  *
  * Run: `npm run lint:native`.
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const ROOTS = ['packages/rn/android/src', 'packages/rn/ios'];
@@ -83,6 +85,37 @@ for (const [file, pattern] of [
   if (count !== 1) {
     report(`${file}: gc() is called ${count} times; it must be called exactly once, from the launch path:`, calls);
   }
+}
+
+// The vendored zstd must not leak an un-prefixed global symbol, or a libzstd in the host app can
+// silently take over our decoder — see scripts/generate-zstd-prefix.mjs. Verified by compiling the
+// amalgamation exactly as the podspec does and reading the symbol table back.
+try {
+  const vendor = 'packages/rn/ios/vendor';
+  const header = join(vendor, 'zstd_symbol_prefix.h');
+  if (existsSync(join(vendor, 'zstddeclib.c')) && existsSync(header)) {
+    const work = mkdtempSync(join(tmpdir(), 'zstd-check-'));
+    try {
+      const object = join(work, 'probe.o');
+      execFileSync('cc', ['-c', '-O1', '-w', '-include', header, join(vendor, 'zstddeclib.c'), '-I', vendor, '-o', object]);
+      const leaked = execFileSync('nm', ['-g', '-U', object], { encoding: 'utf8' })
+        .split('\n')
+        .map((line) => line.trim().match(/^[0-9a-f]+\s+[TDBSCI]\s+_(\S+)$/i))
+        .filter((m) => m !== null)
+        .map((m) => m[1])
+        .filter((name) => !name.startsWith('DashOtaZ_'));
+      if (leaked.length > 0) {
+        report(
+          `${leaked.length} un-prefixed global symbol(s) escape the vendored zstd — run \`npm run gen:zstd-prefix\`:`,
+          leaked.slice(0, 10),
+        );
+      }
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }
+} catch (error) {
+  console.error(`\nskipped the vendored-zstd symbol check: ${error.message}\n`);
 }
 
 if (failed) {
