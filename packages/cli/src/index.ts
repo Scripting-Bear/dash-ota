@@ -391,21 +391,28 @@ function printHelp(): void {
   register-key    --key-id <id> (--pub <rawB64> | --key-file <.public.json>)
   fingerprint     --project <path>
   bundle          --project <path> --platform ios|android --out <dir> [--dev] [--hermes]
-  publish         --bundle-dir <dir> --platform --channel --runtime-version auto|<R>
-                  --bundle-version <n> [--mandatory] [--target-app-versions <range>]
-                  [--rollout <pct>] [--release-note <txt>] [--interactive] [--no-upload]
+  publish         --bundle-dir <dir> --app-id <package name> --platform ios|android
+                  --channel dev|uat|prod --runtime-version auto|<R> --bundle-version <n>
+                  [--mandatory] [--target-app-versions <range>] [--rollout <pct>]
+                  [--release-note <txt>] [--bundle-id <id>] [--interactive]
+                  [--no-encrypt] [--compression-level <1-22>] [--no-upload]
                   [--key <pem>] [--key-id <id>] [--passphrase <p>] [--verify-pub <rawB64>]
                   [--server --admin-token]
-
-  Trust root: --admin-token (or OTA_ADMIN_TOKEN) is required for server calls — no default.
-  Plaintext http:// to a remote host is refused (use https://, or --allow-insecure on a
-  trusted network). Encrypted signing keys need a passphrase — prefer OTA_KEY_PASSPHRASE or the
-  masked prompt over --passphrase (a CLI flag is visible in process listings / shell history).
   list            [--server --admin-token]
   rollout         --bundle-id <id> --pct <0-100>
   pause           --bundle-id <id> [--resume]
   rollback        --bundle-id <id>
   native-policy   --channel <c> --min <build> --severity soft|hard [--store-url <url>]
+
+  Wire format: protocol 2 — one content-addressed blob per distinct file, compressed with zstd
+  and (unless --no-encrypt) encrypted per release. Publishing uploads only the blobs the server
+  is missing; a device downloads only the files it does not already hold. --app-id is required:
+  a device refuses a manifest built for a different app. Releases are immutable once finalized.
+
+  Trust root: --admin-token (or OTA_ADMIN_TOKEN) is required for server calls — no default.
+  Plaintext http:// to a remote host is refused (use https://, or --allow-insecure on a
+  trusted network). Encrypted signing keys need a passphrase — prefer OTA_KEY_PASSPHRASE or the
+  masked prompt over --passphrase (a CLI flag is visible in process listings / shell history).
 `);
 }
 

@@ -24,7 +24,10 @@
   },
   "scripts": {
     "start": "tsx src/index.ts",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --packages=bundle --outfile=dist/index.mjs --banner:js=\"#!/usr/bin/env node\"",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --packages=bundle --external:@mongodb-js/zstd --outfile=dist/index.mjs --banner:js=\"#!/usr/bin/env node\"",
     "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@mongodb-js/zstd": "^7.0.0"
   }
 }
