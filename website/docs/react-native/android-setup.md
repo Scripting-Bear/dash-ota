@@ -56,6 +56,16 @@ To talk to a local backend over HTTP (`http://10.0.2.2:4455` from the emulator),
 **for the dev flavour only** via a `network_security_config.xml` and reference it from the
 manifest. Production should stay HTTPS.
 
+## Native dependency
+
+The library pulls in `com.github.luben:zstd-jni`, pinned to **1.5.7-4**, to decompress update
+blobs. Nothing to configure — Gradle resolves it — but two things are worth knowing if you ever
+change the pin:
+
+- 1.5.6-9 and earlier ship `.so` files that are **not 16 KB page aligned** on `armeabi-v7a`, `x86`
+  and `x86_64`, which Google Play now rejects. 1.5.7-4 is aligned on all four ABIs.
+- Later builds declare a `compileSdk 37` floor, which will fail the build on a lower `compileSdk`.
+
 ## Multi-flavour
 
 For real dev/uat/prod isolation, define product flavours and inject a different

@@ -27,7 +27,7 @@ Where `server.js` mounts `dashOtaMiddleware()` into Express (or calls `createOta
 - Terminate **HTTPS** at your gateway/load balancer; dash-ota integrity holds even if TLS were
   broken, but you still want transport security and confidentiality.
 - Mount it at the **root** of its own service, or alongside your API (the middleware only owns
-  `/ota/v1/*`, `/admin/*`, `/health`).
+  `/ota/v2/*`, `/admin/*`, `/health`).
 - Pass `OTA_ADMIN_TOKEN` and your store credentials via secrets, never in the image.
 
 ## Storage

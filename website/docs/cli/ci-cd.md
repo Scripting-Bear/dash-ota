@@ -41,6 +41,7 @@ jobs:
           OTA_ADMIN_TOKEN: ${{ secrets.OTA_ADMIN_TOKEN }}
         run: |
           npx dash-ota publish \
+            --app-id com.example.app \
             --bundle-dir ./out --platform android \
             --channel ${{ inputs.channel }} \
             --runtime-version auto \

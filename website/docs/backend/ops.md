@@ -54,7 +54,7 @@ Create the `ota-bundles` bucket once (MinIO console at `:9001`, or `mc mb`).
 
 ## Reverse proxy + TLS
 
-Terminate TLS at the proxy and forward to the service. The OTA routes are absolute (`/ota/v1/*`,
+Terminate TLS at the proxy and forward to the service. The OTA routes are absolute (`/ota/v2/*`,
 `/admin/*`, `/health`, `/ready`), so mount at the **root** — a sub-path breaks request-signature
 verification.
 

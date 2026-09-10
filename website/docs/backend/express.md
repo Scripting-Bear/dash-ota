@@ -32,7 +32,7 @@ app.listen(4455);
 
 ## Mount at the root
 
-The routes are **absolute** (`/ota/v1/*`, `/admin/*`, `/health`). Do **not** mount under a
+The routes are **absolute** (`/ota/v2/*`, `/admin/*`, `/health`). Do **not** mount under a
 sub-path — the device signs over the request `path`, so it must match what the client signed.
 
 ```ts

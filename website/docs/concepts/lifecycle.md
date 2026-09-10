@@ -32,21 +32,25 @@ stateDiagram-v2
 
 1. **Enroll (once).** On first launch the app generates a hardware device key and registers its
    **public** half with the backend, gated by your app session token. No secret is transmitted.
-2. **Check.** A device-key-signed `POST /ota/v1/check` reports the device's `runtimeVersion`,
+2. **Check.** A device-key-signed `POST /ota/v2/check` reports the device's `runtimeVersion`,
    `channel`, `appVersion`, build number, and current `bundleVersion`. The backend applies
    [targeting + rollout](/docs/concepts/versioning-targeting) and returns either *"no update"* or a
-   **pre-signed manifest** + a one-time download token.
-3. **Download.** `GET /ota/v1/download` with the token streams the **AES-GCM ciphertext** — there
-   is **no S3 URL** on the client.
-4. **Verify (native).** The native side:
-   - verifies the **Ed25519 signature** over the canonical manifest bytes against the **embedded
-     public key**,
-   - confirms the manifest's `runtimeVersion` equals the binary's and `bundleVersion > current`,
-   - **AES-256-GCM decrypts** the payload (the GCM tag authenticates the bytes),
-   - unpacks the archive and verifies **every file's SHA-256 and size**.
-   Any failure deletes staged files and aborts — the running bundle is untouched.
-5. **Stage.** The verified bundle is written to a slot atomically (temp → fsync → rename) and
-   marked `pending`.
+   **pre-signed manifest** + a download token scoped to that release.
+3. **Verify the manifest first.** Native checks the **Ed25519 signature** over the canonical
+   manifest bytes against the **embedded public key**, then that `schema` is 2, `appId` is this
+   app, `runtimeVersion` matches the binary, `bundleVersion` is newer, and the release is not
+   disabled. Every path is validated before anything is written — a valid signature over
+   `../../x` is still a valid signature. Nothing is downloaded until all of this passes.
+4. **Download only what is missing.** For each file, if the device already holds a file with that
+   `sha256` it is copied from the existing slot and re-hashed. Otherwise
+   `GET /ota/v2/releases/:bundleId/blobs/:sha` streams that one blob, resuming with `Range` if an
+   earlier attempt was interrupted — there is **no S3 URL** on the client. Each blob is hashed
+   before it is decrypted, decrypted with its own nonce and tag, decompressed under a bound taken
+   from the signed manifest, then hashed and size-checked again as plaintext.
+   Any failure deletes the partial file and aborts — the running bundle is untouched.
+5. **Stage.** Files are assembled in a staging directory that survives process death, then the
+   whole directory is renamed into a slot in one step and marked `pending`. The commit is refused
+   if any file the manifest promised is absent, so a slot never boots half-populated.
 6. **Apply.** On the **next cold start**, native swaps to the pending slot and bumps a
    launch-attempt counter. (dash-ota never hot-swaps mid-session.)
 7. **Confirm.** Once your app is genuinely usable, call `markHealthy()`. That promotes the bundle

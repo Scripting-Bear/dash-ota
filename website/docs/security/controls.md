@@ -42,10 +42,32 @@ Each control and the precise property it provides.
   `SecRandomCopyBytes`), not `Math.random`, so it can't be predicted or precomputed.
 
 ## Signed-size download bound → memory-DoS + swap resistance
-- **Property:** the native download is bounded by the manifest's **signed** `ciphertextSize` — a
-  server/MITM can't return an oversized body to exhaust memory, and a swapped/truncated body is
-  rejected before decryption. At publish, `/admin/publish` also rejects a ciphertext over
-  `maxBundleBytes` and cross-checks the signed size.
+- **Property:** every blob download is bounded by the **signed** `blob.size` for that blob — a
+  server or MITM cannot return an oversized body to exhaust memory, and a swapped or truncated body
+  is rejected before anything is decrypted. At publish, an uploaded blob is streamed against
+  `maxBlobBytes` and rejected as it arrives rather than after.
+
+## Bounded decompression → decompression-bomb resistance
+- **Property:** a zstd frame declares its own decompressed size in its header, which is compared
+  against the size the signed manifest promises **before** any output is produced — so a bomb is
+  refused after a few bytes rather than after it has exhausted memory. Output is also counted as it
+  is written, so a frame that lies about its own size cannot overrun the limit either. Measured: a
+  12.5 KB frame claiming 400 MB is refused immediately.
+
+## Per-blob AEAD binding → no substitution within a release
+- **Property:** each blob is sealed with its plaintext hash as additional authenticated data, so a
+  blob cannot be swapped for a different file even by someone who can write to the blob store. It
+  is deliberately *not* bound to the release, because one blob is shared by every release that
+  contains that file. Which blob belongs to which file is asserted by the signed manifest, and the
+  device re-hashes the plaintext after decrypting regardless.
+
+## Convergent nonces → dedup without nonce reuse
+- **Property:** the nonce for a blob is derived from the hash of the exact bytes being sealed, not
+  from the plaintext hash and not at random. Equal nonce therefore implies equal message, which is
+  what AES-GCM requires: the same file seals identically every time (so the store keeps one copy),
+  while two different messages can never share a nonce. Deriving from the plaintext hash instead
+  would hand the same nonce to two different messages whenever one file is compressed at two
+  different levels.
 
 ## Rate limiting → abuse resistance
 - **Property:** `/enroll` and `/check` are rate-limited per install (fixed window, `429` +

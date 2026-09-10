@@ -16,6 +16,25 @@ title: Troubleshooting
 | Bundle won't load / crashes | Hermes bytecode mismatch | Compile the OTA with the **binary's** `hermesc`; the `runtimeVersion` must encode the Hermes ABI |
 | Reverts every release | `markHealthy()` never called | Call it from your first usable screen, or set `autoMarkHealthyMs` |
 
+## Every image goes blank after an update
+
+The update applies, the JS runs, and every `require`d image renders as an empty box — then on the
+next launch the update silently reverts.
+
+This was a real bug, fixed in **0.4.0**. React Native reads the host's `getJSBundleFile()` /
+`bundleURL()` five or six times per launch. Each read used to count a crash-loop boot attempt, so
+the third read tripped the breaker on the *first* boot of every update, and the breaker deleted the
+slot directory while the bytecode was still memory-mapped. JS kept running from the mapped file;
+every image beside it was gone.
+
+If you see this, you are on a build older than 0.4.0. It cannot be fixed by an OTA — the broken
+code is native — so it needs a store release. Two things to check on the way:
+
+- `adb logcat -s DashOta` should print `launch: applying pending … (attempt 1/2)` **once** per
+  launch. Several such lines per launch is the old behaviour.
+- A slot that is missing files it should have is refused at commit time in 0.4.0 and later, so this
+  class of failure now shows up as a failed update with a clear message rather than a blank image.
+
 ## Reading logs
 
 The provider logs through `config.logger` (defaults to `console`). In release builds, **`console.log`

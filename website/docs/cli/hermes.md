@@ -28,7 +28,7 @@ publishing a non-HBC bundle:
 # 1. bundle + compile to HBC in one step
 dash-ota bundle --project . --platform android --out ./out --hermes
 # 2. publish the HBC payload
-dash-ota publish --bundle-dir ./out --platform android --channel prod \
+dash-ota publish --bundle-dir ./out --app-id com.example.app --platform android --channel prod \
   --runtime-version auto --bundle-version 8
 ```
 

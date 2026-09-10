@@ -72,7 +72,21 @@ See [Environments & flavours](/docs/react-native/environments).
 
 ## Pods note
 
-dash-ota ships as a static-lib pod (`DashOta`). The Obj-C++ bridge imports the Swift header via a
-`#if __has_include(<DashOta/DashOta-Swift.h>)` guard so it builds under the default static linkage.
+dash-ota ships as a pod (`DashOta`). The Obj-C++ bridge imports the Swift header via a
+`#if __has_include(<DashOta/DashOta-Swift.h>)` guard so it builds under either static or framework
+linkage.
+
+## The vendored zstd
+
+Apple's Compression framework has no zstd, and the wire format is zstd on every platform, so the
+pod compiles upstream's official **decompress-only** zstd amalgamation (pinned to 1.5.7, matching
+Android's `zstd-jni`). There is **no extra pod to add** and no version to resolve.
+
+Its symbols are renamed to `DashOtaZ_*` at compile time. That matters if your app links a libzstd
+of its own: pods usually link statically, and two copies sharing the same global `ZSTD_*` names do
+not reliably produce a duplicate-symbol error on Apple's linker — it can quietly resolve our calls
+against the other copy instead. Renaming makes the two independent, so both can coexist in one
+binary. You do not need to do anything for this; it is noted so the unfamiliar symbol names in a
+crash report make sense.
 
 Next: [Environments & flavours →](/docs/react-native/environments)
