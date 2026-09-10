@@ -31,7 +31,7 @@ order. If a session ends, the next agent resumes from the Status board below.
 | 3 | **M2b** backend: router, providers, store, routes, tombstone | backend | built from spec §5.3–§5.5 | ✅ done — `8a8cbcd`, 27 e2e + 8 express checks |
 | 4 | **M2c** CLI: 3-step publish | cli | `2026-09-09-m2-cli-docs.md` Tasks 1–7 | ✅ publish done — `2b3e34f`, proven against a live backend `7402fcc`. `verify-release` NOT built |
 | 5 | **M2d** rn native + JS (0.4.0) | rn | spec §5.6, §5.7 | ✅ **both platforms done and proven on devices** — Android `e02acb6`/`fb62b1f`/`ad6c0d2` (18 Kotlin tests, 7-generation emulator run), iOS `2c6f795` (simulator, 2 releases) |
-| 6 | **M2e** documentation site | website | `2026-09-09-m2-cli-docs.md` Tasks 8–13 (full) | ⬜ — docs still describe v1 |
+| 6 | **M2e** documentation site | website | `2026-09-09-m2-cli-docs.md` Tasks 8–13 | ✅ done — `897dbc2`, 18 pages; `npm run build` green (it throws on broken links) |
 | 7 | **M3** bytecode deltas | all | none — spec §6, gated on spikes | ⬜ |
 | 8 | Rollout in go-trade | consuming app | this file, Rollout section | ⬜ |
 
@@ -84,7 +84,7 @@ consecutive OTA generations against a local v2 backend. What it found:
   changed asset and the bundle, which changes every release), and the publish uploaded **2 of 4
   blobs** (the other two already in the store).
 
-**Next, in order:** documentation (phase 6), then `verify-release`, then bytecode deltas.
+**Next, in order:** `verify-release` in the CLI, then bytecode deltas (phase 7) behind the gates in spec §6.
 
 **Follow-up noticed on device, not yet addressed:** `/ota/v2/confirm` returned 401 on every launch
 of the example. Its storage is in-memory, so each cold start mints a new `installId` and the
