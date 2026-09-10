@@ -13,7 +13,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +70,43 @@ check('keygen never prompts without --interactive', () => {
   // looked harmless here because execFileSync hands the child a closed stdin.
   assert.ok(!out.includes('Register this public key'), 'keygen asked a question in non-interactive mode');
   assert.ok(existsSync(join(work, '.keys', 'key_quiet.private.pem')), 'keygen wrote no private key');
+});
+
+check('keygen refuses to replace an existing signing key', () => {
+  const work = mkdtempSync(join(tmpdir(), 'dash-ota-keyguard-'));
+  const keys = join(work, '.keys');
+  runCli(['keygen', '--out', keys, '--key-id', 'key_live', '--no-encrypt'], work);
+  const original = readFileSync(join(keys, 'key_live.private.pem'), 'utf8');
+
+  // Overwriting it would invalidate every release for every app embedding the matching public key,
+  // recoverable only by shipping a new store build. It must not be possible by accident.
+  let refused = false;
+  try {
+    runCli(['keygen', '--out', keys, '--key-id', 'key_live', '--no-encrypt'], work);
+  } catch {
+    refused = true;
+  }
+  assert.ok(refused, 'a second keygen for the same key id must fail');
+  assert.equal(readFileSync(join(keys, 'key_live.private.pem'), 'utf8'), original, 'the signing key changed');
+
+  // --force is the deliberate escape hatch.
+  runCli(['keygen', '--out', keys, '--key-id', 'key_live', '--no-encrypt', '--force'], work);
+  assert.notEqual(readFileSync(join(keys, 'key_live.private.pem'), 'utf8'), original, '--force should rotate');
+});
+
+check('keygen can add a missing content key without touching the signing key', () => {
+  const work = mkdtempSync(join(tmpdir(), 'dash-ota-contentonly-'));
+  const keys = join(work, '.keys');
+  runCli(['keygen', '--out', keys, '--key-id', 'key_old', '--no-encrypt'], work);
+  const signing = readFileSync(join(keys, 'key_old.private.pem'), 'utf8');
+
+  // Simulate a channel created before content keys existed.
+  rmSync(join(keys, 'key_old.content.key'));
+  runCli(['keygen', '--out', keys, '--key-id', 'key_old', '--content-key-only'], work);
+
+  assert.ok(existsSync(join(keys, 'key_old.content.key')), 'the content key should be created');
+  assert.equal(readFileSync(join(keys, 'key_old.private.pem'), 'utf8'), signing, 'the signing key must be untouched');
+  assert.equal(Buffer.from(readFileSync(join(keys, 'key_old.content.key'), 'utf8').trim(), 'base64').length, 32);
 });
 
 check('the binary publishes a schema-2 release offline', () => {

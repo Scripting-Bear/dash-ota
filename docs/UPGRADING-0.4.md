@@ -19,7 +19,7 @@ releases share exactly once.
 
 Measured on a real 121-file React Native app:
 
-| | 0.3 | 0.4 |
+| | before | 0.4 |
 |---|---|---|
 | first install of a release | 27.9 MB | **9.4 MB** |
 | a release changing a few screens | 27.9 MB | **a few hundred KB** |
@@ -32,6 +32,10 @@ npm i @dash-ota/backend@^0.4.0
 ```
 
 Redeploy. That is the whole change if you mounted the middleware as documented.
+
+Note the version jump: `@dash-ota/backend` goes from **0.2.x** straight to 0.4.0. The 0.3 line was
+an internal step for the React Native client and was never published for the backend, so there is
+nothing between the two to migrate through.
 
 Then check three things, because the download path changed shape:
 

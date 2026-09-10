@@ -62,6 +62,46 @@ async function cmdKeygen(args: ParsedArgs): Promise<void> {
   const out = flagStr(args, 'out', '.keys');
   const keyId = flagStr(args, 'key-id', 'key_dev_1');
   mkdirSync(out, { recursive: true });
+
+  const privatePath = join(out, `${keyId}.private.pem`);
+  const contentKeyPath = join(out, `${keyId}.content.key`);
+
+  // Minting only the content key is the safe way to bring an existing channel to a version that
+  // needs one. It is also the reason the guard below can afford to be absolute: there is a path
+  // forward that does not involve replacing the signing key.
+  if (flagBool(args, 'content-key-only')) {
+    if (!existsSync(privatePath) && !existsSync(join(out, `${keyId}.private.enc.pem`))) {
+      throw new Error(`no signing key for ${keyId} in ${out} — run keygen without --content-key-only first.`);
+    }
+    if (existsSync(contentKeyPath)) {
+      console.log(`✓ ${contentKeyPath} already exists — nothing to do.`);
+      return;
+    }
+    writeFileSync(contentKeyPath, randomAesKey().toString('base64'), { mode: 0o600 });
+    console.log(`✓ wrote ${contentKeyPath}`);
+    console.log('  Reuse it for every release on this channel; a fresh key per release re-uploads');
+    console.log('  the whole bundle every time.');
+    return;
+  }
+
+  // Refuse to replace a signing key. Every installed app embeds the matching PUBLIC key, so a new
+  // private key means every future release is rejected by every device already in the field — and
+  // only a store build can recover from that. It has to be deliberate.
+  if (existsSync(privatePath) || existsSync(join(out, `${keyId}.private.enc.pem`))) {
+    if (!flagBool(args, 'force')) {
+      throw new Error(
+        `${keyId} already has a signing key in ${out}. Overwriting it would invalidate every ` +
+          `release for every app that already embeds the matching public key, recoverable only by ` +
+          `shipping a new store build.\n` +
+          `  • to add a missing content key:  dash-ota keygen --key-id ${keyId} --out ${out} --content-key-only\n` +
+          `  • to rotate deliberately:        re-run with --force, then embed the new public key and ship a build`,
+      );
+    }
+    console.warn(`  ⚠ --force: replacing the existing signing key for ${keyId}. Every installed app`);
+    console.warn('    that embeds the old public key will reject every future release until a new');
+    console.warn('    store build ships with the new one.');
+  }
+
   const kp = generateSigningKeyPair();
 
   // Encrypt the private key at rest unless explicitly opted out. Passphrase from flag/env, or
@@ -73,11 +113,10 @@ async function cmdKeygen(args: ParsedArgs): Promise<void> {
   }
   const privatePem = passphrase ? encryptPrivateKeyPem(kp.privateKeyPem, passphrase) : kp.privateKeyPem;
 
-  writeFileSync(join(out, `${keyId}.private.pem`), privatePem, { mode: 0o600 });
+  writeFileSync(privatePath, privatePem, { mode: 0o600 });
   // The content key seals blob bytes. It is carried in every manifest in the clear, so it is not
   // a secret from any device — but it must be the SAME key for every release on this channel, or
   // an unchanged file seals differently each time and the blob store keeps a copy per release.
-  const contentKeyPath = join(out, `${keyId}.content.key`);
   if (!existsSync(contentKeyPath)) {
     writeFileSync(contentKeyPath, randomAesKey().toString('base64'), { mode: 0o600 });
   }
@@ -436,7 +475,8 @@ function printHelp(): void {
   console.log(`dash-ota <command> [flags]
 
   keygen          --out .keys --key-id key_dev_1 [--passphrase <p> | --no-encrypt]
-                  [--register --server --admin-token] [--interactive]
+                  [--content-key-only] [--force] [--register --server --admin-token]
+                  [--interactive]
   register-key    --key-id <id> (--pub <rawB64> | --key-file <.public.json>)
   fingerprint     --project <path>
   bundle          --project <path> --platform ios|android --out <dir> [--dev] [--hermes]
