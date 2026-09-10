@@ -149,14 +149,43 @@ manifest including `files[].blob` and `patches`.
 - Compression: zstd, default level 19 for `role: bundle`, level 3 for the rest. Skipped when the
   extension is in `{png,jpg,jpeg,webp,gif,mp4,m4a,mp3,zip,gz,zst,woff,woff2}`, or when the
   result is ≥ 98 % of the input (this catches fonts and other already-dense files).
-- Encryption: AES-256-GCM per blob, one random 32-byte content key per release in the manifest,
-  random 12-byte IV per blob, tag stored separately in the manifest, AAD = `bundleId + "/" +
-  files[].sha256` (binds each blob to its release and plaintext identity).
+- Encryption: AES-256-GCM per blob, **convergent**. One 32-byte content key per *channel* (not per
+  release), carried in each manifest; the CLI mints it with `keygen` and reuses it for every
+  publish. Nonce is derived, not random: `HMAC-SHA256(contentKey, "dash-ota/v2/blob-iv/" +
+  sha256(bytes being sealed))[0..12]`. Tag stored separately in the manifest. AAD =
+  `files[].sha256`.
+  - Why derived: a random nonce makes every release's copy of an unchanged file a different
+    ciphertext, so the blob store cannot share it. Deriving from the sealed bytes keeps identical
+    messages identical while guaranteeing two *different* messages never share a nonce.
+  - The nonce is derived from the **compressed bytes actually passed to the cipher**, never from
+    the plaintext hash. The same file compressed at two different levels has one plaintext hash but
+    two different messages; deriving from the plaintext would hand both the same nonce, which is
+    the one failure AES-GCM does not survive.
+  - AAD deliberately omits `bundleId`. A blob is shared by every release containing that file, so a
+    release-scoped AAD would make each copy undecryptable outside the release that produced it.
+    Nothing is lost: the signed manifest asserts which blob belongs to which file, and the device
+    re-hashes the plaintext after decrypting.
+  - Cost, stated plainly: this is convergent encryption, so identical ciphertext reveals identical
+    plaintext across releases. The manifest already lists plaintext hashes, so any party entitled
+    to a manifest could already tell. What does change: one leaked manifest now exposes the content
+    key for the whole channel rather than for one release. Blob reads are token-gated regardless,
+    so this layer is defence in depth. Rotating the key re-uploads everything, by design.
 - `encryption.mode = none` stores compressed plaintext; `blob.sha256` still authenticates it.
 
 ### 5.3 Blob addressing and storage (backend)
-- Key: `releases/{bundleId}/{blob.sha256}` in `BlobStore`. Per-release namespace keeps
-  authorisation and retention simple; cross-release dedup is not a goal (storage is cheap).
+- Key: `blobs/{blob.sha256}` in `BlobStore` — one global, content-addressed namespace, so a file
+  shared by several releases is stored once. Measured: two releases differing by one asset store 7
+  blobs / 1.0 MB instead of 12 / 2.0 MB.
+- Because the namespace is shared, two invariants are enforced in `Store` rather than implied by
+  the key:
+  - **Reads are membership-checked.** `statBlob`/`openBlobStream` return null unless the requesting
+    release's signed manifest lists that blob. The per-release key used to provide this for free.
+  - **Deletes are reference-checked.** `discardRelease` spares any blob another release references,
+    derived from the release records on each call rather than tracked as a counter — a counter can
+    drift, and the release table is the only thing that knows the truth. Unfinalised releases count
+    too. When a release is being *replaced*, its incoming manifest is not yet stored, so the caller
+    passes those hashes as `keepAlso`; without that, re-running an interrupted publish would delete
+    exactly the blobs it had already uploaded and turn every retry into a full re-upload.
 - `BlobStore` interface change: `put(key, Readable | Buffer)`, `stat(key)`,
   `openReadStream(key, range?: {start, end})`, `delete(key)`, `deletePrefix(prefix)`.
   Disk and S3 adapters implement Range natively.

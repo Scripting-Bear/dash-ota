@@ -137,17 +137,17 @@ export interface BlobStore {
 /**
  * The storage key for one blob.
  *
- * @param bundleId - the release it belongs to.
+ * Global, not release-scoped: a file shared by several releases is stored once. Encryption is
+ * convergent, so unchanged bytes seal to the same ciphertext and therefore the same key. Because
+ * the namespace is shared, deleting a release must only remove blobs no other release references
+ * — see `Store.discardRelease` — and reads must check the requesting release actually contains
+ * the blob, which `Store.statBlob` and `Store.openBlobStream` enforce.
+ *
  * @param blobSha256 - hash of the stored bytes.
  * @returns the blob store key.
  */
-export function blobKey(bundleId: string, blobSha256: string): string {
-  return `releases/${bundleId}/${blobSha256}`;
-}
-
-/** The prefix covering every blob of one release. */
-export function releasePrefix(bundleId: string): string {
-  return `releases/${bundleId}/`;
+export function blobKey(blobSha256: string): string {
+  return `blobs/${blobSha256}`;
 }
 
 /** The outcome of a {@link CacheProvider.rateLimit} check for one key in the current window. */

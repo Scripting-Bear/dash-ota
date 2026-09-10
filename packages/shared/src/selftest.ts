@@ -52,6 +52,9 @@ function fixtureFiles(): ArchiveFile[] {
   ];
 }
 
+/** Fixed content key for the fixtures. Real channels hold one of these; tests must not randomise it. */
+const TEST_CONTENT_KEY = Buffer.alloc(32, 7);
+
 /** Build and sign a release, and hand back a fetcher over its blobs. */
 async function makeSignedRelease(overrides: Partial<BuildReleaseV2Input> = {}) {
   const { privateKeyPem, publicKeyRawB64 } = generateSigningKeyPair();
@@ -67,6 +70,7 @@ async function makeSignedRelease(overrides: Partial<BuildReleaseV2Input> = {}) {
     files,
     bundlePath: 'index.android.bundle',
     keyId: 'key_dev_1',
+    contentKey: TEST_CONTENT_KEY,
     ...overrides,
   });
   const signed = signManifest(built.manifest, privateKeyPem);
@@ -146,13 +150,26 @@ await check('a tampered blob is rejected before it is decrypted', async () => {
   await assert.rejects(() => verifyReleaseV2(signed, evil, publicKeyFromRawB64(publicKeyRawB64)), /hash mismatch/);
 });
 
-// The blob hash is what actually catches this (a different release encrypts with a different key
-// and IV, so the stored bytes differ). The AAD is the layer beneath it, proven directly in the
-// AES-GCM check above; this asserts the release-level behaviour, not which layer fired.
-await check('a blob served from another release is rejected', async () => {
+// Convergent encryption means two releases containing the same file DO produce the same blob —
+// that sharing is the point, and the pair of checks below pins both halves of it: bytes sealed
+// under this channel's key are interchangeable, bytes sealed under any other key are not.
+await check('the same file seals to the same blob in every release (cross-release dedup)', async () => {
+  const a = await makeSignedRelease({ bundleId: 'bnd_a' });
+  const b = await makeSignedRelease({ bundleId: 'bnd_b' });
+  const shaByPath = (r: typeof a) => new Map(r.signed.manifest.files.map((f) => [f.path, f.blob.sha256]));
+  const [sa, sb] = [shaByPath(a), shaByPath(b)];
+  assert.deepEqual([...sa.keys()].sort(), [...sb.keys()].sort());
+  for (const [path, sha] of sa) {
+    assert.equal(sb.get(path), sha, `${path} sealed differently in a second release — dedup is broken`);
+  }
+  // And the bytes really are identical, not merely equally named.
+  for (const [sha, bytes] of a.built.blobs) assert.deepEqual(b.built.blobs.get(sha), bytes);
+});
+
+await check('a blob sealed under a different content key is rejected', async () => {
   const { publicKeyRawB64, signed } = await makeSignedRelease();
-  const other = await makeSignedRelease({ bundleId: 'bnd_other' });
-  // Serve the *other* release's blobs, relabelled with this manifest's hashes so the cheap checks
+  const other = await makeSignedRelease({ bundleId: 'bnd_other', contentKey: Buffer.alloc(32, 9) });
+  // Serve the other channel's blobs relabelled with this manifest's hashes, so the cheap checks
   // pass and only the AEAD can catch it.
   const swap = async (sha: string): Promise<Buffer> => {
     const mine = signed.manifest.files.find((f) => f.blob.sha256 === sha);
@@ -198,6 +215,7 @@ await check('edge cases: empty file, incompressible bytes, and a unicode path', 
     files,
     bundlePath: 'index.android.bundle',
     keyId: 'k',
+    contentKey: TEST_CONTENT_KEY,
   });
   assert.deepEqual(validateManifestShape(built.manifest), []);
   const empty = built.manifest.files.find((f) => f.path === 'empty.txt');

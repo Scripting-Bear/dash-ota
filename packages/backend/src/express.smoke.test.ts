@@ -29,6 +29,9 @@ import {
 import { rawBodySaver, dashOtaMiddleware } from './index.js';
 import type { EnrollPrincipal } from './config.js';
 
+/** Fixed content key for the fixtures. Real channels hold one of these; tests must not randomise it. */
+const TEST_CONTENT_KEY = Buffer.alloc(32, 7);
+
 const ADMIN = 'smoke-admin-token';
 let passed = 0;
 async function check(name: string, fn: () => Promise<void>): Promise<void> {
@@ -143,6 +146,7 @@ async function main(): Promise<void> {
   await check('admin registers key + publishes a release through Express', async () => {
     assert.equal((await adminPost('/admin/keys', { keyId, publicKeyRawB64: keys.publicKeyRawB64 })).status, 200);
     const built = await buildReleaseV2({
+      contentKey: TEST_CONTENT_KEY,
       bundleId: 'bnd_x_v1',
       runtimeVersion: 'R1',
       bundleVersion: 1,

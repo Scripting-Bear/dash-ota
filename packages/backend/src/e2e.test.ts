@@ -139,6 +139,21 @@ async function main(): Promise<void> {
     { path: 'assets/logo.txt', data: Buffer.from('LOGO-BYTES', 'utf8') },
   ];
 
+  /**
+   * Fixture files whose bytes appear in no other release.
+   *
+   * The blob store is global and content-addressed, so a test that needs a blob to be *missing*
+   * cannot reuse {@link bundleFiles} — an earlier release already uploaded those exact bytes and
+   * the store would correctly report nothing missing.
+   *
+   * @param tag - something unique to this test.
+   * @returns a one-file bundle nobody else has published.
+   */
+  const uniqueFiles = (tag: string): ArchiveFile[] => [
+    { path: 'index.android.bundle', data: Buffer.from(`var x = 42; // ${tag}`, 'utf8') },
+    { path: 'assets/logo.txt', data: Buffer.from(`LOGO-BYTES-${tag}`, 'utf8') },
+  ];
+
   console.log('dash-ota backend e2e\n');
 
   await check('health is liveness-only; ready reflects the store', async () => {
@@ -151,6 +166,9 @@ async function main(): Promise<void> {
     assert.equal(body.ready, true);
     assert.equal(typeof body.releases, 'number');
   });
+
+  /** Fixed content key for the fixtures. Real channels hold one of these; tests must not randomise it. */
+  const TEST_CONTENT_KEY = Buffer.alloc(32, 7);
 
   await check('admin registers the trusted public key', async () => {
     const res = await adminPost('/admin/keys', { keyId, publicKeyRawB64: keys.publicKeyRawB64 });
@@ -166,7 +184,7 @@ async function main(): Promise<void> {
     input: Parameters<typeof buildReleaseV2>[0],
     opts: { rollout?: number; tamper?: (m: SignedManifest) => SignedManifest; skipFinalize?: boolean } = {},
   ) {
-    const built = await buildReleaseV2(input);
+    const built = await buildReleaseV2({ contentKey: TEST_CONTENT_KEY, ...input });
     const signed = opts.tamper
       ? opts.tamper(signManifest(built.manifest, keys.privateKeyPem))
       : signManifest(built.manifest, keys.privateKeyPem);
@@ -189,6 +207,20 @@ async function main(): Promise<void> {
     const finalized = opts.skipFinalize ? null : await adminPost(`/admin/releases/${signed.manifest.bundleId}/finalize`, {});
     return { built, signed, created, uploads, finalized };
   }
+
+  /**
+   * Upload one blob.
+   *
+   * @param path - the admin blob path.
+   * @param bytes - the blob body.
+   * @returns the response.
+   */
+  const adminPut = (path: string, bytes: Buffer): Promise<Response> =>
+    fetch(`${base}${path}`, {
+      method: 'PUT',
+      headers: { 'x-ota-admin-token': ADMIN, 'content-type': 'application/octet-stream' },
+      body: new Uint8Array(bytes),
+    });
 
   await check('CLI publishes a pre-signed release for runtimeVersion R2 in three steps', async () => {
     const { created, uploads, finalized } = await publishRelease({
@@ -260,7 +292,8 @@ async function main(): Promise<void> {
       channel: 'dev',
       appId: 'com.example.app',
       mandatory: false,
-      files: bundleFiles,
+      files: uniqueFiles('incomplete'),
+      contentKey: TEST_CONTENT_KEY,
       bundlePath: 'index.android.bundle',
       keyId,
     });
@@ -273,6 +306,90 @@ async function main(): Promise<void> {
     assert.ok(body.missing.length > 0);
   });
 
+  await check('re-declaring an interrupted publish keeps the blobs already uploaded', async () => {
+    const files = uniqueFiles('resume');
+    const build = async () =>
+      buildReleaseV2({
+        bundleId: 'bnd_resume',
+        runtimeVersion: 'R_HOUSEKEEPING',
+        bundleVersion: 93,
+        platform: 'android',
+        channel: 'dev',
+        appId: 'com.example.app',
+        mandatory: false,
+        files,
+        bundlePath: 'index.android.bundle',
+        keyId,
+        contentKey: TEST_CONTENT_KEY,
+      });
+
+    // First attempt: declare, upload one blob, then "crash" before finalize.
+    const first = await build();
+    const signedFirst = signManifest(first.manifest, keys.privateKeyPem);
+    const declared = (await (
+      await adminPost('/admin/releases', { signedManifest: signedFirst, rolloutPercentage: 100 })
+    ).json()) as { missing: string[] };
+    assert.equal(declared.missing.length, 2);
+    const uploaded = declared.missing[0] as string;
+    await adminPut(`/admin/releases/bnd_resume/blobs/${uploaded}`, first.blobs.get(uploaded) as Buffer);
+
+    // Re-running the same publish must not throw away what already landed.
+    const again = await build();
+    assert.equal(
+      signManifest(again.manifest, keys.privateKeyPem).manifest.files[0]?.blob.sha256,
+      signedFirst.manifest.files[0]?.blob.sha256,
+    );
+    const redeclared = (await (
+      await adminPost('/admin/releases', {
+        signedManifest: signManifest(again.manifest, keys.privateKeyPem),
+        rolloutPercentage: 100,
+      })
+    ).json()) as { missing: string[] };
+    assert.equal(redeclared.missing.length, 1, 'the already-uploaded blob was discarded — resume is broken');
+    assert.ok(!redeclared.missing.includes(uploaded));
+  });
+
+  await check('replacing a release keeps blobs another release still uses', async () => {
+    // bnd_share_a is finalized and shares both blobs with the unfinalised bnd_share_b.
+    const shared = uniqueFiles('shared');
+    const mk = async (bundleId: string, bundleVersion: number, fs = shared) =>
+      buildReleaseV2({
+        bundleId,
+        runtimeVersion: 'R_HOUSEKEEPING',
+        bundleVersion,
+        platform: 'android',
+        channel: 'dev',
+        appId: 'com.example.app',
+        mandatory: false,
+        files: fs,
+        bundlePath: 'index.android.bundle',
+        keyId,
+        contentKey: TEST_CONTENT_KEY,
+      });
+
+    const a = await mk('bnd_share_a', 94);
+    const signedA = signManifest(a.manifest, keys.privateKeyPem);
+    const missingA = (await (await adminPost('/admin/releases', { signedManifest: signedA, rolloutPercentage: 100 })).json()) as {
+      missing: string[];
+    };
+    for (const sha of missingA.missing) await adminPut(`/admin/releases/bnd_share_a/blobs/${sha}`, a.blobs.get(sha) as Buffer);
+    assert.equal((await adminPost('/admin/releases/bnd_share_a/finalize', {})).status, 200);
+
+    const b = await mk('bnd_share_b', 95);
+    await adminPost('/admin/releases', { signedManifest: signManifest(b.manifest, keys.privateKeyPem), rolloutPercentage: 100 });
+
+    // Now replace bnd_share_b with a release that has completely different content. Its old blobs
+    // are still bnd_share_a's, and must survive.
+    const b2 = await mk('bnd_share_b', 96, uniqueFiles('shared-v2'));
+    await adminPost('/admin/releases', { signedManifest: signManifest(b2.manifest, keys.privateKeyPem), rolloutPercentage: 100 });
+
+    const stillMissing = (await (await adminPost('/admin/releases/bnd_share_a/finalize', {})).json()) as {
+      ok?: boolean;
+      missing?: string[];
+    };
+    assert.ok(stillMissing.ok, `bnd_share_a lost blobs when bnd_share_b was replaced: ${JSON.stringify(stillMissing.missing)}`);
+  });
+
   await check('a blob whose bytes do not match its hash is refused', async () => {
     const built = await buildReleaseV2({
       bundleId: 'bnd_badblob',
@@ -282,7 +399,8 @@ async function main(): Promise<void> {
       channel: 'dev',
       appId: 'com.example.app',
       mandatory: false,
-      files: bundleFiles,
+      files: uniqueFiles('badblob'),
+      contentKey: TEST_CONTENT_KEY,
       bundlePath: 'index.android.bundle',
       keyId,
     });

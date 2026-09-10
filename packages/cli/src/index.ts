@@ -16,13 +16,14 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import {
   buildReleaseV2,
-  type Channel,
   generateSigningKeyPair,
-  type Platform,
+  randomAesKey,
   signManifest,
+  type Channel,
+  type Platform,
   verifyManifest,
 } from '@dash-ota/shared';
 import {
@@ -73,9 +74,17 @@ async function cmdKeygen(args: ParsedArgs): Promise<void> {
   const privatePem = passphrase ? encryptPrivateKeyPem(kp.privateKeyPem, passphrase) : kp.privateKeyPem;
 
   writeFileSync(join(out, `${keyId}.private.pem`), privatePem, { mode: 0o600 });
+  // The content key seals blob bytes. It is carried in every manifest in the clear, so it is not
+  // a secret from any device — but it must be the SAME key for every release on this channel, or
+  // an unchanged file seals differently each time and the blob store keeps a copy per release.
+  const contentKeyPath = join(out, `${keyId}.content.key`);
+  if (!existsSync(contentKeyPath)) {
+    writeFileSync(contentKeyPath, randomAesKey().toString('base64'), { mode: 0o600 });
+  }
   writeFileSync(join(out, `${keyId}.public.pem`), kp.publicKeyPem);
   writeFileSync(join(out, `${keyId}.public.json`), JSON.stringify({ keyId, publicKeyRawB64: kp.publicKeyRawB64 }, null, 2));
   console.log(`✓ wrote keypair to ${out}/${keyId}.*`);
+  console.log(`  ✓ content key: ${contentKeyPath} — keep it, and reuse it for every release on this channel.`);
   if (passphrase) console.log('  ✓ private key encrypted at rest (AES-256-CBC).');
   else
     console.warn(
@@ -94,6 +103,39 @@ async function cmdKeygen(args: ParsedArgs): Promise<void> {
     await adminPost(server, '/admin/keys', { keyId, publicKeyRawB64: kp.publicKeyRawB64 }, adminToken);
     console.log(`✓ registered ${keyId} with ${server}`);
   }
+}
+
+/**
+ * Find the channel content key for an encrypted publish.
+ *
+ * Order: `--content-key` (base64), `OTA_CONTENT_KEY`, then `<key dir>/<keyId>.content.key` written
+ * by `keygen`. Missing is a hard error rather than a fresh random key: a per-release key still
+ * produces a valid, decryptable release, so the failure would be invisible — every publish would
+ * simply re-upload the whole bundle and the blob store would grow one full copy per release.
+ *
+ * @param args - parsed CLI args.
+ * @param keyPath - path to the signing key, whose directory is searched.
+ * @param keyId - the signing key id, which names the content key file.
+ * @returns the 32-byte content key.
+ * @throws when no key is found, or one is found but is not 32 bytes.
+ */
+function resolveContentKey(args: ParsedArgs, keyPath: string, keyId: string): Buffer {
+  const inline = flagStr(args, 'content-key') || process.env.OTA_CONTENT_KEY || '';
+  const path = join(dirname(keyPath), `${keyId}.content.key`);
+  let b64 = inline;
+  if (!b64) {
+    if (!existsSync(path)) {
+      throw new Error(
+        `no content key for ${keyId}. Expected ${path} (written by \`dash-ota keygen\`), ` +
+          '--content-key <base64>, or OTA_CONTENT_KEY. Reuse ONE key per channel so the blob store ' +
+          'can share unchanged files between releases — or publish with --no-encrypt.',
+      );
+    }
+    b64 = readFileSync(path, 'utf8').trim();
+  }
+  const key = Buffer.from(b64, 'base64');
+  if (key.length !== 32) throw new Error(`content key must be 32 bytes (got ${key.length}) — expected base64 of 32 bytes`);
+  return key;
 }
 
 /** Register a trusted public key with the backend. */
@@ -235,6 +277,7 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
   const appId = flagStr(args, 'app-id') || (interactive ? await ask('appId (package name / bundle id)', '') : '');
   if (!appId) throw new Error('--app-id is required: the device refuses a manifest built for a different app');
   const encrypt = !flagBool(args, 'no-encrypt');
+  const contentKey = encrypt ? resolveContentKey(args, keyPath, keyId) : undefined;
   const levelFlag = flagStr(args, 'compression-level');
   const bundlePath = files.find((f) => /(^|\/)(index\.android\.bundle|main\.jsbundle)$/.test(f.path))?.path;
   if (!bundlePath) throw new Error('no index.android.bundle or main.jsbundle in the bundle dir');
@@ -251,6 +294,7 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
     bundlePath,
     keyId,
     encrypt,
+    ...(contentKey ? { contentKey } : {}),
     ...(levelFlag ? { bundleCompressionLevel: Number.parseInt(levelFlag, 10) } : {}),
     ...(targetAppVersions ? { targetAppVersions } : {}),
     ...(releaseNotes ? { releaseNotes } : {}),
@@ -400,7 +444,7 @@ function printHelp(): void {
                   --channel dev|uat|prod --runtime-version auto|<R> --bundle-version <n>
                   [--mandatory] [--target-app-versions <range>] [--rollout <pct>]
                   [--release-note <txt>] [--bundle-id <id>] [--interactive]
-                  [--no-encrypt] [--compression-level <1-22>] [--no-upload]
+                  [--no-encrypt] [--content-key <b64>] [--compression-level <1-22>] [--no-upload]
                   [--key <pem>] [--key-id <id>] [--passphrase <p>] [--verify-pub <rawB64>]
                   [--server --admin-token]
   list            [--server --admin-token]

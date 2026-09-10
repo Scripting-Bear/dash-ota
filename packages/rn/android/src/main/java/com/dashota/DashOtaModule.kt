@@ -225,7 +225,9 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
               DashOtaCrypto.b64(blob.getString("ivB64")),
               bytes,
               DashOtaCrypto.b64(blob.getString("tagB64")),
-              "${'$'}bundleId/${'$'}plainSha".toByteArray(Charsets.UTF_8),
+              // AAD binds the ciphertext to the plaintext it claims to be, and deliberately not to
+              // the release: one blob is shared by every release containing that file.
+              plainSha.toByteArray(Charsets.UTF_8),
             )
           }
           if (blob.getString("compression") == "zstd") bytes = DashOtaCrypto.zstdDecompress(bytes, size)

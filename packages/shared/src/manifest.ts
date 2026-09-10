@@ -126,16 +126,20 @@ export interface ManifestV2 {
 export type Manifest = ManifestV2;
 
 /**
- * Additional authenticated data for one blob's AES-GCM. Binds the ciphertext to both the release
- * and the plaintext it claims to be, so a blob cannot be lifted from one release into another or
- * swapped for a different file within the same one.
+ * Additional authenticated data for one blob's AES-GCM. Binds the ciphertext to the plaintext it
+ * claims to be, so a blob cannot be swapped for a different file.
  *
- * @param bundleId - the release the blob belongs to.
+ * It deliberately does **not** bind the release. A blob is shared by every release that contains
+ * that file — that sharing is the whole point of a content-addressed store — so a release-scoped
+ * AAD would make each copy undecryptable outside the release that produced it. Nothing is lost:
+ * which blob belongs to which file is asserted by the signed manifest, and the device verifies the
+ * plaintext hash after decrypting regardless.
+ *
  * @param fileSha256 - plaintext hash of the file (or, for a patch, of its base).
  * @returns the AAD bytes.
  */
-export function blobAad(bundleId: string, fileSha256: string): Buffer {
-  return Buffer.from(`${bundleId}/${fileSha256}`, 'utf8');
+export function blobAad(fileSha256: string): Buffer {
+  return Buffer.from(fileSha256, 'utf8');
 }
 
 /**

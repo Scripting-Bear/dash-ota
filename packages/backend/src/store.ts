@@ -45,7 +45,6 @@ import {
   DiskDatabaseProvider,
   MemoryCacheProvider,
   type RateLimitResult,
-  releasePrefix,
   type ReleaseRecord,
   type StoreProviders,
 } from './providers.js';
@@ -191,10 +190,11 @@ export class Store {
         error: `${m.bundleId} is already published; publish a new bundleVersion instead`,
       };
     }
-    // An unfinalised attempt is fair game to replace, but its blobs are not reachable from the new
-    // manifest (a fresh content key and IVs give different blob hashes), so drop them rather than
-    // leak them.
-    if (existing) await this.discardRelease(m.bundleId);
+    // An unfinalised attempt is fair game to replace. Keep every blob the new manifest still
+    // references — with a stable channel content key an unchanged file seals to the same blob, so
+    // these are exactly the bytes an interrupted publish already uploaded. Dropping them would
+    // turn every retry into a full re-upload.
+    if (existing) await this.discardRelease(m.bundleId, collectBlobShas(m));
 
     const record: ReleaseRecord = {
       bundleId: m.bundleId,
@@ -224,7 +224,7 @@ export class Store {
     const missing: string[] = [];
     for (const sha of collectBlobShas(manifest)) {
       const expected = findBlobEntry(manifest, sha);
-      const stat = await this.blob.stat(blobKey(manifest.bundleId, sha));
+      const stat = await this.blob.stat(blobKey(sha));
       if (!stat || stat.size !== expected?.size) missing.push(sha);
     }
     return missing;
@@ -254,7 +254,7 @@ export class Store {
       return { ok: false, status: 404, code: 'no_blob', error: 'this release does not reference that blob' };
     }
 
-    const key = blobKey(bundleId, blobSha256);
+    const key = blobKey(blobSha256);
     const existing = await this.blob.stat(key);
     if (existing && existing.size === expected.size) {
       await drain(body);
@@ -306,19 +306,65 @@ export class Store {
     return { ok: true, record: finalized, already: false };
   }
 
-  /** Discard an unfinalised release and every blob it uploaded. */
-  async discardRelease(bundleId: string): Promise<void> {
-    await this.blob.deletePrefix(releasePrefix(bundleId));
+  /**
+   * Blob hashes referenced by any release except `exceptBundleId`.
+   *
+   * Derived from the release records on every call rather than kept as a counter. A refcount is
+   * one bug away from deleting a blob a live release still needs, and the release table is the
+   * only thing that actually knows the truth. Unfinalised releases count too: a publish in flight
+   * may already reference a blob another release uploaded.
+   *
+   * @param exceptBundleId - the release being removed.
+   * @returns the set of blob hashes that must survive.
+   */
+  private async blobsReferencedElsewhere(exceptBundleId: string): Promise<Set<string>> {
+    const keep = new Set<string>();
+    for (const other of await this.db.listReleases()) {
+      if (other.bundleId === exceptBundleId) continue;
+      for (const sha of collectBlobShas(other.signedManifest.manifest)) keep.add(sha);
+    }
+    return keep;
   }
 
-  /** Size of one blob, for `Content-Length` and range validation. */
+  /**
+   * Discard a release, removing only the blobs nothing else needs.
+   *
+   * @param bundleId - the release to discard.
+   * @param keepAlso - blob hashes to spare on top of those other releases reference, used when the
+   *   release is being replaced rather than removed: the incoming manifest is not in the store yet,
+   *   so it cannot protect its own blobs.
+   */
+  async discardRelease(bundleId: string, keepAlso: Iterable<string> = []): Promise<void> {
+    const record = await this.db.getRelease(bundleId);
+    if (!record) return;
+    const keep = await this.blobsReferencedElsewhere(bundleId);
+    for (const sha of keepAlso) keep.add(sha);
+    for (const sha of collectBlobShas(record.signedManifest.manifest)) {
+      if (!keep.has(sha)) await this.blob.delete(blobKey(sha));
+    }
+  }
+
+  /**
+   * Size of one blob, for `Content-Length` and range validation.
+   *
+   * The blob namespace is global, so membership is checked here rather than implied by the key:
+   * a release may only read blobs its own signed manifest lists.
+   */
   async statBlob(bundleId: string, blobSha256: string): Promise<{ size: number } | null> {
-    return this.blob.stat(blobKey(bundleId, blobSha256));
+    if (!(await this.releaseReferences(bundleId, blobSha256))) return null;
+    return this.blob.stat(blobKey(blobSha256));
   }
 
   /** Streaming reader over one blob, optionally ranged for resume. */
   async openBlobStream(bundleId: string, blobSha256: string, range?: ByteRange): Promise<Readable | null> {
-    return this.blob.openReadStream(blobKey(bundleId, blobSha256), range);
+    if (!(await this.releaseReferences(bundleId, blobSha256))) return null;
+    return this.blob.openReadStream(blobKey(blobSha256), range);
+  }
+
+  /** Whether `bundleId`'s signed manifest lists `blobSha256`. */
+  private async releaseReferences(bundleId: string, blobSha256: string): Promise<boolean> {
+    const record = await this.db.getRelease(bundleId);
+    return !!record && !!findBlobEntry(record.signedManifest.manifest, blobSha256);
   }
 
   /** Set a release's rollout percentage. @returns false when the release is unknown. */

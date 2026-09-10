@@ -20,7 +20,7 @@ import {
   compressForBlob,
   decompressBlob,
 } from './compression.js';
-import { aesGcmDecrypt, aesGcmEncrypt, type KeyObject, randomAesKey, sha256Hex } from './crypto.js';
+import { aesGcmDecrypt, aesGcmEncrypt, deriveBlobIv, type KeyObject, sha256Hex } from './crypto.js';
 import {
   type BlobEntry,
   blobAad,
@@ -59,6 +59,12 @@ export interface BuildReleaseV2Input {
   keyId: string;
   /** default true. Off stores compressed plaintext, still hash-authenticated. */
   encrypt?: boolean;
+  /**
+   * The 32-byte content key, required when `encrypt` is not false. Hold **one key per channel**
+   * and reuse it for every release: encryption is convergent, so a stable key is what lets the
+   * blob store keep a single copy of a file that several releases share.
+   */
+  contentKey?: Buffer;
   bundleCompressionLevel?: number;
   assetCompressionLevel?: number;
   targetAppVersions?: string;
@@ -102,7 +108,16 @@ export async function buildReleaseV2(input: BuildReleaseV2Input): Promise<BuiltR
   }
 
   const encrypt = input.encrypt !== false;
-  const contentKey = encrypt ? randomAesKey() : null;
+  if (encrypt && !input.contentKey) {
+    throw new Error(
+      'buildReleaseV2: encrypted releases need a contentKey. Reuse one key per channel so the blob ' +
+        'store can deduplicate across releases; a fresh key per release silently disables that.',
+    );
+  }
+  if (input.contentKey && input.contentKey.length !== 32) {
+    throw new Error('buildReleaseV2: contentKey must be 32 bytes');
+  }
+  const contentKey = encrypt ? (input.contentKey as Buffer) : null;
   const encryption: EncryptionV2 = contentKey
     ? { mode: 'aes-256-gcm', contentKeyB64: contentKey.toString('base64') }
     : { mode: 'none' };
@@ -123,7 +138,7 @@ export async function buildReleaseV2(input: BuildReleaseV2Input): Promise<BuiltR
         ? (input.bundleCompressionLevel ?? BUNDLE_COMPRESSION_LEVEL)
         : (input.assetCompressionLevel ?? ASSET_COMPRESSION_LEVEL);
       const compressed = await compressForBlob(file.data, file.path, level);
-      const sealed = sealBlob(compressed.data, compressed.compression, contentKey, input.bundleId, plaintextSha);
+      const sealed = sealBlob(compressed.data, compressed.compression, contentKey, plaintextSha);
       blob = sealed.entry;
       blobByPlaintext.set(plaintextSha, blob);
       blobs.set(blob.sha256, sealed.stored);
@@ -174,13 +189,14 @@ function sealBlob(
   data: Buffer,
   compression: BlobCompression,
   contentKey: Buffer | null,
-  bundleId: string,
   plaintextSha: string,
 ): { entry: BlobEntry; stored: Buffer } {
   if (!contentKey) {
     return { entry: { sha256: sha256Hex(data), size: data.length, compression }, stored: data };
   }
-  const sealed = aesGcmEncrypt(contentKey, data, blobAad(bundleId, plaintextSha));
+  // Convergent: nonce from the bytes being sealed, so an unchanged file seals to the same
+  // ciphertext in every release and the blob store stores it once.
+  const sealed = aesGcmEncrypt(contentKey, data, blobAad(plaintextSha), deriveBlobIv(contentKey, sha256Hex(data)));
   return {
     entry: {
       sha256: sha256Hex(sealed.ciphertext),
@@ -240,13 +256,7 @@ export async function verifyReleaseV2(
       if (sha256Hex(stored) !== entry.blob.sha256) throw new Error(`blob ${entry.blob.sha256}: hash mismatch`);
 
       const compressed = contentKey
-        ? aesGcmDecrypt(
-            contentKey,
-            entry.blob.ivB64 ?? '',
-            stored,
-            entry.blob.tagB64 ?? '',
-            blobAad(manifest.bundleId, entry.sha256),
-          )
+        ? aesGcmDecrypt(contentKey, entry.blob.ivB64 ?? '', stored, entry.blob.tagB64 ?? '', blobAad(entry.sha256))
         : stored;
       // Bounded: the frame must declare exactly the size the signed manifest promises.
       data = await decompressBlob(compressed, entry.blob.compression, entry.size);

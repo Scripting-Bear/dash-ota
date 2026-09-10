@@ -124,9 +124,10 @@ export interface AesGcmResult {
  * @param plaintext bytes to encrypt
  * @returns iv, ciphertext, and auth tag
  */
-export function aesGcmEncrypt(key: Buffer, plaintext: Buffer, aad?: Buffer): AesGcmResult {
+export function aesGcmEncrypt(key: Buffer, plaintext: Buffer, aad?: Buffer, fixedIv?: Buffer): AesGcmResult {
   if (key.length !== 32) throw new Error('aesGcmEncrypt: key must be 32 bytes');
-  const iv = randomBytes(12);
+  if (fixedIv && fixedIv.length !== 12) throw new Error('aesGcmEncrypt: iv must be 12 bytes');
+  const iv = fixedIv ?? randomBytes(12);
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   if (aad) cipher.setAAD(aad);
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
@@ -234,4 +235,25 @@ export function randomNonceB64(bytes = 18): string {
  */
 export function randomSecretB64(bytes = 32): string {
   return randomBytes(bytes).toString('base64');
+}
+
+/**
+ * Derive the 12-byte GCM nonce for one blob from the bytes being sealed.
+ *
+ * Convergent encryption: the same message under the same content key must produce the same
+ * ciphertext, or the blob store cannot deduplicate across releases. A random nonce makes every
+ * release's copy of an unchanged file unique.
+ *
+ * The nonce is derived from the hash of **the exact bytes passed to the cipher** — the compressed
+ * blob — and never from the plaintext hash. Deriving from the plaintext would hand the same nonce
+ * to two different messages whenever the same file is compressed at two different levels, which is
+ * the one failure mode GCM does not survive. Keyed under the content key so the nonce is not a
+ * public function of public data.
+ *
+ * @param contentKey - the 32-byte channel content key.
+ * @param sealedInputSha256 - hex sha-256 of the bytes about to be encrypted.
+ * @returns a 12-byte nonce, unique per distinct message.
+ */
+export function deriveBlobIv(contentKey: Buffer, sealedInputSha256: string): Buffer {
+  return createHmac('sha256', contentKey).update(`dash-ota/v2/blob-iv/${sealedInputSha256}`).digest().subarray(0, 12);
 }

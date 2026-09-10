@@ -26,6 +26,9 @@ import {
   resolveVerifyKey,
 } from './util.js';
 
+/** Fixed content key for the fixtures. Real channels hold one of these; tests must not randomise it. */
+const TEST_CONTENT_KEY = Buffer.alloc(32, 7);
+
 let passed = 0;
 async function check(name: string, fn: () => void | Promise<void>): Promise<void> {
   await fn();
@@ -87,6 +90,7 @@ async function main(): Promise<void> {
     const dec = decryptPrivateKeyPem(enc, 'hunter2');
 
     const { manifest } = await buildReleaseV2({
+      contentKey: TEST_CONTENT_KEY,
       bundleId: 'bnd_cli',
       runtimeVersion: 'R2',
       bundleVersion: 1,
@@ -113,6 +117,7 @@ async function main(): Promise<void> {
       JSON.stringify({ keyId: 'key_dev_1', publicKeyRawB64: kp.publicKeyRawB64 }),
     );
     const { manifest } = await buildReleaseV2({
+      contentKey: TEST_CONTENT_KEY,
       bundleId: 'bnd_v',
       runtimeVersion: 'R2',
       bundleVersion: 1,
