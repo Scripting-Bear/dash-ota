@@ -47,6 +47,11 @@ export function decryptPrivateKeyPem(pem: string, passphrase: string): string {
 export function resolveVerifyKey(args: ParsedArgs, keyPath: string, privateKeyPem: string): { key: KeyObject; source: string } {
   const pubFlag = flagStr(args, 'verify-pub');
   if (pubFlag) return { key: publicKeyFromRawB64(pubFlag), source: '--verify-pub' };
+  return verifyKeyFromPath(keyPath, privateKeyPem);
+}
+
+/** {@link resolveVerifyKey} without flags: the sibling `.public.json`, else derived from the signing key. */
+export function verifyKeyFromPath(keyPath: string, privateKeyPem: string): { key: KeyObject; source: string } {
   const sibling = keyPath.replace(/\.private\.pem$/, '.public.json');
   if (sibling !== keyPath && existsSync(sibling)) {
     const raw = (JSON.parse(readFileSync(sibling, 'utf8')) as { publicKeyRawB64: string }).publicKeyRawB64;
@@ -347,4 +352,98 @@ export function fingerprintProject(projectPath: string): { runtimeVersion: strin
     reactNativeVersion,
   };
   return { runtimeVersion: computeRuntimeVersion(inputs), inputs };
+}
+
+/** Flags every command that talks to the backend accepts. */
+const SERVER_FLAGS = ['server', 'admin-token', 'allow-insecure'];
+
+/**
+ * Accepted flags per command. An unknown flag is a hard error rather than a no-op: `rollout
+ * --rollout 50` would otherwise ramp to 100%, because `--pct` defaults to 100 and the typo is
+ * never read.
+ */
+const KNOWN_FLAGS: Record<string, string[]> = {
+  keygen: ['out', 'key-id', 'passphrase', 'no-encrypt', 'content-key-only', 'force', 'register', 'interactive', ...SERVER_FLAGS],
+  'register-key': ['key-id', 'pub', 'key-file', ...SERVER_FLAGS],
+  fingerprint: ['project'],
+  bundle: ['project', 'platform', 'out', 'entry', 'dev', 'hermes'],
+  publish: [
+    'bundle-dir',
+    'app-id',
+    'platform',
+    'channel',
+    'runtime-version',
+    'bundle-version',
+    'mandatory',
+    'target-app-versions',
+    'rollout',
+    'release-note',
+    'bundle-id',
+    'key',
+    'key-id',
+    'passphrase',
+    'verify-pub',
+    'no-encrypt',
+    'content-key',
+    'compression-level',
+    'no-upload',
+    'project',
+    'interactive',
+    ...SERVER_FLAGS,
+  ],
+  list: [...SERVER_FLAGS],
+  rollout: ['bundle-id', 'pct', ...SERVER_FLAGS],
+  pause: ['bundle-id', 'resume', ...SERVER_FLAGS],
+  rollback: ['bundle-id', ...SERVER_FLAGS],
+  'native-policy': ['channel', 'min', 'severity', 'store-url', ...SERVER_FLAGS],
+  dashboard: ['config', 'port', 'no-open'],
+};
+
+/**
+ * Confusions an edit-distance guess will not catch. `publish` sets the initial percentage with
+ * `--rollout`; `rollout` changes it later with `--pct`.
+ */
+const FLAG_HINTS: Record<string, Record<string, string>> = {
+  rollout: { rollout: 'pct', percent: 'pct', percentage: 'pct' },
+  publish: { pct: 'rollout' },
+};
+
+/** Levenshtein distance, used only to suggest a flag the user probably meant. */
+function editDistance(a: string, b: string): number {
+  const d: number[][] = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)]);
+  for (let j = 0; j <= b.length; j++) d[0]![j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      d[i]![j] = Math.min(d[i - 1]![j]! + 1, d[i]![j - 1]! + 1, d[i - 1]![j - 1]! + cost);
+    }
+  }
+  return d[a.length]![b.length]!;
+}
+
+/**
+ * Refuse a flag the command does not accept, naming the closest one it does.
+ *
+ * @param command - the subcommand being run; an unknown one is left alone.
+ * @param args - the parsed argv.
+ * @throws if any flag is not in that command's accepted set.
+ */
+export function assertKnownFlags(command: string, args: ParsedArgs): void {
+  const known = KNOWN_FLAGS[command];
+  if (!known) return;
+  const unknown = Object.keys(args.flags).filter((f) => !known.includes(f));
+  if (unknown.length === 0) return;
+  const lines = unknown.map((flag) => {
+    const hinted = FLAG_HINTS[command]?.[flag];
+    const [closest] = known
+      .map((k) => ({ k, d: editDistance(flag, k) }))
+      .sort((x, y) => x.d - y.d)
+      .filter((c) => c.d <= 4);
+    const suggestion = hinted ?? closest?.k;
+    return `  --${flag}${suggestion ? `   (did you mean --${suggestion}?)` : ''}`;
+  });
+  throw new Error(
+    `unknown flag${unknown.length > 1 ? 's' : ''} for \`${command}\`:\n${lines.join('\n')}\n\n` +
+      `  accepted: ${known.map((k) => `--${k}`).join(' ')}`,
+  );
 }

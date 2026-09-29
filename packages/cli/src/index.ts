@@ -10,27 +10,17 @@
  *   publish          encrypt + SIGN + upload a release (interactive release notes)
  *   list             list releases and adoption/health
  *   rollout|pause|rollback|native-policy   operate rollouts
+ *   dashboard        local web UI over the same operations
  *
  * @module index
  */
 
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { generateSigningKeyPair, randomAesKey, type Channel, type Platform } from '@dash-ota/shared';
 import {
-  buildReleaseV2,
-  generateSigningKeyPair,
-  randomAesKey,
-  signManifest,
-  type Channel,
-  type Platform,
-  verifyManifest,
-} from '@dash-ota/shared';
-import {
-  adminGet,
   adminPost,
-  adminPutBytes,
-  formatBytes,
   ask,
   askMultiline,
   askSecret,
@@ -41,12 +31,25 @@ import {
   flagBool,
   flagStr,
   isEncryptedPem,
+  assertKnownFlags,
   type ParsedArgs,
   parseArgs,
   readBundleDir,
   resolveServer,
   resolveVerifyKey,
 } from './util.js';
+import {
+  bundleProject,
+  listReleases,
+  type OnEvent,
+  prepareRelease,
+  rollbackRelease,
+  setNativePolicy,
+  setPaused,
+  setRollout,
+  uploadRelease,
+} from './core.js';
+import { loadDashboardConfig, startDashboard } from './dashboard/server.js';
 
 function asPlatform(v: string): Platform {
   if (v !== 'ios' && v !== 'android') throw new Error(`--platform must be ios|android (got "${v}")`);
@@ -201,60 +204,25 @@ function cmdFingerprint(args: ParsedArgs): void {
   console.log(`  ios:     ${inputs.nativeDirHashes.ios}`);
 }
 
-/** Locate the RN-bundled `hermesc` binary for the current OS, or null if absent. */
-function resolveHermesc(project: string): string | null {
-  const base = join(project, 'node_modules', 'react-native', 'sdks', 'hermesc');
-  const rel =
-    process.platform === 'darwin'
-      ? 'osx-bin/hermesc'
-      : process.platform === 'win32'
-        ? 'win64-bin/hermesc.exe'
-        : 'linux64-bin/hermesc';
-  const p = join(base, rel);
-  return existsSync(p) ? p : null;
-}
+const printEvent: OnEvent = (event) => {
+  if (event.type === 'log') console.log(event.message);
+  else if (event.type === 'upload')
+    process.stdout.write(`\r  uploaded ${event.done}/${event.total}${event.done === event.total ? '\n' : ''}`);
+};
 
 /** Wrap `react-native bundle` into a payload dir. */
-function cmdBundle(args: ParsedArgs): void {
+async function cmdBundle(args: ParsedArgs): Promise<void> {
   const project = flagStr(args, 'project', process.cwd());
   const platform = asPlatform(flagStr(args, 'platform', 'android'));
   const out = flagStr(args, 'out', join(project, '.dash-ota-bundle', platform));
-  const entry = flagStr(args, 'entry', 'index.js');
-  const dev = flagBool(args, 'dev');
-  mkdirSync(out, { recursive: true });
-  const bundleName = platform === 'android' ? 'index.android.bundle' : 'main.jsbundle';
-  const cmd = [
-    'react-native',
-    'bundle',
-    `--platform=${platform}`,
-    `--dev=${dev}`,
-    `--entry-file=${entry}`,
-    `--bundle-output=${join(out, bundleName)}`,
-    `--assets-dest=${out}`,
-  ];
-  console.log(`$ npx ${cmd.join(' ')}`);
-  const res = spawnSync('npx', cmd, { cwd: project, stdio: 'inherit' });
-  if (res.status !== 0) throw new Error(`react-native bundle failed (exit ${res.status ?? 'null'})`);
+  const hermes = flagBool(args, 'hermes');
+  await bundleProject(
+    { project, platform, out, entry: flagStr(args, 'entry', 'index.js'), dev: flagBool(args, 'dev'), hermes },
+    printEvent,
+  );
   console.log(`\n✓ bundle written to ${out}`);
-
-  const plainBundle = join(out, bundleName);
-  if (flagBool(args, 'hermes')) {
-    // Compile to Hermes bytecode (HBC) and replace the plain JS bundle in place (same name RN
-    // loads). Fail loud if hermesc is missing rather than silently shipping a non-HBC bundle.
-    const hermesc = resolveHermesc(project);
-    if (!hermesc) {
-      throw new Error(
-        '--hermes requested but hermesc was not found under node_modules/react-native/sdks/hermesc — cannot produce an HBC bundle',
-      );
-    }
-    const hbc = `${plainBundle}.hbc`;
-    console.log(`$ ${hermesc} -emit-binary -O -out ${hbc} ${plainBundle}`);
-    const hres = spawnSync(hermesc, ['-emit-binary', '-O', '-out', hbc, plainBundle], { stdio: 'inherit' });
-    if (hres.status !== 0) throw new Error(`hermesc failed (exit ${hres.status ?? 'null'})`);
-    renameSync(hbc, plainBundle);
-    console.log(`✓ compiled Hermes bytecode (HBC): ${plainBundle}`);
-  } else {
-    console.log(`  NOTE: this is a PLAIN JS bundle. For Hermes builds, re-run with --hermes to emit HBC before publish.`);
+  if (!hermes) {
+    console.log('  NOTE: this is a PLAIN JS bundle. For Hermes builds, re-run with --hermes to emit HBC before publish.');
   }
   console.log(`  next: dash-ota publish --bundle-dir ${out} --platform ${platform} ...`);
 }
@@ -311,118 +279,57 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
     }
   }
 
-  const bundleId = flagStr(args, 'bundle-id', `bnd_${runtimeVersion}_${bundleVersion}_${Date.now().toString(36)}`);
-
   const appId = flagStr(args, 'app-id') || (interactive ? await ask('appId (package name / bundle id)', '') : '');
   if (!appId) throw new Error('--app-id is required: the device refuses a manifest built for a different app');
   const encrypt = !flagBool(args, 'no-encrypt');
   const contentKey = encrypt ? resolveContentKey(args, keyPath, keyId) : undefined;
   const levelFlag = flagStr(args, 'compression-level');
-  const bundlePath = files.find((f) => /(^|\/)(index\.android\.bundle|main\.jsbundle)$/.test(f.path))?.path;
-  if (!bundlePath) throw new Error('no index.android.bundle or main.jsbundle in the bundle dir');
+  const bundleIdFlag = flagStr(args, 'bundle-id');
 
-  const built = await buildReleaseV2({
-    bundleId,
-    runtimeVersion,
-    bundleVersion,
-    platform,
-    channel,
-    appId,
-    mandatory,
-    files,
-    bundlePath,
-    keyId,
-    encrypt,
-    ...(contentKey ? { contentKey } : {}),
-    ...(levelFlag ? { bundleCompressionLevel: Number.parseInt(levelFlag, 10) } : {}),
-    ...(targetAppVersions ? { targetAppVersions } : {}),
-    ...(releaseNotes ? { releaseNotes } : {}),
-  });
-  const signed = signManifest(built.manifest, privateKeyPem);
-
-  // Self-verify BEFORE upload against the public key the app embeds (or, failing that, a
-  // consistency check against the signing key). Catches a wrong key / keyId mismatch that would
-  // otherwise ship an update every device rejects.
-  const verify = resolveVerifyKey(args, keyPath, privateKeyPem);
-  if (!verifyManifest(signed, verify.key)) {
-    throw new Error(
-      `self-verify FAILED against ${verify.source}: the app embeds this key and would REJECT this update. Aborting.`,
-    );
-  }
-  console.log(`  ✓ self-verified signature (${verify.source})`);
-
-  const plaintextBytes = files.reduce((sum, f) => sum + f.data.length, 0);
-  const storedBytes = [...built.blobs.values()].reduce((sum, b) => sum + b.length, 0);
-  console.log(`\n  bundleId:        ${bundleId}`);
-  console.log(`  runtimeVersion:  ${runtimeVersion}   bundleVersion: ${bundleVersion}`);
-  console.log(
-    `  files:           ${files.length} (${built.blobs.size} distinct blobs)   ` +
-      `${formatBytes(plaintextBytes)} → ${formatBytes(storedBytes)}   rollout: ${rollout}%`,
+  const prepared = await prepareRelease(
+    {
+      files,
+      platform,
+      channel,
+      runtimeVersion,
+      bundleVersion,
+      appId,
+      mandatory,
+      keyId,
+      privateKeyPem,
+      encrypt,
+      verifyKey: resolveVerifyKey(args, keyPath, privateKeyPem),
+      ...(contentKey ? { contentKey } : {}),
+      ...(bundleIdFlag ? { bundleId: bundleIdFlag } : {}),
+      ...(levelFlag ? { compressionLevel: Number.parseInt(levelFlag, 10) } : {}),
+      ...(targetAppVersions ? { targetAppVersions } : {}),
+      ...(releaseNotes ? { releaseNotes } : {}),
+    },
+    printEvent,
   );
-  console.log(`  encryption:      ${built.manifest.encryption.mode}`);
 
   if (flagBool(args, 'no-upload')) {
-    const outDir = join(bundleDir, '..', `${bundleId}.v2`);
+    const outDir = join(bundleDir, '..', `${prepared.bundleId}.v2`);
     mkdirSync(join(outDir, 'blobs'), { recursive: true });
-    writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(signed, null, 2));
-    for (const [sha, bytes] of built.blobs) writeFileSync(join(outDir, 'blobs', sha), bytes);
+    writeFileSync(join(outDir, 'manifest.json'), JSON.stringify(prepared.signed, null, 2));
+    for (const [sha, bytes] of prepared.blobs) writeFileSync(join(outDir, 'blobs', sha), bytes);
     console.log(`✓ wrote artifact (not uploaded): ${outDir}`);
     return;
   }
 
-  const { server, adminToken } = resolveServer(args);
-
-  // Three steps: declare the release, upload what the server is missing, then finalize. Re-running
-  // after a failure re-declares the same manifest and uploads only the gap.
-  const created = (await adminPost(
-    server,
-    '/admin/releases',
-    { signedManifest: signed, rolloutPercentage: rollout },
-    adminToken,
-  )) as {
-    bundleId: string;
-    missing: string[];
-  };
-  const missing = created.missing ?? [];
-  console.log(
-    `  uploading:       ${missing.length} of ${built.blobs.size} blobs (${built.blobs.size - missing.length} already present)`,
-  );
-
-  let done = 0;
-  for (const sha of missing) {
-    const bytes = built.blobs.get(sha);
-    if (!bytes) throw new Error(`server asked for a blob this release does not contain: ${sha}`);
-    await adminPutBytes(server, `/admin/releases/${encodeURIComponent(bundleId)}/blobs/${sha}`, bytes, adminToken);
-    done += 1;
-    process.stdout.write(`\r  uploaded ${done}/${missing.length}`);
-  }
-  if (missing.length > 0) process.stdout.write('\n');
-
-  const res = await adminPost(server, `/admin/releases/${encodeURIComponent(bundleId)}/finalize`, {}, adminToken);
-  console.log(`✓ published to ${server}:`, JSON.stringify(res));
+  const target = resolveServer(args);
+  const result = await uploadRelease(target, prepared, rollout, printEvent);
+  console.log(`✓ published to ${target.server}:`, JSON.stringify(result.response));
 }
 
 /** List releases + adoption. */
 async function cmdList(args: ParsedArgs): Promise<void> {
-  const { server, adminToken } = resolveServer(args);
-  const data = (await adminGet(server, '/admin/releases', adminToken)) as {
-    releases: {
-      bundleId: string;
-      channel: string;
-      platform: string;
-      runtimeVersion: string;
-      bundleVersion: number;
-      rolloutPercentage: number;
-      paused: boolean;
-      rolledBack: boolean;
-      adoption: Record<string, number>;
-    }[];
-  };
-  if (data.releases.length === 0) {
+  const releases = await listReleases(resolveServer(args));
+  if (releases.length === 0) {
     console.log('(no releases)');
     return;
   }
-  for (const r of data.releases) {
+  for (const r of releases) {
     const state = r.rolledBack ? 'ROLLED_BACK' : r.paused ? 'PAUSED' : `${r.rolloutPercentage}%`;
     console.log(
       `${r.bundleId}  [${r.platform}/${r.channel}]  rt=${r.runtimeVersion} v${r.bundleVersion}  ${state}  adoption=${JSON.stringify(r.adoption)}`,
@@ -431,44 +338,55 @@ async function cmdList(args: ParsedArgs): Promise<void> {
 }
 
 async function cmdRollout(args: ParsedArgs): Promise<void> {
-  const { server, adminToken } = resolveServer(args);
-  await adminPost(
-    server,
-    '/admin/rollout',
-    { bundleId: flagStr(args, 'bundle-id'), rolloutPercentage: Number.parseInt(flagStr(args, 'pct', '100'), 10) },
-    adminToken,
-  );
+  await setRollout(resolveServer(args), flagStr(args, 'bundle-id'), Number.parseInt(flagStr(args, 'pct', '100'), 10));
   console.log('✓ rollout updated');
 }
+
 async function cmdPause(args: ParsedArgs): Promise<void> {
-  const { server, adminToken } = resolveServer(args);
-  await adminPost(
-    server,
-    '/admin/pause',
-    { bundleId: flagStr(args, 'bundle-id'), paused: !flagBool(args, 'resume') },
-    adminToken,
-  );
+  await setPaused(resolveServer(args), flagStr(args, 'bundle-id'), !flagBool(args, 'resume'));
   console.log('✓ pause state updated');
 }
+
 async function cmdRollback(args: ParsedArgs): Promise<void> {
-  const { server, adminToken } = resolveServer(args);
-  await adminPost(server, '/admin/rollback', { bundleId: flagStr(args, 'bundle-id') }, adminToken);
+  await rollbackRelease(resolveServer(args), flagStr(args, 'bundle-id'));
   console.log('✓ release rolled back (paused + flagged)');
 }
+
 async function cmdNativePolicy(args: ParsedArgs): Promise<void> {
-  const { server, adminToken } = resolveServer(args);
-  await adminPost(
-    server,
-    '/admin/native-policy',
-    {
-      channel: asChannel(flagStr(args, 'channel', 'dev')),
-      minSupportedNativeVersion: Number.parseInt(flagStr(args, 'min', '0'), 10),
-      severity: flagStr(args, 'severity', 'hard'),
-      storeUrl: flagStr(args, 'store-url') || undefined,
-    },
-    adminToken,
-  );
+  const storeUrl = flagStr(args, 'store-url');
+  await setNativePolicy(resolveServer(args), {
+    channel: asChannel(flagStr(args, 'channel', 'dev')),
+    minSupportedNativeVersion: Number.parseInt(flagStr(args, 'min', '0'), 10),
+    severity: flagStr(args, 'severity', 'hard'),
+    ...(storeUrl ? { storeUrl } : {}),
+  });
   console.log('✓ native policy updated');
+}
+
+function openBrowser(url: string): void {
+  const [command, args] =
+    process.platform === 'darwin'
+      ? ['open', [url]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', url]]
+        : ['xdg-open', [url]];
+  const child = spawn(command, args, { stdio: 'ignore', detached: true });
+  child.on('error', () => console.log('  (could not open a browser — open the link above yourself)'));
+  child.unref();
+}
+
+/** Serve the local dashboard until Ctrl+C. */
+async function cmdDashboard(args: ParsedArgs): Promise<void> {
+  const { config, project } = await loadDashboardConfig(flagStr(args, 'config', 'dash-ota.config.mjs'));
+  const handle = await startDashboard({ config, project, port: Number.parseInt(flagStr(args, 'port', '4460'), 10) });
+  console.log(`dash-ota dashboard → ${handle.url}`);
+  console.log("  local only (127.0.0.1) · the link carries this session's token · Ctrl+C to stop");
+  if (!flagBool(args, 'no-open')) openBrowser(handle.url);
+  await new Promise<void>((done) => {
+    process.once('SIGINT', () => {
+      void handle.close().then(done);
+    });
+  });
 }
 
 function printHelp(): void {
@@ -492,6 +410,8 @@ function printHelp(): void {
   pause           --bundle-id <id> [--resume]
   rollback        --bundle-id <id>
   native-policy   --channel <c> --min <build> --severity soft|hard [--store-url <url>]
+  dashboard       [--config dash-ota.config.mjs] [--port 4460] [--no-open]
+                  local web UI for all of the above (127.0.0.1 only)
 
   Wire format: protocol 2 — one content-addressed blob per distinct file, compressed with zstd
   and (unless --no-encrypt) encrypted per release. Publishing uploads only the blobs the server
@@ -508,6 +428,7 @@ function printHelp(): void {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const command = args._[0];
+  if (command) assertKnownFlags(command, args);
   switch (command) {
     case 'keygen':
       return cmdKeygen(args);
@@ -529,6 +450,8 @@ async function main(): Promise<void> {
       return cmdRollback(args);
     case 'native-policy':
       return cmdNativePolicy(args);
+    case 'dashboard':
+      return cmdDashboard(args);
     default:
       printHelp();
       if (command && command !== 'help') process.exitCode = 1;

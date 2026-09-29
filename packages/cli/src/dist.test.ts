@@ -63,6 +63,17 @@ check('the CLI binary exists and runs', () => {
   assert.ok(usage.includes('--app-id'), 'binary usage has no --app-id — this is a pre-v2 build');
 });
 
+check('the dashboard page ships next to the binary', () => {
+  assert.ok(existsSync(join(dirname(binary), 'ui.html')), 'dist/ui.html is missing — the build must copy src/dashboard/ui.html');
+  let usage: string;
+  try {
+    usage = runCli([], repoRoot);
+  } catch (error) {
+    usage = String((error as { stdout?: string }).stdout ?? '');
+  }
+  assert.ok(usage.includes('dashboard'), 'binary usage has no dashboard command');
+});
+
 check('keygen never prompts without --interactive', () => {
   const work = mkdtempSync(join(tmpdir(), 'dash-ota-keygen-'));
   const out = runCli(['keygen', '--out', join(work, '.keys'), '--key-id', 'key_quiet', '--no-encrypt'], work);

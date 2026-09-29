@@ -1,0 +1,792 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dash-ota</title>
+<link rel="icon" href="data:,">
+<style>
+:root{--bg:#09090b;--surface:#121214;--raised:#18181b;--line:#27272a;--line-2:#3a3a3f;--text:#ededef;--muted:#8f8f99;--soft:#a1a1aa;--primary:#5e6ad2;--primary-2:#7480e0;--accent:#45d09e;--warn:#e5a54b;--danger:#ef5f5f;--mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;--sans:'Inter',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color-scheme:dark}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0;background:var(--bg);color:var(--text);font:13.5px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--primary-2);outline-offset:2px}
+.top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:20px;padding:0 24px;height:56px;border-bottom:1px solid var(--line);background:rgba(9,9,11,.88);backdrop-filter:blur(8px)}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:-.01em}
+.mark{width:18px;height:18px;border-radius:5px;background:linear-gradient(135deg,var(--primary),var(--accent))}
+.envs{display:flex;gap:3px;padding:3px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
+.env{border:0;background:none;padding:4px 14px;border-radius:6px;color:var(--soft);cursor:pointer;font-weight:500;display:flex;align-items:center;gap:7px}
+.env:hover{color:var(--text)}
+.env.on{background:var(--raised);color:var(--text);box-shadow:inset 0 0 0 1px var(--line-2)}
+.env .dot{width:6px;height:6px;border-radius:50%;background:var(--warn)}
+.envmeta{margin-left:auto;display:flex;gap:16px;color:var(--muted);font:12px var(--mono);white-space:nowrap;overflow:hidden}
+.envmeta b{color:var(--soft);font-weight:500}
+main{padding:20px 24px 140px;max-width:1440px;margin:0 auto}
+.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+.group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+h1{font-size:15px;font-weight:600;margin:0 10px 0 0}
+select,input[type=text],input[type=number],textarea{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:6px 9px}
+select:hover,input[type=text]:hover,input[type=number]:hover,textarea:hover{border-color:var(--line-2)}
+.btn{border:1px solid var(--line);background:var(--surface);padding:6px 12px;border-radius:7px;cursor:pointer;font-weight:500;white-space:nowrap}
+.btn:hover{border-color:var(--line-2);background:var(--raised)}
+.btn.primary{background:var(--primary);border-color:var(--primary);color:#fff}
+.btn.primary:hover{background:var(--primary-2);border-color:var(--primary-2)}
+.btn.danger{color:var(--danger);border-color:rgba(239,95,95,.35)}
+.btn.danger:hover{background:rgba(239,95,95,.08)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.banner{border:1px solid rgba(229,165,75,.35);background:rgba(229,165,75,.07);color:var(--warn);padding:10px 14px;border-radius:8px;margin-bottom:14px}
+.tablewrap{border:1px solid var(--line);border-radius:10px;overflow:auto;background:var(--surface)}
+table.list{width:100%;border-collapse:collapse;min-width:960px}
+.list th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:500;text-align:left;padding:10px 14px;border-bottom:1px solid var(--line)}
+.list td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:middle}
+.list tbody tr[data-id]{cursor:pointer}
+.list tbody tr[data-id]:hover td{background:rgba(255,255,255,.02)}
+.list tbody tr.sel td{background:rgba(94,106,210,.09)}
+.list tbody tr:last-child td{border-bottom:0}
+.mono{font-family:var(--mono);font-size:12px}
+.muted{color:var(--muted)}
+.id{font:11.5px var(--mono);color:var(--muted);margin-top:2px}
+.plat{display:inline-block;font:600 10px var(--mono);text-transform:uppercase;padding:2px 6px;border-radius:4px;background:var(--raised);color:var(--soft);border:1px solid var(--line);margin-right:8px;min-width:58px;text-align:center}
+.ver{font-weight:600}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:2px 9px;border-radius:999px;border:1px solid;white-space:nowrap}
+.pill::before{content:'';width:6px;height:6px;border-radius:50%;background:currentColor}
+.live{color:var(--accent);border-color:rgba(69,208,158,.3);background:rgba(69,208,158,.06)}
+.paused{color:var(--warn);border-color:rgba(229,165,75,.3);background:rgba(229,165,75,.06)}
+.dead{color:var(--danger);border-color:rgba(239,95,95,.3);background:rgba(239,95,95,.06)}
+.draft{color:var(--muted);border-color:var(--line-2)}
+.tag{font-size:11px;font-weight:600;padding:1px 7px;border-radius:5px;color:var(--primary-2);background:rgba(94,106,210,.13);margin-left:8px}
+.meter{display:flex;align-items:center;gap:9px}
+.meter .bar{width:84px;height:4px;border-radius:2px;background:var(--raised);overflow:hidden}
+.meter .bar i{display:block;height:100%;background:var(--primary)}
+.adopt{display:flex;gap:12px;font:12px var(--mono);color:var(--muted);white-space:nowrap}
+.adopt b{font-weight:600;color:var(--soft)}
+.adopt .h b{color:var(--accent)}
+.adopt .f b{color:var(--danger)}
+.notes{max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--soft)}
+.empty{padding:56px 24px;text-align:center;color:var(--muted)}
+.drawer{position:fixed;top:56px;right:0;bottom:0;width:min(540px,100vw);background:var(--surface);border-left:1px solid var(--line);z-index:6;display:flex;flex-direction:column;box-shadow:-24px 0 48px rgba(0,0,0,.35)}
+.drawer>header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+.drawer .body{padding:18px 20px 40px;overflow:auto}
+dl.grid{display:grid;grid-template-columns:132px 1fr;gap:8px 12px;margin:0}
+dl.grid dt{color:var(--muted)}
+dl.grid dd{margin:0;word-break:break-word}
+.section{margin:24px 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted)}
+.controls{display:grid;gap:12px;padding:14px;border:1px solid var(--line);border-radius:9px;background:var(--bg)}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+input[type=range]{flex:1;min-width:140px;accent-color:var(--primary)}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.stat{border:1px solid var(--line);border-radius:8px;padding:10px 12px;background:var(--bg)}
+.stat b{display:block;font:600 18px var(--mono)}
+.stat span{font-size:11.5px;color:var(--muted)}
+.stat.h b{color:var(--accent)}
+.stat.f b{color:var(--danger)}
+table.files{width:100%;border-collapse:collapse;font:12px var(--mono)}
+.files td{padding:5px 0;border-bottom:1px solid var(--line);word-break:break-all}
+.files td:last-child{text-align:right;color:var(--muted);padding-left:12px;white-space:nowrap}
+.job{position:fixed;left:24px;bottom:20px;width:min(660px,calc(100vw - 48px));background:var(--surface);border:1px solid var(--line-2);border-radius:12px;z-index:7;box-shadow:0 24px 60px rgba(0,0,0,.55);overflow:hidden}
+.job>header{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--line)}
+.job .title{font-weight:600}
+.job .state{margin-left:auto;display:flex;align-items:center}
+.lanes{display:grid;gap:14px;padding:14px 16px}
+.lane .head{display:flex;align-items:center;font-size:12.5px;margin-bottom:7px}
+.split{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--raised)}
+.split .reuse{background:rgba(94,106,210,.5)}
+.split .new{position:relative;background:rgba(69,208,158,.16)}
+.split .new i{position:absolute;top:0;left:0;bottom:0;background:var(--accent);transition:width .2s}
+.legend{display:flex;gap:16px;margin-top:6px;font-size:11.5px;color:var(--muted)}
+.legend b{font-weight:600;color:var(--soft)}
+.legend .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:5px;vertical-align:0}
+.log{margin:0;max-height:190px;overflow:auto;padding:10px 16px;border-top:1px solid var(--line);background:var(--bg);font:11.5px/1.55 var(--mono);color:var(--soft);white-space:pre-wrap}
+.failbox{border:1px solid rgba(239,95,95,.4);background:rgba(239,95,95,.07);color:#ffb4b4;border-radius:8px;padding:9px 12px;font-size:12.5px}
+.spin{width:13px;height:13px;border:2px solid var(--line-2);border-top-color:var(--primary-2);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation:none}.split .new i{transition:none}}
+dialog{border:1px solid var(--line-2);border-radius:12px;background:var(--surface);color:var(--text);padding:0;width:min(520px,calc(100vw - 32px));box-shadow:0 30px 80px rgba(0,0,0,.6)}
+dialog::backdrop{background:rgba(0,0,0,.62)}
+dialog form{padding:20px}
+dialog h2{margin:0 0 4px;font-size:16px}
+.sub{margin:0 0 16px;color:var(--muted)}
+.field{display:grid;gap:6px;margin-bottom:14px}
+.lbl{font-size:12px;color:var(--soft);font-weight:500}
+.field textarea{min-height:78px;resize:vertical}
+.checks{display:flex;gap:18px;flex-wrap:wrap}
+.checks label{display:flex;align-items:center;gap:7px;font-size:13px}
+.foot{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.hint{font-size:12px;color:var(--muted)}
+.warnbox{border:1px solid rgba(229,165,75,.35);background:rgba(229,165,75,.07);color:var(--warn);border-radius:8px;padding:9px 12px;font-size:12.5px;margin-bottom:14px}
+.typed{margin-top:14px}
+.typed code{font-family:var(--mono);color:var(--text);background:var(--raised);padding:1px 6px;border-radius:4px}
+.toast{position:fixed;right:24px;bottom:20px;z-index:9;background:var(--raised);border:1px solid var(--line-2);padding:10px 14px;border-radius:9px;max-width:440px;box-shadow:0 12px 30px rgba(0,0,0,.45)}
+.toast.err{border-color:rgba(239,95,95,.5);color:#ffb4b4}
+.toast.ok{border-color:rgba(69,208,158,.45)}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="mark" aria-hidden="true"></span>dash-ota</div>
+  <nav id="envs" class="envs" aria-label="Environment"></nav>
+  <div id="envmeta" class="envmeta"></div>
+</header>
+
+<main>
+  <div id="banner" class="banner" role="status" hidden></div>
+  <div class="toolbar">
+    <div class="group">
+      <h1>Releases</h1>
+      <select id="f-rt" aria-label="Runtime version"></select>
+      <select id="f-plat" aria-label="Platform">
+        <option value="">All platforms</option>
+        <option value="android">Android</option>
+        <option value="ios">iOS</option>
+      </select>
+    </div>
+    <div class="group">
+      <button type="button" id="btn-refresh" class="btn">Refresh</button>
+      <button type="button" id="btn-key" class="btn">Register key</button>
+      <button type="button" id="btn-policy" class="btn">Native policy</button>
+      <button type="button" id="btn-new" class="btn primary">New release</button>
+    </div>
+  </div>
+  <div class="tablewrap">
+    <table class="list">
+      <thead><tr><th>Release</th><th>Runtime</th><th>Status</th><th>Rollout</th><th>Adoption</th><th>Published</th><th>Notes</th></tr></thead>
+      <tbody id="rows"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<aside id="drawer" class="drawer" aria-label="Release details" hidden>
+  <header><div id="d-title"></div><button type="button" id="d-close" class="btn">Close</button></header>
+  <div id="d-body" class="body"></div>
+</aside>
+
+<section id="job" class="job" aria-live="polite" hidden>
+  <header><span id="j-title" class="title"></span><span id="j-state" class="state"></span><button type="button" id="j-close" class="btn" hidden>Dismiss</button></header>
+  <div id="j-lanes" class="lanes"></div>
+  <pre id="j-log" class="log"></pre>
+</section>
+
+<dialog id="dlg-new" aria-labelledby="n-title">
+  <form id="n-form" method="dialog">
+    <h2 id="n-title">New release</h2>
+    <p class="sub">Builds the project's current working tree (JS bundle, then Hermes), signs it with this channel's key, and uploads only the files the server doesn't already have. Runtime <span id="n-rt" class="mono"></span>.</p>
+    <div id="n-warn" class="warnbox" hidden></div>
+    <div class="field"><span class="lbl">Platforms</span><div id="n-plats" class="checks"></div></div>
+    <div class="field"><label class="lbl" for="n-rollout">Rollout <span id="n-rolloutv" class="mono"></span></label><input id="n-rollout" type="range" min="0" max="100" step="1"></div>
+    <div class="field"><div class="checks"><label><input id="n-mandatory" type="checkbox"> Mandatory: downloads without asking, applies on next launch</label></div></div>
+    <div class="field"><label class="lbl" for="n-target">Target app versions <span class="hint">(optional)</span></label><input id="n-target" type="text" placeholder="any" autocomplete="off"></div>
+    <div class="field"><label class="lbl" for="n-notes">Release notes</label><textarea id="n-notes" maxlength="2000"></textarea></div>
+    <div class="foot"><button type="button" id="n-cancel" class="btn">Cancel</button><button type="submit" class="btn primary">Build and publish</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-policy" aria-labelledby="p-title">
+  <form id="p-form" method="dialog">
+    <h2 id="p-title">Native policy</h2>
+    <p id="p-last" class="sub"></p>
+    <div class="field"><label class="lbl" for="p-min">Minimum supported build</label><input id="p-min" type="number" min="0" step="1" required></div>
+    <div class="field"><span class="lbl">Below it, show</span>
+      <div class="checks">
+        <label><input type="radio" name="p-sev" value="soft"> A dismissable update prompt</label>
+        <label><input type="radio" name="p-sev" value="hard"> A blocking update screen</label>
+      </div>
+    </div>
+    <div class="field"><label class="lbl" for="p-url">Store URL <span class="hint">(optional)</span></label><input id="p-url" type="text" placeholder="https://… or market://…" autocomplete="off"></div>
+    <div class="foot"><button type="button" id="p-cancel" class="btn">Cancel</button><button type="submit" class="btn primary">Save policy</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-confirm" aria-labelledby="c-title">
+  <form method="dialog">
+    <h2 id="c-title"></h2>
+    <p id="c-msg" class="sub"></p>
+    <div id="c-typed" class="field typed" hidden>
+      <label class="lbl" for="c-input">Type <code id="c-req"></code> to confirm</label>
+      <input id="c-input" type="text" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="foot"><button type="button" id="c-cancel" class="btn">Cancel</button><button type="submit" id="c-go" class="btn primary">Confirm</button></div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<script>
+(() => {
+  'use strict';
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => [...document.querySelectorAll(sel)];
+  const enc = encodeURIComponent;
+  const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  const saved = {
+    get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+    set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } },
+  };
+
+  // The token arrives in the URL fragment (never sent to a server); keep it for reloads, then hide it.
+  const token = (() => {
+    const match = location.hash.match(/t=([A-Za-z0-9_-]+)/);
+    try {
+      if (match) {
+        sessionStorage.setItem('dash-ota:t', match[1]);
+        history.replaceState(null, '', location.pathname);
+      }
+      return sessionStorage.getItem('dash-ota:t') || (match ? match[1] : '');
+    } catch {
+      return match ? match[1] : '';
+    }
+  })();
+
+  const state = { envs: [], env: null, releases: [], rt: '', plat: '', selected: null, detail: null, job: null, since: 0, timer: 0 };
+
+  async function api(method, path, body) {
+    const init = { method, headers: { 'x-dash-session': token } };
+    if (body !== undefined) {
+      init.headers['content-type'] = 'application/json';
+      init.body = JSON.stringify(body);
+    }
+    const res = await fetch(path, init);
+    let data = {};
+    try { data = await res.json(); } catch { /* no body */ }
+    if (res.status === 401) banner('This session has ended. Restart `dash-ota dashboard` and open the new link.');
+    if (!res.ok) {
+      const err = new Error(data.error || `Request failed (${res.status})`);
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  function banner(text) {
+    const el = $('#banner');
+    el.textContent = text || '';
+    el.hidden = !text;
+  }
+
+  let toastTimer = 0;
+  function toast(text, kind = '') {
+    const el = $('#toast');
+    el.textContent = text;
+    el.className = `toast ${kind}`;
+    el.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.hidden = true; }, 4500);
+  }
+
+  const envPath = (suffix) => `/api/envs/${enc(state.env.name)}${suffix}`;
+
+  function ago(iso) {
+    if (!iso) return '—';
+    const s = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (s < 60) return 'just now';
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  }
+
+  function size(n) {
+    if (!Number.isFinite(n)) return '—';
+    if (n < 1024) return `${n} B`;
+    if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / 1048576).toFixed(2)} MB`;
+  }
+
+  function statusOf(r) {
+    if (r.rolledBack) return ['dead', 'Rolled back'];
+    if (r.paused) return ['paused', 'Paused'];
+    if (r.finalized === false) return ['draft', 'Incomplete'];
+    return ['live', 'Live'];
+  }
+
+  const byRuntime = (a, b) => {
+    const na = Number(a);
+    const nb = Number(b);
+    return Number.isFinite(na) && Number.isFinite(nb) ? nb - na : String(b).localeCompare(String(a));
+  };
+
+  function renderEnvs() {
+    $('#envs').innerHTML = state.envs.map((e) => {
+      const on = e.name === state.env?.name;
+      return `<button type="button" class="env${on ? ' on' : ''}" data-env="${esc(e.name)}" aria-pressed="${on}">${esc(e.name)}${e.protected ? '<span class="dot" title="Protected: every change needs its name typed"></span>' : ''}</button>`;
+    }).join('');
+    const e = state.env;
+    if (!e) return;
+    let host = e.server;
+    try { host = new URL(e.server).host; } catch { /* keep as configured */ }
+    $('#envmeta').innerHTML = `<span>${esc(host)}</span><span>channel <b>${esc(e.channel)}</b></span><span>runtime <b>${esc(e.runtimeVersion)}</b></span><span>key <b>${esc(e.keyId)}</b></span>`;
+    const problems = [];
+    if (!e.ready) problems.push(`${e.name} has no admin token configured, so its releases can't be read.`);
+    if (!e.keyPresent) problems.push(`Signing key ${e.keyId} is missing, so publishing to ${e.name} will fail.`);
+    banner(problems.join(' '));
+    for (const id of ['#btn-new', '#btn-policy', '#btn-key', '#btn-refresh']) $(id).disabled = !e.ready;
+  }
+
+  function renderRuntimeFilter() {
+    const current = String(state.env.runtimeVersion);
+    const runtimes = [...new Set([current, ...state.releases.map((r) => String(r.runtimeVersion))])].sort(byRuntime);
+    if (state.rt && !runtimes.includes(state.rt)) state.rt = '';
+    $('#f-rt').innerHTML = `<option value="">All runtimes</option>` + runtimes
+      .map((rt) => `<option value="${esc(rt)}"${rt === state.rt ? ' selected' : ''}>runtime ${esc(rt)}${rt === current ? ' (current build)' : ''}</option>`)
+      .join('');
+  }
+
+  function renderTable() {
+    const body = $('#rows');
+    if (!state.env) return;
+    if (!state.env.ready) {
+      body.innerHTML = `<tr><td colspan="7" class="empty">Add an admin token for ${esc(state.env.name)} to see its releases.</td></tr>`;
+      return;
+    }
+    const rows = state.releases
+      .filter((r) => (!state.rt || String(r.runtimeVersion) === state.rt) && (!state.plat || r.platform === state.plat))
+      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0) || b.bundleVersion - a.bundleVersion);
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="7" class="empty">No releases${state.rt ? ` for runtime ${esc(state.rt)}` : ''} yet. Publish one with <b>New release</b>.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.map((r) => {
+      const [cls, label] = statusOf(r);
+      const a = r.adoption || {};
+      const pct = Math.max(0, Math.min(100, Number(r.rolloutPercentage) || 0));
+      return `<tr data-id="${esc(r.bundleId)}" class="${r.bundleId === state.selected ? 'sel' : ''}" tabindex="0">
+        <td><span class="plat">${esc(r.platform)}</span><span class="ver">v${esc(r.bundleVersion)}</span>${r.mandatory ? '<span class="tag">mandatory</span>' : ''}<div class="id">${esc(r.bundleId)}</div></td>
+        <td class="mono">${esc(r.runtimeVersion)}</td>
+        <td><span class="pill ${cls}">${label}</span></td>
+        <td><div class="meter"><div class="bar"><i style="width:${pct}%"></i></div><span class="mono">${pct}%</span></div></td>
+        <td><div class="adopt"><span class="h"><b>${a.healthy ?? 0}</b> healthy</span><span><b>${a.applied ?? 0}</b> applied</span><span class="f"><b>${(a.failed ?? 0) + (a.rolled_back ?? 0)}</b> failed</span></div></td>
+        <td class="muted">${esc(ago(r.createdAt))}</td>
+        <td><div class="notes" title="${esc(r.releaseNotes || '')}">${esc(r.releaseNotes || '—')}</div></td>
+      </tr>`;
+    }).join('');
+  }
+
+  async function loadReleases() {
+    if (!state.env) return;
+    if (!state.env.ready) {
+      state.releases = [];
+      renderRuntimeFilter();
+      renderTable();
+      return;
+    }
+    try {
+      const data = await api('GET', envPath('/releases'));
+      state.releases = data.releases || [];
+      renderRuntimeFilter();
+      renderTable();
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  }
+
+  async function openDrawer(id) {
+    state.selected = id;
+    renderTable();
+    $('#drawer').hidden = false;
+    $('#d-title').textContent = 'Loading…';
+    $('#d-body').innerHTML = '';
+    try {
+      const data = await api('GET', envPath(`/releases/${enc(id)}`));
+      if (state.selected === id) renderDrawer(data.release);
+    } catch (err) {
+      $('#d-body').innerHTML = `<p class="muted">${esc(err.message)}</p>`;
+    }
+  }
+
+  function closeDrawer() {
+    state.selected = null;
+    state.detail = null;
+    $('#drawer').hidden = true;
+    renderTable();
+  }
+
+  function renderDrawer(r) {
+    state.detail = r;
+    const m = (r.signedManifest && r.signedManifest.manifest) || {};
+    const files = Array.isArray(m.files) ? m.files : [];
+    const [cls, label] = statusOf(r);
+    const a = r.adoption || {};
+    const off = Boolean(r.rolledBack);
+    $('#d-title').innerHTML = `<span class="plat">${esc(r.platform)}</span><span class="ver">v${esc(r.bundleVersion)}</span> <span class="pill ${cls}">${label}</span>`;
+    const fileRows = files.slice(0, 300).map((f) => `<tr><td>${esc(f.path)}</td><td>${size(f.size ?? (f.blob && f.blob.size))}</td></tr>`).join('');
+    $('#d-body').innerHTML = `
+      <dl class="grid">
+        <dt>Bundle</dt><dd class="mono">${esc(r.bundleId)}</dd>
+        <dt>Runtime</dt><dd class="mono">${esc(r.runtimeVersion)}</dd>
+        <dt>App</dt><dd class="mono">${esc(m.appId || '—')}</dd>
+        <dt>Mandatory</dt><dd>${m.mandatory ? 'Yes' : 'No'}</dd>
+        <dt>Target versions</dt><dd class="mono">${esc(m.targetAppVersions || 'any')}</dd>
+        <dt>Published</dt><dd>${esc(r.createdAt ? new Date(r.createdAt).toLocaleString() : '—')}</dd>
+        <dt>Stored</dt><dd>${size(r.totalBytes)} across ${files.length} files</dd>
+        <dt>Notes</dt><dd>${esc(m.releaseNotes || r.releaseNotes || '—')}</dd>
+      </dl>
+      <div class="section">Adoption</div>
+      <div class="stats">
+        <div class="stat"><b>${a.applied ?? 0}</b><span>applied</span></div>
+        <div class="stat h"><b>${a.healthy ?? 0}</b><span>healthy</span></div>
+        <div class="stat f"><b>${a.failed ?? 0}</b><span>crashed, reverted</span></div>
+        <div class="stat f"><b>${a.rolled_back ?? 0}</b><span>reverted by user</span></div>
+      </div>
+      <div class="section">Rollout</div>
+      <div class="controls">
+        <div class="row">
+          <input id="d-pct" type="range" min="0" max="100" step="1" value="${Number(r.rolloutPercentage) || 0}" aria-label="Rollout percentage"${off ? ' disabled' : ''}>
+          <input id="d-pctn" type="number" min="0" max="100" step="1" value="${Number(r.rolloutPercentage) || 0}" style="width:74px" aria-label="Rollout percentage"${off ? ' disabled' : ''}>
+          <button type="button" class="btn primary" data-act="rollout"${off ? ' disabled' : ''}>Apply</button>
+        </div>
+        <div class="row">
+          <button type="button" class="btn" data-act="${r.paused ? 'resume' : 'pause'}"${off ? ' disabled' : ''}>${r.paused ? 'Resume' : 'Pause'}</button>
+          <button type="button" class="btn danger" data-act="rollback"${off ? ' disabled' : ''}>Roll back</button>
+          ${off ? '<span class="hint">A rolled-back release stays off.</span>' : ''}
+        </div>
+      </div>
+      <div class="section">Files</div>
+      <table class="files"><tbody>${fileRows || '<tr><td class="muted">No file list in this manifest.</td><td></td></tr>'}</tbody></table>
+      ${files.length > 300 ? `<p class="hint">Showing 300 of ${files.length} files.</p>` : ''}`;
+  }
+
+  function confirmAction({ title, message, danger = false, require = '' }) {
+    return new Promise((resolve) => {
+      const dialog = $('#dlg-confirm');
+      const input = $('#c-input');
+      const go = $('#c-go');
+      $('#c-title').textContent = title;
+      $('#c-msg').textContent = message;
+      $('#c-req').textContent = require;
+      $('#c-typed').hidden = !require;
+      input.value = '';
+      go.className = `btn ${danger ? 'danger' : 'primary'}`;
+      go.disabled = Boolean(require);
+      input.oninput = () => { go.disabled = input.value !== require; };
+      const finish = (value) => {
+        dialog.close();
+        resolve(value);
+      };
+      go.onclick = (ev) => { ev.preventDefault(); finish(require || 'yes'); };
+      $('#c-cancel').onclick = (ev) => { ev.preventDefault(); finish(null); };
+      dialog.oncancel = (ev) => { ev.preventDefault(); finish(null); };
+      dialog.showModal();
+      (require ? input : go).focus();
+    });
+  }
+
+  async function releaseAction(act) {
+    const r = state.detail;
+    const e = state.env;
+    if (!r || !e) return;
+    const body = {};
+    if (act === 'rollout') {
+      body.pct = Number($('#d-pctn').value);
+      if (!Number.isInteger(body.pct) || body.pct < 0 || body.pct > 100) {
+        toast('Rollout must be a whole number from 0 to 100.', 'err');
+        return;
+      }
+    }
+    if (act === 'pause' || act === 'resume') body.paused = act === 'pause';
+    const titles = {
+      rollout: `Set rollout to ${body.pct}%`,
+      pause: 'Pause this release',
+      resume: 'Resume this release',
+      rollback: 'Roll back this release',
+    };
+    if (act === 'rollback' || e.protected) {
+      const answer = await confirmAction({
+        title: `${titles[act]} on ${e.name}`,
+        message: act === 'rollback'
+          ? 'Devices stop being offered this release, and it cannot be resumed.'
+          : `${r.platform} v${r.bundleVersion} · ${r.bundleId}`,
+        danger: act === 'rollback',
+        require: e.protected ? e.name : '',
+      });
+      if (answer === null) return;
+      body.confirm = answer;
+    }
+    const route = act === 'resume' ? 'pause' : act;
+    try {
+      await api('POST', envPath(`/releases/${enc(r.bundleId)}/${route}`), body);
+      toast(`${titles[act]}: done`, 'ok');
+      await loadReleases();
+      await openDrawer(r.bundleId);
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  }
+
+  async function openNew() {
+    const e = state.env;
+    $('#n-title').textContent = `New release · ${e.name}`;
+    $('#n-rt').textContent = e.runtimeVersion;
+    $('#n-plats').innerHTML = e.platforms
+      .map((p) => `<label><input type="checkbox" name="plat" value="${esc(p)}" checked> ${esc(p)} <span class="hint" data-next="${esc(p)}"></span></label>`)
+      .join('');
+    $('#n-rollout').value = e.protected ? '10' : '100';
+    $('#n-rolloutv').textContent = `${$('#n-rollout').value}%`;
+    $('#n-mandatory').checked = false;
+    $('#n-target').value = '';
+    $('#n-notes').value = '';
+    $('#n-warn').hidden = !e.protected;
+    $('#n-warn').textContent = `${e.name} is protected: you'll type its name before anything is built.`;
+    $('#dlg-new').showModal();
+    try {
+      const data = await api('GET', envPath('/next-version'));
+      for (const [p, v] of Object.entries(data.next || {})) {
+        const el = document.querySelector(`[data-next="${p}"]`);
+        if (el) el.textContent = `→ v${v}`;
+      }
+    } catch { /* the publish itself reports this */ }
+  }
+
+  async function submitNew(ev) {
+    ev.preventDefault();
+    const e = state.env;
+    const platforms = $$('#n-plats input:checked').map((i) => i.value);
+    if (!platforms.length) {
+      toast('Pick at least one platform.', 'err');
+      return;
+    }
+    const body = {
+      platforms,
+      rollout: Number($('#n-rollout').value),
+      mandatory: $('#n-mandatory').checked,
+      releaseNotes: $('#n-notes').value.trim(),
+      targetAppVersions: $('#n-target').value.trim(),
+    };
+    if (e.protected) {
+      const answer = await confirmAction({
+        title: `Publish to ${e.name}`,
+        message: `${platforms.join(' + ')} · rollout ${body.rollout}%${body.mandatory ? ' · mandatory' : ''}. Builds the current working tree.`,
+        require: e.name,
+      });
+      if (answer === null) return;
+      body.confirm = answer;
+    }
+    try {
+      const data = await api('POST', envPath('/publish'), body);
+      $('#dlg-new').close();
+      startJob(data.jobId, e.name);
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  }
+
+  function startJob(id, envName) {
+    clearTimeout(state.timer);
+    state.job = { id, env: envName, status: 'running', events: [], results: [] };
+    state.since = 0;
+    $('#job').hidden = false;
+    renderJob();
+    pollJob();
+  }
+
+  async function pollJob() {
+    const job = state.job;
+    if (!job) return;
+    try {
+      const data = await api('GET', `/api/jobs/${enc(job.id)}?since=${state.since}`);
+      Object.assign(job, { status: data.status, error: data.error, results: data.results || [], env: data.env });
+      job.events.push(...(data.events || []));
+      state.since = data.next;
+      renderJob();
+      if (data.status === 'running') {
+        state.timer = setTimeout(pollJob, 700);
+        return;
+      }
+      if (state.env && state.env.name === data.env) loadReleases();
+      toast(data.status === 'done' ? `Published to ${data.env}` : `Publish failed: ${data.error}`, data.status === 'done' ? 'ok' : 'err');
+    } catch (err) {
+      if (err.status === 404) {
+        state.job = null;
+        $('#job').hidden = true;
+        return;
+      }
+      state.timer = setTimeout(pollJob, 2000);
+    }
+  }
+
+  function renderJob() {
+    const job = state.job;
+    if (!job) return;
+    const lanes = new Map();
+    for (const ev of job.events) {
+      if (!ev.platform) continue;
+      const lane = lanes.get(ev.platform) || { step: 'starting', plan: null, done: 0 };
+      if (ev.type === 'step') lane.step = ev.message;
+      if (ev.type === 'plan') { lane.plan = ev; lane.done = 0; }
+      if (ev.type === 'upload') lane.done = ev.done;
+      lanes.set(ev.platform, lane);
+    }
+    $('#j-title').textContent = `Publishing to ${job.env}`;
+    $('#j-state').innerHTML = job.status === 'running'
+      ? '<span class="spin" role="img" aria-label="Running"></span>'
+      : job.status === 'done' ? '<span class="pill live">Published</span>' : '<span class="pill dead">Failed</span>';
+    const html = [...lanes].map(([platform, lane]) => {
+      const result = job.results.find((x) => x.platform === platform);
+      const headline = result ? `v${result.bundleVersion} · ${result.bundleId}` : lane.step;
+      let bar = '';
+      if (lane.plan) {
+        const total = lane.plan.total || 1;
+        const reused = total - lane.plan.upload;
+        const progress = lane.plan.upload ? Math.round((lane.done / lane.plan.upload) * 100) : 100;
+        bar = `<div class="split" role="img" aria-label="${reused} of ${total} files reused, ${lane.done} of ${lane.plan.upload} new files uploaded">
+            <div class="reuse" style="width:${(reused / total) * 100}%"></div>
+            <div class="new" style="width:${(lane.plan.upload / total) * 100}%"><i style="width:${progress}%"></i></div>
+          </div>
+          <div class="legend">
+            <span><span class="sw" style="background:rgba(94,106,210,.5)"></span><b>${reused}</b> of ${total} files already on the server</span>
+            <span><span class="sw" style="background:var(--accent)"></span><b>${lane.done}/${lane.plan.upload}</b> new files uploaded</span>
+          </div>`;
+      }
+      return `<div class="lane"><div class="head"><span class="plat">${esc(platform)}</span><span>${esc(headline)}</span></div>${bar}</div>`;
+    }).join('');
+    $('#j-lanes').innerHTML = (html || '<div class="hint">Starting…</div>') + (job.error ? `<div class="failbox">${esc(job.error)}</div>` : '');
+    const log = $('#j-log');
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
+    log.textContent = job.events
+      .filter((ev) => ev.type === 'log' || ev.type === 'step')
+      .slice(-400)
+      .map((ev) => (ev.type === 'step' ? `▸ ${ev.platform}: ${ev.message}` : ev.message))
+      .join('\n');
+    if (atBottom) log.scrollTop = log.scrollHeight;
+    $('#j-close').hidden = job.status === 'running';
+  }
+
+  function openPolicy() {
+    const e = state.env;
+    let last = null;
+    try { last = JSON.parse(saved.get(`dash-ota:policy:${e.name}`) || 'null'); } catch { last = null; }
+    $('#p-title').textContent = `Native policy · ${e.name}`;
+    $('#p-min').value = last ? last.min : '';
+    for (const radio of $$('input[name="p-sev"]')) radio.checked = radio.value === ((last && last.severity) || 'soft');
+    $('#p-url').value = (last && last.storeUrl) || '';
+    $('#p-last').textContent = last
+      ? `Last set from this browser: build ${last.min}, ${last.severity}, ${new Date(last.at).toLocaleString()}. The server can't report the current value.`
+      : "The server can't report the current policy, so nothing is pre-filled.";
+    $('#dlg-policy').showModal();
+  }
+
+  async function submitPolicy(ev) {
+    ev.preventDefault();
+    const e = state.env;
+    const body = {
+      min: Number($('#p-min').value),
+      severity: ($('input[name="p-sev"]:checked') || {}).value || 'soft',
+      storeUrl: $('#p-url').value.trim(),
+    };
+    if (!Number.isInteger(body.min) || body.min < 0) {
+      toast('The minimum build must be a whole number.', 'err');
+      return;
+    }
+    if (e.protected || body.severity === 'hard') {
+      const answer = await confirmAction({
+        title: `Set a ${body.severity} policy on ${e.name}`,
+        message: body.severity === 'hard'
+          ? `Apps below build ${body.min} will be blocked until they update from the store.`
+          : `Apps below build ${body.min} will be asked to update from the store.`,
+        danger: body.severity === 'hard',
+        require: e.protected ? e.name : '',
+      });
+      if (answer === null) return;
+      body.confirm = answer;
+    }
+    try {
+      await api('POST', envPath('/native-policy'), body);
+      saved.set(`dash-ota:policy:${e.name}`, JSON.stringify({ min: body.min, severity: body.severity, storeUrl: body.storeUrl, at: Date.now() }));
+      $('#dlg-policy').close();
+      toast('Native policy saved', 'ok');
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  }
+
+  async function registerPublicKey() {
+    const e = state.env;
+    const answer = await confirmAction({
+      title: `Register ${e.keyId} on ${e.name}`,
+      message: `Sends the public half of ${e.keyId} to ${e.server} so it accepts releases signed with it.`,
+      require: e.protected ? e.name : '',
+    });
+    if (answer === null) return;
+    try {
+      await api('POST', envPath('/register-key'), { confirm: answer });
+      toast(`Registered ${e.keyId}`, 'ok');
+    } catch (err) {
+      toast(err.message, 'err');
+    }
+  }
+
+  async function selectEnv(name) {
+    state.env = state.envs.find((e) => e.name === name) || state.envs[0];
+    saved.set('dash-ota:env', state.env.name);
+    state.rt = String(state.env.runtimeVersion);
+    state.releases = [];
+    if (!$('#drawer').hidden) closeDrawer();
+    renderEnvs();
+    renderRuntimeFilter();
+    renderTable();
+    await loadReleases();
+  }
+
+  $('#envs').addEventListener('click', (ev) => {
+    const button = ev.target.closest('[data-env]');
+    if (button) selectEnv(button.dataset.env);
+  });
+  $('#rows').addEventListener('click', (ev) => {
+    const row = ev.target.closest('tr[data-id]');
+    if (row) openDrawer(row.dataset.id);
+  });
+  $('#rows').addEventListener('keydown', (ev) => {
+    const row = ev.target.closest('tr[data-id]');
+    if (row && ev.key === 'Enter') openDrawer(row.dataset.id);
+  });
+  $('#f-rt').addEventListener('change', (ev) => { state.rt = ev.target.value; renderTable(); });
+  $('#f-plat').addEventListener('change', (ev) => { state.plat = ev.target.value; renderTable(); });
+  $('#btn-refresh').addEventListener('click', loadReleases);
+  $('#btn-new').addEventListener('click', openNew);
+  $('#btn-policy').addEventListener('click', openPolicy);
+  $('#btn-key').addEventListener('click', registerPublicKey);
+  $('#d-close').addEventListener('click', closeDrawer);
+  $('#d-body').addEventListener('input', (ev) => {
+    if (ev.target.id === 'd-pct') $('#d-pctn').value = ev.target.value;
+    if (ev.target.id === 'd-pctn') $('#d-pct').value = ev.target.value;
+  });
+  $('#d-body').addEventListener('click', (ev) => {
+    const button = ev.target.closest('[data-act]');
+    if (button) releaseAction(button.dataset.act);
+  });
+  $('#n-form').addEventListener('submit', submitNew);
+  $('#n-cancel').addEventListener('click', () => $('#dlg-new').close());
+  $('#n-rollout').addEventListener('input', (ev) => { $('#n-rolloutv').textContent = `${ev.target.value}%`; });
+  $('#p-form').addEventListener('submit', submitPolicy);
+  $('#p-cancel').addEventListener('click', () => $('#dlg-policy').close());
+  $('#j-close').addEventListener('click', () => { state.job = null; $('#job').hidden = true; });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && !document.querySelector('dialog[open]') && !$('#drawer').hidden) closeDrawer();
+  });
+
+  async function init() {
+    if (!token) {
+      banner('Missing session token. Open the link printed by `dash-ota dashboard`.');
+      return;
+    }
+    try {
+      const data = await api('GET', '/api/envs');
+      state.envs = data.environments || [];
+      if (!state.envs.length) {
+        banner('No environments configured.');
+        return;
+      }
+      await selectEnv(saved.get('dash-ota:env') || state.envs[0].name);
+      const latest = await api('GET', '/api/jobs/latest');
+      if (latest.job && latest.job.status === 'running') startJob(latest.job.id, latest.job.env);
+    } catch (err) {
+      banner(err.message);
+    }
+    setInterval(() => {
+      if (document.visibilityState === 'visible' && !document.querySelector('dialog[open]')) loadReleases();
+    }, 20000);
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildReleaseV2, generateSigningKeyPair, publicKeyFromRawB64, signManifest, verifyManifest } from '@dash-ota/shared';
 import {
+  assertKnownFlags,
   assertSecureServer,
   decryptPrivateKeyPem,
   encryptPrivateKeyPem,
@@ -166,6 +167,23 @@ async function main(): Promise<void> {
     const rv3 = fingerprintProject(p3).runtimeVersion;
     assert.equal(rv1, rv2, 'identical projects → identical runtimeVersion');
     assert.notEqual(rv1, rv3, 'a same-size content change MUST flip the runtimeVersion');
+  });
+
+  await check('unknown flags are refused, so a typo cannot silently take a default', () => {
+    // The real footgun: `rollout` reads --pct (default 100), so --rollout 50 used to ramp to 100%.
+    assert.throws(
+      () => assertKnownFlags('rollout', parseArgs(['--bundle-id', 'b1', '--rollout', '50'])),
+      /unknown flag for `rollout`[\s\S]*did you mean --pct/,
+    );
+    assert.throws(() => assertKnownFlags('publish', parseArgs(['--pct', '50'])), /did you mean --rollout/);
+    assert.throws(() => assertKnownFlags('publish', parseArgs(['--bundle-dirr', './out'])), /did you mean --bundle-dir/);
+
+    // Valid flags, including the shared server ones, must still pass.
+    assertKnownFlags('rollout', parseArgs(['--bundle-id', 'b1', '--pct', '50', '--server', 'https://x.dev']));
+    assertKnownFlags('publish', parseArgs(['--bundle-dir', './out', '--rollout', '10', '--mandatory']));
+    assertKnownFlags('dashboard', parseArgs(['--port', '4460', '--no-open']));
+    // A command with no declared flag set is left alone rather than guessed at.
+    assertKnownFlags('help', parseArgs(['--whatever']));
   });
 
   console.log(`\n${passed} cli checks passed.`);

@@ -1,6 +1,6 @@
 {
   "name": "@dash-ota/cli",
-  "version": "0.4.1",
+  "version": "0.6.0",
   "description": "Release tooling for dash-ota: keygen, fingerprint, bundle, encrypt+sign, publish, and rollout ops. Holds the Ed25519 signing key (CI/release only). npx-executable.",
   "type": "module",
   "bin": {
@@ -20,11 +20,12 @@
   "license": "MIT",
   "devDependencies": {
     "@dash-ota/shared": "^0.4.0",
-    "esbuild": "^0.24.2"
+    "esbuild": "^0.24.2",
+    "@dash-ota/backend": "^0.5.0"
   },
   "scripts": {
     "start": "tsx src/index.ts",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --packages=bundle --external:@mongodb-js/zstd --outfile=dist/index.mjs --banner:js=\"#!/usr/bin/env node\"",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --packages=bundle --external:@mongodb-js/zstd --outfile=dist/index.mjs --banner:js=\"#!/usr/bin/env node\" && node -e \"require('node:fs').copyFileSync('src/dashboard/ui.html','dist/ui.html')\"",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
