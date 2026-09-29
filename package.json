@@ -33,7 +33,7 @@
     "test:dist": "tsx packages/cli/src/dist.test.ts",
     "lint:native": "node scripts/check-native-sources.mjs",
     "gen:zstd-prefix": "node scripts/generate-zstd-prefix.mjs",
-    "test:rn": "cd packages/rn && npx jest",
+    "test:rn": "npm --prefix packages/rn install --no-package-lock --no-fund --no-audit --legacy-peer-deps && npm --prefix packages/rn test",
     "test:ios": "sh scripts/test-ios.sh",
     "test:dashboard": "tsx --conditions source packages/cli/src/dashboard.test.ts"
   },
