@@ -130,6 +130,9 @@ async function enrollAuthorized(body: EnrollRequest, config: BackendConfig): Pro
  * @param config resolved backend config, including pluggable hooks
  * @returns the ordered list of routes
  */
+/** Schemes an app-store link may use. The client enforces the same list before opening one. */
+const STORE_URL_SCHEMES = /^(https|market|itms-apps):\/\//;
+
 export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[] {
   const log = config.logger;
   const routes: OtaRoute[] = [];
@@ -528,10 +531,22 @@ export function createOtaRoutes(store: Store, config: BackendConfig): OtaRoute[]
         storeUrl?: string;
       }>();
       if (!body?.channel) return httpError(400, 'channel required');
+      if (!Number.isInteger(body.minSupportedNativeVersion) || body.minSupportedNativeVersion < 0) {
+        return httpError(400, 'minSupportedNativeVersion must be a non-negative integer');
+      }
+      if (body.severity !== 'soft' && body.severity !== 'hard') {
+        return httpError(400, "severity must be 'soft' or 'hard'");
+      }
+      // The policy is not covered by the manifest signature, and apps open this URL from a
+      // blocking gate. Refuse anything that is not a store link, so a leaked admin token cannot
+      // point every install at an arbitrary page.
+      if (body.storeUrl !== undefined && !STORE_URL_SCHEMES.test(body.storeUrl)) {
+        return httpError(400, 'storeUrl must start with https://, market:// or itms-apps://');
+      }
       await store.setNativePolicy(body.channel, {
         minSupportedNativeVersion: body.minSupportedNativeVersion,
         severity: body.severity,
-        storeUrl: body.storeUrl,
+        ...(body.storeUrl !== undefined ? { storeUrl: body.storeUrl } : {}),
       });
       return json({ ok: true });
     },

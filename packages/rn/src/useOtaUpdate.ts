@@ -15,7 +15,8 @@ import type { OtaUpdateState } from './types';
  *   `progress`, `error`, and the actions `checkNow`, `downloadUpdate`, `applyUpdate`, `markHealthy`,
  *   `rollback` for non-standard flows.
  *
- * @example The whole standard flow — announce, download, restart — is `ota.ui`:
+ * @example Standard flow
+ * The whole standard flow — announce, download, restart — is `ota.ui`:
  * ```tsx
  * function UpdateRow() {
  *   const { ui, markHealthy } = useOtaUpdate();

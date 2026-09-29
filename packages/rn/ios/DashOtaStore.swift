@@ -367,6 +367,8 @@ final class DashOtaStore {
       "bundleId": current?["bundleId"] as? String ?? "embedded",
       "bundleVersion": current?["version"] as? Int ?? 0,
       "isEmbedded": current == nil,
+      // The server uses this to tell which bundle is running, so a delta can be built against it.
+      "bundleSha256": current?["bundleSha256"] as? String ?? "",
     ]
   }
 

@@ -76,6 +76,8 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
       map.putDouble("bundleVersion", meta.getInt("bundleVersion").toDouble())
       map.putString("runtimeVersion", getRuntimeVersion())
       map.putBoolean("isEmbedded", meta.getBoolean("isEmbedded"))
+      // The server uses this to tell which bundle is running, so a delta can be built against it.
+      map.putString("bundleSha256", meta.optString("bundleSha256", ""))
       promise.resolve(map)
     } catch (e: Exception) {
       promise.reject("meta_error", e.message, e)

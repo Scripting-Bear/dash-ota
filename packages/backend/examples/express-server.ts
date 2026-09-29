@@ -18,7 +18,7 @@ const app = express();
 // it stashes the raw bytes (the OTA request signature is over the exact body) via rawBodySaver.
 app.use(express.json({ verify: rawBodySaver }));
 app.get('/', (_req, res) => {
-  res.json({ service: 'my-app', ota: '/ota/v1/*' });
+  res.json({ service: 'my-app', ota: '/ota/v2/*' });
 });
 
 // Mount the OTA distributor at the root. Everything it doesn't own falls through to your app.

@@ -68,6 +68,18 @@ export interface OtaConfig {
   /** override the native-embedded server URL. Tests and local development only — a production
    * build must take the URL from native, where JS cannot reach it. */
   serverUrlOverride?: string;
+  /**
+   * Your app's store listing, surfaced as {@link NativeVersionPolicy.storeUrl} on the force-update
+   * gate.
+   *
+   * Set this. The policy in the `/check` response is **not covered by the manifest signature**, so
+   * a `storeUrl` coming from the server is attacker-controllable — and the gate that opens it is a
+   * blocking, full-screen prompt. The client therefore never passes the server's value through:
+   * without this, `nativePolicy.storeUrl` is `undefined` and your gate has no link.
+   *
+   * Must be `https://`, `market://` or `itms-apps://`; anything else is refused and logged.
+   */
+  storeUrl?: string;
   /** returns the app's authenticated session token, attached to enroll (ties the device key to a user). */
   getEnrollToken?: () => Promise<string | undefined>;
   logger?: OtaLogger;

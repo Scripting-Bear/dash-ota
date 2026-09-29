@@ -6,12 +6,22 @@
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { AppState, NativeEventEmitter, type AppStateStatus, type NativeModule } from 'react-native';
 import DashOta from './NativeDashOta';
 import { canonicalize } from './canonical';
 import { consoleLogger, DEFAULT_UI_COPY, type OtaConfig } from './config';
 import { blobBaseUrl, checkForUpdate, confirm, createClientContext, type OtaClientContext } from './otaClient';
+import { resolvePolicy } from './policy';
 import type { AvailableUpdate, BundleMeta, NativeVersionPolicy, OtaPhase, OtaStatus, OtaUi, OtaUpdateState } from './types';
+
+/** Payload of the native `onDashOtaProgress` event. Android only for now. */
+interface DownloadProgress {
+  bundleId: string;
+  bytesDone: number;
+  bytesTotal: number;
+  filesDone: number;
+  filesTotal: number;
+}
 
 const OtaContext = createContext<OtaUpdateState | null>(null);
 
@@ -98,12 +108,23 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
     const ctx = ctxRef.current;
     if (!material || !ctx) return false;
     setStatus('downloading');
-    const staged = (await DashOta.downloadAndStage(
-      blobBaseUrl(ctx, material.bundleId),
-      material.downloadToken,
-      material.manifestJson,
-      material.signatureB64,
-    )) as unknown as { bundleId: string; bundleVersion: number };
+    // Android reports byte progress while it fetches; iOS does not emit yet, so `progress` stays
+    // at 0 there and the UI renders indeterminate. Cosmetic either way — never fail on it.
+    const emitter = new NativeEventEmitter(DashOta as unknown as NativeModule);
+    const subscription = emitter.addListener('onDashOtaProgress', (event: DownloadProgress) => {
+      if (event.bytesTotal > 0) setProgress(Math.min(event.bytesDone / event.bytesTotal, 0.99));
+    });
+    let staged: { bundleId: string; bundleVersion: number };
+    try {
+      staged = (await DashOta.downloadAndStage(
+        blobBaseUrl(ctx, material.bundleId),
+        material.downloadToken,
+        material.manifestJson,
+        material.signatureB64,
+      )) as unknown as { bundleId: string; bundleVersion: number };
+    } finally {
+      subscription.remove();
+    }
     // Drop the material so a retry re-checks rather than reusing a token that may have expired.
     pendingDownload.current = null;
     setProgress(1);
@@ -133,7 +154,7 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
         bundleId: meta.isEmbedded ? '' : meta.bundleId,
         bundleSha256: meta.bundleSha256 ?? '',
       });
-      setNativePolicy(resp.nativePolicy);
+      setNativePolicy(resolvePolicy(resp.nativePolicy, config.storeUrl, logger));
       serverNonceRef.current = resp.serverNonce;
 
       // Report a crash-loop failure from a prior launch exactly once (drives server auto-pause).

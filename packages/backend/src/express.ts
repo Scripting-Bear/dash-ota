@@ -3,7 +3,7 @@
  * `(req, res, next)` middleware so you can mount the whole distributor inside an existing
  * Express (or any Connect-compatible) app — **without** this package depending on Express.
  *
- * Mount it at the **root** of your app (paths are absolute: `/ota/v1/*`, `/admin/*`,
+ * Mount it at the **root** of your app (paths are absolute: `/ota/v2/*`, `/admin/*`,
  * `/health`); anything it doesn't own falls through to `next()`:
  *
  * ```ts

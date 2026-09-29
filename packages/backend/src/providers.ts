@@ -289,7 +289,7 @@ export class DiskDatabaseProvider implements DatabaseProvider {
   }
 }
 
-/** Default blob store: one `<bundleId>.bin` file per release under `storageDir`. */
+/** Default blob store: content-addressed `blobs/<sha256>` under `storageDir`, shared across releases. */
 export class DiskBlobStore implements BlobStore {
   constructor(private readonly dir: string) {
     mkdirSync(dir, { recursive: true });

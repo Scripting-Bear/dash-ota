@@ -862,6 +862,50 @@ async function main(): Promise<void> {
     await adminPost('/admin/native-policy', { channel: 'dev', minSupportedNativeVersion: 0, severity: 'soft' });
   });
 
+  await check('native-policy validates its input (the policy is not signed)', async () => {
+    // storeUrl is rendered behind a blocking gate and is NOT covered by the manifest signature,
+    // so the admin route must refuse anything that is not a store link.
+    for (const storeUrl of ['javascript:alert(1)', 'http://evil.example', 'data:text/html,x', '//evil']) {
+      const res = await adminPost('/admin/native-policy', {
+        channel: 'dev',
+        minSupportedNativeVersion: 1,
+        severity: 'hard',
+        storeUrl,
+      });
+      assert.equal(res.status, 400, `storeUrl ${storeUrl} must be refused`);
+    }
+
+    const badSeverity = await adminPost('/admin/native-policy', {
+      channel: 'dev',
+      minSupportedNativeVersion: 1,
+      severity: 'blocking',
+    });
+    assert.equal(badSeverity.status, 400);
+
+    const badMin = await adminPost('/admin/native-policy', {
+      channel: 'dev',
+      minSupportedNativeVersion: -3,
+      severity: 'hard',
+    });
+    assert.equal(badMin.status, 400);
+
+    // Both accepted schemes still work, and the policy is left harmless afterwards.
+    for (const storeUrl of [
+      'https://play.google.com/store/apps/details?id=com.x',
+      'market://details?id=com.x',
+      'itms-apps://itunes.apple.com/app/id1',
+    ]) {
+      const ok = await adminPost('/admin/native-policy', {
+        channel: 'dev',
+        minSupportedNativeVersion: 0,
+        severity: 'soft',
+        storeUrl,
+      });
+      assert.equal(ok.status, 200, `storeUrl ${storeUrl} must be accepted`);
+    }
+    await adminPost('/admin/native-policy', { channel: 'dev', minSupportedNativeVersion: 0, severity: 'soft' });
+  });
+
   await check('rollout auto-pauses after repeated failures', async () => {
     // publish a fresh release to a dedicated install set
     await publishRelease({

@@ -31,7 +31,7 @@ export interface NativeVersionPolicy {
 }
 
 /**
- * POST /ota/v1/enroll — registers the device's **public** key (called once). No secret is
+ * POST /ota/v2/enroll — registers the device's **public** key (called once). No secret is
  * issued or transmitted — the device keeps its hardware private key — so there is nothing to
  * intercept at enrollment. `enrollToken` should carry the app's authenticated session so the
  * registration is tied to a real user (the backend validates it).
@@ -101,7 +101,7 @@ export interface CheckResponse {
 /** Status reported back after an apply attempt. */
 export type ConfirmStatus = 'applied' | 'healthy' | 'failed' | 'rolled_back';
 
-/** POST /ota/v1/confirm — adoption + health telemetry that drives server-side auto-pause. */
+/** POST /ota/v2/confirm — adoption + health telemetry that drives server-side auto-pause. */
 export interface ConfirmRequest {
   installId: string;
   bundleId: string;
