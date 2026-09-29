@@ -37,11 +37,16 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # packages/rn is deliberately not an npm workspace (it has its own yarn.lock and RN
+      # toolchain), so root `npm ci` does not install it and `test:rn` would find no jest preset.
+      - name: Install the React Native package
+        run: corepack enable && yarn install --immutable
+        working-directory: packages/rn
       - name: Typecheck
         run: npm run typecheck
       - name: Lint
         run: npm run lint
       - name: Format check
         run: npm run format:check
-      - name: Tests (core + e2e + express)
+      - name: Tests
         run: npm test
