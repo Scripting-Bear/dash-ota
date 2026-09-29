@@ -11,7 +11,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { RedisCacheProvider, type RedisLike } from './redis-cache.js';
+import { RedisCacheProvider } from './redis-cache.js';
 
 const url = process.env.OTA_TEST_REDIS_URL;
 
@@ -23,7 +23,7 @@ async function main(): Promise<void> {
 
   const { Redis } = await import('ioredis');
   const client = new Redis(url);
-  const cache = new RedisCacheProvider({ client: client as unknown as RedisLike, keyPrefix: `dashota-test-${process.pid}:` });
+  const cache = new RedisCacheProvider({ client, keyPrefix: `dashota-test-${process.pid}:` });
   let passed = 0;
   const check = async (name: string, fn: () => Promise<void>): Promise<void> => {
     await fn();

@@ -1,56 +1,89 @@
 ---
 sidebar_position: 4
 title: Concepts & glossary
-description: The vocabulary you need — runtimeVersion, bundleVersion, channel, manifest, device key, and more.
+description: The words the rest of the docs use — runtime version, bundle version, channel, manifest, device key and more.
 ---
 
 # Concepts & glossary
 
-A quick glossary. Each links to a deeper page.
+The words the rest of the docs use, in the order you meet them.
+
+### release
+
+One published update: a JavaScript bundle and its assets, with a signed manifest. It's identified
+by its `bundleId`, which looks like `bnd_rt1_2_mumketyh`.
 
 ### runtimeVersion
-The **native-compatibility key**. It changes only when the *native* layer changes (native deps,
-TurboModules, Hermes, native code). It's baked into the binary at build time and stamped onto
-every OTA. **An OTA is only applied if its `runtimeVersion` exactly matches the binary's** — this
-is what stops a JS update built for a new store build from landing on an old one.
+
+A string that names a native build. The app embeds it, every release carries one, and a device only
+installs a release with exactly the same value. Change it whenever native code, a native dependency
+or the React Native version changes, so a JavaScript update written for a new store build can't
+reach an old one. A fixed string like `rt1` works; `--runtime-version auto` computes one from your
+project instead, and it changes with any dependency change, JavaScript-only ones included.
 → [Versioning & targeting](/docs/concepts/versioning-targeting)
 
 ### bundleVersion
-A **monotonic counter** for the OTA lineage *within* a runtimeVersion. Native rejects anything
-`< current` (the downgrade guard), except an explicit server-signed rollback.
+
+A whole number that goes up with every release. A device only installs a release with a higher
+`bundleVersion` than the bundle it runs now; the bundle shipped inside the app counts as 0.
+→ [Versioning & targeting](/docs/concepts/versioning-targeting)
 
 ### channel
-A build flavour's lane — typically `dev` / `uat` / `prod`. Each flavour embeds its own channel +
-signing key, so an OTA can only reach the matching flavour. → [Environments & flavours](/docs/react-native/environments)
+
+The lane a build belongs to: `dev`, `uat` or `prod`. It's compiled into each build flavour, and a
+device only takes releases published to its channel. Give each channel its own signing key.
+→ [Environments](/docs/react-native/environments)
 
 ### manifest
-The signed JSON describing a release: bundle id, runtimeVersion, bundleVersion, platform, channel,
-mandatory flag, release notes, the AES content key, and a **per-file SHA-256 list**. The Ed25519
-signature covers the whole thing. → [Manifest schema](/docs/architecture/manifest-schema)
+
+The signed description of a release: `bundleId`, runtime version, bundle version, platform,
+channel, app id, the mandatory flag, release notes, the content key, and the path, size and
+SHA-256 of every file. The Ed25519 signature covers all of it.
+→ [Manifest schema](/docs/architecture/manifest-schema)
+
+### signing key
+
+The Ed25519 key pair `keygen` makes. The private half signs releases and stays with you or your
+CI. The public half is compiled into the app, which uses it to check every release.
+→ [Keys, custody & rotation](/docs/security/key-management)
 
 ### device key
-A non-exportable EC P-256 key generated on first launch in the **AndroidKeyStore / iOS Secure
-Enclave**. The device signs its requests with it; only the public half is registered at enroll.
+
+A P-256 key pair each install creates on first launch, in the Android Keystore or, on iOS, the
+Secure Enclave where available (it falls back to a software key unless you require hardware). The
+device signs its requests with it; the server only ever sees the public half.
 → [Security model](/docs/concepts/security-model)
 
 ### slot
-An on-disk bundle location. dash-ota keeps `current`, `lastKnownGood`, and a `pending`/`staged`
-slot, plus boot counters. Applies are atomic (write-temp → fsync → rename).
+
+A place on the device where a bundle lives. dash-ota tracks `current`, `lastKnownGood`, `staged`
+(downloaded and verified) and `pending` (applies on the next cold start).
 → [Slot model](/docs/architecture/slot-model)
 
 ### markHealthy
-The signal — sent by your app **after the first real screen is usable** — that the running bundle
-works. If it isn't sent within N launches, the **crash-loop breaker** reverts.
-→ [markHealthy & crash-loop](/docs/react-native/mark-healthy)
 
-### rollout %
-A deterministic percentage of installs that are eligible for a release (bucketed by a hash of the
-install id, so a device doesn't flip in and out between checks). → [Staged rollout](/docs/guides/staged-rollout)
+The call your app makes once its first real screen works. It ends the new bundle's trial and makes
+it the last known good one. → [markHealthy](/docs/react-native/mark-healthy)
+
+### crash-loop breaker
+
+A new bundle runs on trial. If it crashes on two cold starts before `markHealthy()`, the device
+switches it off and goes back to the last bundle that worked. A launch where the app starts and the
+user simply leaves doesn't count. → [Crash-loop breaker](/docs/concepts/crash-loop)
+
+### rollout percentage
+
+The share of devices a release is offered to. Each device gets a fixed bucket per release, so it
+doesn't flip in and out between checks. → [Staged rollouts](/docs/guides/staged-rollout)
 
 ### targetAppVersions
-An optional semver range over your marketing/app version, so a release can be limited to specific
-app builds (CodePush-style).
+
+An optional semver range over your app's version (for example `>=1.2.0 <1.3.0`) that limits a
+release to certain app versions. The server checks it.
+→ [Versioning & targeting](/docs/concepts/versioning-targeting)
 
 ### force-update gate
-A per-channel policy (`minSupportedNativeVersion` + `severity`) that tells too-old binaries to
-**update from the store** instead of receiving an OTA. → [Force-update](/docs/concepts/force-update)
+
+A per-channel policy, set with `native-policy`, that tells binaries below a minimum native build
+number to update from the store. The app decides what to show.
+→ [Force update](/docs/concepts/force-update)

@@ -1,13 +1,13 @@
 {
   "name": "@dash-ota/shared",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Shared crypto + protocol core for dash-ota (Ed25519, AES-256-GCM, ECDSA device-key auth, canonical JSON, manifest schema).",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "source": "./src/index.ts",
+      "@dash-ota/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
@@ -31,5 +31,12 @@
   },
   "dependencies": {
     "@mongodb-js/zstd": "^7.0.0"
+  },
+  "homepage": "https://scripting-bear.github.io/dash-ota/",
+  "bugs": {
+    "url": "https://github.com/Scripting-Bear/dash-ota/issues"
+  },
+  "engines": {
+    "node": ">=20.19.0"
   }
 }

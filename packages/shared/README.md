@@ -5,10 +5,10 @@ The crypto + protocol core shared by [dash-ota](https://github.com/Scripting-Bea
 [`@dash-ota/backend`](https://github.com/Scripting-Bear/dash-ota/tree/main/packages/backend)
 (distributor). Pure Node `crypto` — **no external crypto dependencies**.
 
-> This is an internal building block. App developers integrate
-> [`react-native-dash-ota`](https://github.com/Scripting-Bear/dash-ota/blob/main/docs/react-native.md)
-> (client) and [`@dash-ota/backend`](https://github.com/Scripting-Bear/dash-ota/blob/main/docs/backend.md)
-> (server); you rarely depend on this package directly.
+You rarely depend on this package directly: apps use
+[`react-native-dash-ota`](https://scripting-bear.github.io/dash-ota/docs/react-native/installation)
+and servers use [`@dash-ota/backend`](https://scripting-bear.github.io/dash-ota/docs/backend/installation).
+Reference: https://scripting-bear.github.io/dash-ota/docs/api/shared
 
 ## What's inside
 
@@ -19,13 +19,15 @@ The crypto + protocol core shared by [dash-ota](https://github.com/Scripting-Bea
 - **ECDSA P-256** request verification for the hardware device-key auth (`verifyRequestEcdsa`)
 - Canonical JSON, the manifest schema, and **targeting** (exact `runtimeVersion` gate,
   `targetAppVersions` semver subset, deterministic rollout bucketing)
-- `runtimeVersion` **fingerprinting** of native inputs
+- `runtimeVersion` fingerprinting (`computeRuntimeVersion`)
 
 ## Installation
 
 ```sh
 npm install @dash-ota/shared
 ```
+
+Node 20.19 or later (set by its one dependency, `@mongodb-js/zstd`).
 
 ## Design
 

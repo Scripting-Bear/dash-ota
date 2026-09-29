@@ -11,7 +11,7 @@ Pod::Spec.new do |s|
   s.authors      = package["author"]
 
   s.platforms    = { :ios => min_ios_version_supported }
-  s.source       = { :git => "https://github.com/dash-ota/react-native-dash-ota.git", :tag => "#{s.version}" }
+  s.source       = { :git => "https://github.com/Scripting-Bear/dash-ota.git", :tag => "react-native-dash-ota@#{s.version}" }
 
   # `.c` is here for ios/vendor/zstddeclib.c, upstream zstd's single-file decompressor. Apple has
   # no zstd and the wire format is zstd on every platform; see ios/vendor/README.md.

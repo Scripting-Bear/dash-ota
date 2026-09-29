@@ -53,6 +53,9 @@ function walk(dir) {
   return pages.sort((a, b) => a.position - b.position || a.title.localeCompare(b.title));
 }
 
+/** `slug: /` is the docs index, served at /docs (the trailing-slash form 404s on Pages). */
+const pageUrl = (slug) => (slug ? `${SITE}/docs/${slug}` : `${SITE}/docs`);
+
 const lines = [
   '# dash-ota',
   '',
@@ -63,7 +66,7 @@ const lines = [
 ];
 
 for (const page of walk(docsDir)) {
-  lines.push(`- [${page.title}](${SITE}/docs/${page.slug})${page.description ? `: ${page.description}` : ''}`);
+  lines.push(`- [${page.title}](${pageUrl(page.slug)})${page.description ? `: ${page.description}` : ''}`);
 }
 lines.push('');
 
@@ -78,7 +81,7 @@ for (const dir of dirs) {
   if (pages.length === 0) continue;
   lines.push(`## ${dir.label ?? dir.name}`, '');
   for (const page of pages) {
-    lines.push(`- [${page.title}](${SITE}/docs/${page.slug})${page.description ? `: ${page.description}` : ''}`);
+    lines.push(`- [${page.title}](${pageUrl(page.slug)})${page.description ? `: ${page.description}` : ''}`);
   }
   lines.push('');
 }

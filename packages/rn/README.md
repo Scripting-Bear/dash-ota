@@ -1,33 +1,36 @@
 # react-native-dash-ota
 
-Over-the-air (OTA) updates for React Native, done right: **Ed25519-signed** manifests **verified
-in native**, **AES-256-GCM** payloads, **hardware device-key** request auth, `runtimeVersion`
-gating, atomic apply on cold start, and **crash-loop rollback**. Part of
-[dash-ota](https://github.com/Scripting-Bear/dash-ota).
+The React Native client of [dash-ota](https://scripting-bear.github.io/dash-ota/), self-hosted
+over-the-air updates. Every release is signed with an Ed25519 key you hold, and native code checks
+the signature against a public key compiled into your app before anything is written, so the
+update server can't ship code of its own. Updates apply on a cold start, and a bundle that crashes
+on two launches is switched off and replaced by the last one that worked.
 
-- New Architecture (TurboModule, codegen `DashOtaSpec`, native module `DashOta`)
-- Android (Kotlin + Google Tink) · iOS (Obj-C++ + Swift CryptoKit)
-- Trust-critical work (verify / decrypt / hash / swap / rollback) runs in **native**, before and
-  independent of JS — a compromised bundle can't bypass it.
+- React Native 0.79 or later, New Architecture (TurboModule). Verified on 0.79 and 0.87.
+- Android (Kotlin, Tink) and iOS (Swift, CryptoKit).
+- Only the JavaScript changes over the air; native code needs a store release.
 
-> 📖 **Full integration guide:** https://github.com/Scripting-Bear/dash-ota/blob/main/docs/react-native.md
+Docs: https://scripting-bear.github.io/dash-ota/ — start with
+[Ship your first update](https://scripting-bear.github.io/dash-ota/docs/getting-started/quickstart).
 
-## Installation
+## Install
 
 ```sh
-npm install react-native-dash-ota
+npm install react-native-dash-ota @react-native-async-storage/async-storage
 cd ios && pod install
 ```
 
-Requires React Native **0.79+** with the **New Architecture** enabled, and Hermes.
+Then add the native settings (channel, server URL, public key, runtime version) and one line each
+in `MainApplication.kt` and `AppDelegate.swift`. Both are shown step by step in the
+[quickstart](https://scripting-bear.github.io/dash-ota/docs/getting-started/quickstart#4-wire-the-native-side).
+You also need a backend (`@dash-ota/backend`) and the CLI (`@dash-ota/cli`) to publish.
 
-## Usage
-
-Per-flavour config (channel, server URL, embedded Ed25519 public key, `runtimeVersion`) comes
-from the **native** side so it can't be tampered from JS — see the guide for the Android
-`resValue` / iOS `Info.plist` setup and the `MainApplication`/`AppDelegate` bundle-loader hooks.
+## Use
 
 ```tsx
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEffect } from 'react';
+import { ActivityIndicator, Button, Text, View } from 'react-native';
 import { DashOtaProvider, useOtaUpdate } from 'react-native-dash-ota';
 
 export default function Root() {
@@ -35,47 +38,41 @@ export default function Root() {
     <DashOtaProvider
       config={{
         appVersion: '1.4.0',
-        storage,                          // your AsyncStorage / secure-storage adapter
-        getEnrollToken: () => auth.getSessionToken(),
+        storage: AsyncStorage,
+        getEnrollToken: async () => '<YOUR_SESSION_TOKEN>', // what your backend's verifyEnrollToken checks
         checkOnAppForeground: true,
       }}
     >
-      <App />
+      <UpdateRow />
     </DashOtaProvider>
   );
 }
 
 function UpdateRow() {
   const { ui, markHealthy } = useOtaUpdate();
-  useEffect(() => markHealthy(), []); // call once the app is genuinely usable
 
-  // `ui` is the whole announce → download → restart flow, already derived:
-  // { phase, visible, title, description, cta, ctaEnabled, busy, progress, blocking, action }
+  // Call it once your app is really usable; it ends the new bundle's trial.
+  useEffect(() => {
+    markHealthy();
+  }, [markHealthy]);
+
+  // `ui` is the announce → download → restart flow, already worked out.
   if (!ui.visible) return null;
   return (
     <View>
       <Text>{ui.title}</Text>
       <Text>{ui.description}</Text>
-      {ui.busy && <ActivityIndicator />}
-      {ui.cta && <Button title={ui.cta} disabled={!ui.ctaEnabled} onPress={ui.action} />}
+      {ui.busy ? <ActivityIndicator /> : null}
+      {ui.cta ? <Button title={ui.cta} disabled={!ui.ctaEnabled} onPress={() => void ui.action()} /> : null}
     </View>
   );
 }
 ```
 
-Override the wording with `uiCopy` (per phase, `{version}` interpolated). `ui.blocking` is true for a
-mandatory release — render the same thing as a non-dismissible modal, and it downloads itself. The raw
-`status` / `availableUpdate` / `checkNow` / `downloadUpdate` / `applyUpdate` / `rollback` surface is
-still there for non-standard flows.
-
-See the [full guide](https://github.com/Scripting-Bear/dash-ota/blob/main/docs/react-native.md)
-for all config options, the lifecycle, mandatory/force-update, and the crash-loop breaker.
-
-## Contributing
-
-- [Development workflow](CONTRIBUTING.md#development-workflow)
-- [Sending a pull request](CONTRIBUTING.md#sending-a-pull-request)
-- [Code of conduct](CODE_OF_CONDUCT.md)
+`uiCopy` changes the wording per phase (`{version}` is filled in). `ui.blocking` is true while a
+verified mandatory update is waiting; show the same content as a modal the user can't dismiss. The
+raw state and actions (`status`, `availableUpdate`, `checkNow`, `downloadUpdate`, `applyUpdate`,
+`rollback`) are there for other flows. See [the docs](https://scripting-bear.github.io/dash-ota/docs/react-native/use-ota-update).
 
 ## License
 

@@ -6,7 +6,7 @@
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState, NativeEventEmitter, type AppStateStatus, type NativeModule } from 'react-native';
+import { AppState, NativeEventEmitter, Platform, type AppStateStatus, type NativeModule } from 'react-native';
 import DashOta from './NativeDashOta';
 import { canonicalize } from './canonical';
 import { consoleLogger, DEFAULT_UI_COPY, type OtaConfig } from './config';
@@ -24,6 +24,21 @@ interface DownloadProgress {
 }
 
 const OtaContext = createContext<OtaUpdateState | null>(null);
+
+/** Only Android emits progress. Never fails a download: without events the UI stays indeterminate. */
+function subscribeToProgress(onProgress: (fraction: number) => void): { remove(): void } | null {
+  if (Platform.OS !== 'android') return null;
+  try {
+    return new NativeEventEmitter(DashOta as unknown as NativeModule).addListener(
+      'onDashOtaProgress',
+      (event: DownloadProgress) => {
+        if (event.bytesTotal > 0) onProgress(Math.min(event.bytesDone / event.bytesTotal, 0.99));
+      },
+    );
+  } catch {
+    return null;
+  }
+}
 
 /** Provider props. */
 export interface DashOtaProviderProps {
@@ -80,17 +95,44 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
   const ctxRef = useRef<OtaClientContext | null>(null);
   const serverNonceRef = useRef<string>('');
   const inFlight = useRef(false);
+  /** Read by callbacks a host may have captured before the first meta load (e.g. markHealthy on mount). */
+  const currentBundleRef = useRef<BundleMeta | null>(null);
+  /** markHealthy ran before a check supplied a nonce; the report goes out after the next check. */
+  const healthyToReport = useRef(false);
+  /** Older backends accept one report per check nonce; a report that finds it spent waits for the next. */
+  const nonceSpent = useRef(false);
   /**
-   * What a deferred download needs: the one-time token plus the exact signed bytes native verifies.
+   * `mandatory` from an announcement is unverified until native checks the signature, so it only
+   * outlives a failed download when a verified mandatory bundle is already staged.
+   */
+  const stagedMandatory = useRef(false);
+  /**
+   * What a deferred download needs: the download token plus the exact signed bytes native verifies.
    * Held only until staged (or until the next check replaces it) so `downloadUpdate()` can run long
    * after the check that announced the update.
    */
   const pendingDownload = useRef<{
     bundleId: string;
+    mandatory: boolean;
     downloadToken: string;
     manifestJson: string;
     signatureB64: string;
   } | null>(null);
+
+  const rememberBundle = useCallback((meta: BundleMeta): void => {
+    currentBundleRef.current = meta;
+    setCurrentBundle(meta);
+  }, []);
+
+  const flushHealthyReport = useCallback((): void => {
+    const ctx = ctxRef.current;
+    const bundle = currentBundleRef.current;
+    if (!healthyToReport.current || !ctx || !bundle || !serverNonceRef.current || nonceSpent.current) return;
+    healthyToReport.current = false;
+    if (bundle.isEmbedded) return;
+    nonceSpent.current = true;
+    void confirm(ctx, bundle.bundleId, 'healthy', serverNonceRef.current).catch(() => undefined);
+  }, []);
 
   const ensureCtx = useCallback(async (): Promise<OtaClientContext> => {
     if (!ctxRef.current) ctxRef.current = await createClientContext(config, logger);
@@ -108,12 +150,7 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
     const ctx = ctxRef.current;
     if (!material || !ctx) return false;
     setStatus('downloading');
-    // Android reports byte progress while it fetches; iOS does not emit yet, so `progress` stays
-    // at 0 there and the UI renders indeterminate. Cosmetic either way — never fail on it.
-    const emitter = new NativeEventEmitter(DashOta as unknown as NativeModule);
-    const subscription = emitter.addListener('onDashOtaProgress', (event: DownloadProgress) => {
-      if (event.bytesTotal > 0) setProgress(Math.min(event.bytesDone / event.bytesTotal, 0.99));
-    });
+    const subscription = subscribeToProgress(setProgress);
     let staged: { bundleId: string; bundleVersion: number };
     try {
       staged = (await DashOta.downloadAndStage(
@@ -123,10 +160,11 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
         material.signatureB64,
       )) as unknown as { bundleId: string; bundleVersion: number };
     } finally {
-      subscription.remove();
+      subscription?.remove();
     }
     // Drop the material so a retry re-checks rather than reusing a token that may have expired.
     pendingDownload.current = null;
+    stagedMandatory.current = material.mandatory;
     setProgress(1);
     logger.info(`staged ${staged.bundleId} v${staged.bundleVersion}`);
     await DashOta.applyOnNextLaunch();
@@ -148,19 +186,22 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
       setStatus('checking');
       const ctx = await ensureCtx();
       const meta = (await DashOta.getCurrentBundleMeta()) as unknown as BundleMeta;
-      setCurrentBundle(meta);
+      rememberBundle(meta);
 
       const resp = await checkForUpdate(ctx, meta.bundleVersion, config.appVersion, {
         bundleId: meta.isEmbedded ? '' : meta.bundleId,
         bundleSha256: meta.bundleSha256 ?? '',
       });
-      setNativePolicy(resolvePolicy(resp.nativePolicy, config.storeUrl, logger));
+      // Absent from third-party or older backends.
+      setNativePolicy(resp.nativePolicy ? resolvePolicy(resp.nativePolicy, config.storeUrl, logger) : null);
       serverNonceRef.current = resp.serverNonce;
+      nonceSpent.current = false;
 
       // Report a crash-loop failure from a prior launch exactly once (drives server auto-pause).
       const failed = DashOta.consumeFailedReport();
       if (failed) {
         logger.warn(`reporting crash-loop failure of ${failed}`);
+        nonceSpent.current = true;
         void confirm(ctx, failed, 'failed', resp.serverNonce, 'crash-loop revert').catch(() => undefined);
       }
 
@@ -170,11 +211,14 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
       const applied = DashOta.consumeAppliedReport();
       if (applied) {
         logger.info(`reporting applied ${applied}`);
+        nonceSpent.current = true;
         void confirm(ctx, applied, 'applied', resp.serverNonce).catch(() => undefined);
       }
+      flushHealthyReport();
 
       if (!resp.update || !resp.downloadToken) {
         setAvailableUpdate(null);
+        setIsMandatory(stagedMandatory.current);
         setStatus('up-to-date');
         return;
       }
@@ -190,6 +234,8 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
       // Don't re-download a bundle the crash-loop breaker already disabled on this device.
       if (DashOta.isBundleDisabled(m.bundleId)) {
         logger.warn(`skipping disabled bundle ${m.bundleId}`);
+        setAvailableUpdate(null);
+        setIsMandatory(stagedMandatory.current);
         setStatus('up-to-date');
         return;
       }
@@ -197,6 +243,7 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
       // Keep what a later download needs; canonicalize once, here, while the response is in hand.
       pendingDownload.current = {
         bundleId: m.bundleId,
+        mandatory: Boolean(m.mandatory),
         downloadToken: resp.downloadToken,
         manifestJson: canonicalize(m), // canonical bytes the CLI signed; native verifies the Ed25519 sig over these
         signatureB64: resp.update.signatureB64,
@@ -213,13 +260,14 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
       await stagePendingDownload();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      setIsMandatory(stagedMandatory.current);
       setError(msg);
       setStatus('error');
       logger.error(`check/stage failed: ${msg}`);
     } finally {
       inFlight.current = false;
     }
-  }, [config, ensureCtx, logger]);
+  }, [config, ensureCtx, logger, rememberBundle, flushHealthyReport, stagePendingDownload]);
 
   const downloadUpdate = useCallback(async (): Promise<boolean> => {
     if (config.enabled === false) return false;
@@ -230,8 +278,8 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
     }
     setError(null);
     setProgress(0);
-    // Two attempts: the download token is one-time and short-lived, so a user who taps Download some
-    // minutes after the announcement gets rejected by the server. That is recoverable without
+    // Two attempts: the download token expires (30 minutes by default), so a user who taps Download
+    // long after the announcement gets rejected by the server. That is recoverable without
     // bothering them — re-check once for fresh material and download that instead of erroring out.
     for (let attempt = 0; attempt < 2; attempt++) {
       inFlight.current = true;
@@ -250,6 +298,7 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
           if (pendingDownload.current) continue;
           return false;
         }
+        setIsMandatory(stagedMandatory.current);
         setError(msg);
         setStatus('error');
         logger.error(`downloadUpdate failed: ${msg}`);
@@ -293,37 +342,37 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
   const markHealthy = useCallback((): void => {
     try {
       DashOta.markHealthy();
-      const ctx = ctxRef.current;
-      if (ctx && currentBundle && !currentBundle.isEmbedded && serverNonceRef.current) {
-        void confirm(ctx, currentBundle.bundleId, 'healthy', serverNonceRef.current).catch(() => undefined);
-      }
+      healthyToReport.current = true;
+      flushHealthyReport();
     } catch (e) {
       logger.warn(`markHealthy failed: ${String(e)}`);
     }
-  }, [currentBundle, logger]);
+  }, [flushHealthyReport, logger]);
 
   const rollback = useCallback(async (): Promise<void> => {
     // Capture what we are leaving before the revert, so it can be reported.
-    const reverted = currentBundle?.isEmbedded === false ? currentBundle.bundleId : '';
+    const leaving = currentBundleRef.current;
+    const reverted = leaving?.isEmbedded === false ? leaving.bundleId : '';
     await DashOta.rollback();
     setIsPending(false);
     const meta = (await DashOta.getCurrentBundleMeta()) as unknown as BundleMeta;
-    setCurrentBundle(meta);
+    rememberBundle(meta);
 
     // A user-initiated revert is a signal about the release, and the server counts it toward the
     // auto-pause failure rate. Without it a release people actively back out of looks healthy.
     const ctx = ctxRef.current;
     if (reverted && ctx && serverNonceRef.current) {
       logger.warn(`reporting rollback of ${reverted}`);
+      nonceSpent.current = true;
       void confirm(ctx, reverted, 'rolled_back', serverNonceRef.current, 'user rollback').catch(() => undefined);
     }
-  }, [currentBundle, logger]);
+  }, [logger, rememberBundle]);
 
   useEffect(() => {
     void (async () => {
       try {
         const meta = (await DashOta.getCurrentBundleMeta()) as unknown as BundleMeta;
-        setCurrentBundle(meta);
+        rememberBundle(meta);
       } catch (e) {
         logger.warn(`getCurrentBundleMeta failed: ${String(e)}`);
       }
@@ -420,8 +469,7 @@ export function DashOtaProvider({ config, children }: DashOtaProviderProps): Rea
       cta: copy.cta,
       ctaEnabled: copy.cta != null && !busy,
       busy,
-      // `downloadAndStage` is a single native call with no granular progress, so anything mid-flight
-      // is honestly indeterminate rather than a fake percentage.
+      // Indeterminate until the first progress event, which only Android sends.
       progress: phase === 'working' && progress === 0 ? null : progress,
       blocking: isMandatory,
       action: runAction,

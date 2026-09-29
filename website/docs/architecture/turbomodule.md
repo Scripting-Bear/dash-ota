@@ -25,8 +25,11 @@ The TypeScript spec (`NativeDashOta.ts`) declares the native methods codegen gen
   `getNativeBuildNumber`.
 - **State (promise):** `getCurrentBundleMeta`, `getState`.
 - **Apply pipeline:** `downloadAndStage`, `applyOnNextLaunch`, `markHealthy`, `rollback`, `restart`,
-  `isBundleDisabled`, `consumeFailedReport`.
-- **Device identity (sync):** `getDevicePublicKeyB64`, `signWithDeviceKey`, `sha256Hex`.
+  `isBundleDisabled`, `consumeFailedReport`, `consumeAppliedReport`.
+- **Progress events:** `addListener`, `removeListeners` (required by `NativeEventEmitter`; only
+  Android emits `onDashOtaProgress`).
+- **Device identity (sync):** `getDevicePublicKeyB64`, `signWithDeviceKey`, `sha256Hex`,
+  `generateNonce`, `isDeviceKeyHardwareBacked`.
 
 The heavy work (`downloadAndStage`) runs **off the JS thread** so the multi-MB download + verify +
 decrypt never blocks the UI.

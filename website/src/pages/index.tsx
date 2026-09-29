@@ -11,6 +11,10 @@ function Eyebrow({ children }: { children: ReactNode }) {
   );
 }
 
+function Code({ children }: { children: ReactNode }) {
+  return <code className="font-mono text-[0.92em] text-steel">{children}</code>;
+}
+
 function Section({
   children,
   className = '',
@@ -93,18 +97,29 @@ function Terminal({ lines, copy }: { lines: string[]; copy?: string }) {
 /* ------------------------------------------------------------------ hero */
 
 const HERO_TERMINAL = [
-  '# one release, start to finish',
+  '# in your app, with a dash-ota backend on localhost:4455 and',
+  '# OTA_ADMIN_TOKEN and OTA_KEY_PASSPHRASE set in your shell',
+  '$ npm i -D @dash-ota/cli',
+  '$ npx dash-ota keygen --register',
+  '✓ wrote keypair to .keys/key_dev_1.*',
+  '✓ registered key_dev_1 with http://localhost:4455',
+  '',
   '$ npx dash-ota bundle --platform android --out ./out --hermes',
-  '✓ compiled Hermes bytecode (HBC): ./out/index.android.bundle',
   '',
-  '$ npx dash-ota publish --bundle-dir ./out --channel prod --rollout 10',
-  '  ✓ self-verified signature (sibling .public.json)',
-  '',
-  '  bundleId:        bnd_rt_9f2c1a_7_m1p4x9',
-  '  encryption:      aes-256-gcm',
-  '  uploading:       4 of 121 blobs (117 already present)   rollout: 10%',
-  '✓ published to https://ota.yourapi.com',
+  '$ npx dash-ota publish --bundle-dir ./out --app-id com.example.app --runtime-version rt1 --bundle-version 2',
+  '  ✓ self-verified signature (.keys/key_dev_1.public.json)',
+  '  bundleId:        bnd_rt1_2_mumketyh',
+  '  uploading:       1 of 1 blobs (0 already present)   rollout: 100%',
+  '✓ published to http://localhost:4455: {"ok":true,"bundleId":"bnd_rt1_2_mumketyh","rolloutPercentage":100,"already":false}',
 ];
+
+/** The commands a terminal shows, one per line, for its copy button. */
+function commandsIn(lines: string[]): string {
+  return lines
+    .filter((line) => line.startsWith('$ '))
+    .map((line) => line.slice(2))
+    .join('\n');
+}
 
 function Hero() {
   return (
@@ -116,17 +131,18 @@ function Hero() {
             Ship JavaScript updates from infrastructure you own.
           </h1>
           <p className="mt-5 max-w-xl text-[16.5px] leading-relaxed text-ink/70">
-            No vendor account, no per-seat pricing, and no third party holding the key that signs
-            your releases. Run the backend on a container you already pay for.
+            The backend runs on a server you already pay for, and no vendor service sits between
+            your CI and your users’ devices.
           </p>
 
           <div className="mt-7 rounded-lg border border-line bg-panel/60 p-4">
             <div className="flex items-baseline gap-2">
               <span className="h-1.5 w-1.5 shrink-0 translate-y-[-2px] rounded-full bg-amber" />
               <p className="text-[14.5px] leading-relaxed text-ink/85">
-                And the part nobody else does: your update server never holds the signing key, so
-                even an attacker with root on it{' '}
-                <span className="text-ink">cannot ship code to your users.</span>
+                Signing can’t be switched off: every release is signed in your CI and checked by
+                native code in the app. The update server never holds the signing key, so an
+                attacker with root on it{' '}
+                <span className="text-ink">cannot ship their own code to your users.</span>
               </p>
             </div>
           </div>
@@ -146,7 +162,19 @@ function Hero() {
             </Link>
           </div>
 
-          <p className="mt-5 font-mono text-[12px] text-muted">
+          <p className="mt-5 text-[13.5px] leading-relaxed text-ink/60">
+            New to OTA updates? Start with{' '}
+            <Link to="/docs/getting-started/what-is-an-ota-update" className="text-amber hover:text-amber">
+              what an OTA update is
+            </Link>
+            , then check the{' '}
+            <Link to="/docs/getting-started/prerequisites" className="text-amber hover:text-amber">
+              prerequisites
+            </Link>
+            .
+          </p>
+
+          <p className="mt-4 font-mono text-[12px] text-muted">
             MIT · Android + iOS · React Native 0.79+ (New Architecture)
           </p>
         </div>
@@ -154,7 +182,7 @@ function Hero() {
         <div className="w-full min-w-0">
           <Terminal
             lines={HERO_TERMINAL}
-            copy="npx dash-ota bundle --platform android --out ./out --hermes"
+            copy={commandsIn(HERO_TERMINAL)}
           />
         </div>
       </div>
@@ -173,9 +201,11 @@ function Lifecycle() {
           Every release is on trial until it proves itself.
         </h2>
         <p className="mt-3 text-[15.5px] leading-relaxed text-ink/70">
-          Updates apply on a cold start, never under a running app. A bundle that fails to reach
-          JavaScript twice is blocklisted and the last working one comes back, on the device,
-          without a deploy.
+          An update applies on the next cold start, or when your app asks for a restart. It stays
+          on trial until your app calls <Code>markHealthy()</Code>. A launch that crashes counts
+          against it; a session that reached JavaScript and went to the background doesn’t. If
+          it is still on trial at its third launch, the device disables it and goes back to the
+          last working bundle, without a deploy.
         </p>
       </div>
       <LifecycleRail />
@@ -185,17 +215,56 @@ function Lifecycle() {
 
 /* ------------------------------------------------------------------ trust */
 
-const CANNOT = [
-  ['Forge a release', 'No signing key exists on the server. An edited manifest fails Ed25519 verification in native.'],
-  ['Swap a file inside one', 'Every file carries its own SHA-256 in the signed manifest and is re-hashed after decryption.'],
-  ['Move a build between channels', '`channel` and `appId` are signed, and checked against the values compiled into the binary.'],
-  ['Push you backwards', '`bundleVersion` is monotonic. An older release is refused.'],
+const CANNOT: [string, ReactNode][] = [
+  [
+    'Forge a release',
+    'The server has no signing key. A manifest it edits fails Ed25519 verification in native code, before anything is written.',
+  ],
+  [
+    'Swap a file inside one',
+    'Every file’s SHA-256 is in the signed manifest, and native code re-hashes each file after decrypting it.',
+  ],
+  [
+    'Move a build to another app or channel',
+    <>
+      <Code>appId</Code> and <Code>channel</Code> are signed. The device checks <Code>appId</Code>{' '}
+      against its own package or bundle id and, from 0.5.1, <Code>channel</Code> against the value
+      compiled into the binary.
+    </>,
+  ],
+  [
+    'Install an older bundle over a newer one',
+    <>
+      Native code refuses a <Code>bundleVersion</Code> that isn’t higher than the bundle running now.
+    </>,
+  ],
 ];
 
-const CAN = [
-  ['Stop serving updates', 'Silence is indistinguishable from "up to date". Alert on a pipeline that goes quiet.'],
-  ['Re-serve a release you withdrew', 'Pause and rollback are server-side state, not signed facts.'],
-  ['Choose where your update wall points', '`nativePolicy` sits outside the signature. Compile your store URLs into the app.'],
+const CAN: [string, ReactNode][] = [
+  [
+    'Stop serving updates',
+    'A device can’t tell silence from “up to date”. Alert when your release pipeline goes quiet.',
+  ],
+  [
+    'Re-serve an older or withdrawn release',
+    <>
+      Anything you signed stays valid, and pause and rollback are server state. The downgrade check
+      compares only with what runs now, so after a store update, a <Code>rollback()</Code> or a
+      crash-loop revert, an older signed release can install again.
+    </>,
+  ],
+  [
+    'Force a hard update prompt',
+    <>
+      <Code>nativePolicy</Code> isn’t signed. A breached server can send severity{' '}
+      <Code>hard</Code> to every install, and if your app shows that as a blocking screen, users are
+      locked out while it lasts. From 0.5.0 the store link comes from your app’s config, not the server.
+    </>,
+  ],
+  [
+    'Read your bundles',
+    'The content key is in the manifest the server stores and returns to enrolled devices, so encryption doesn’t hide bundles from whoever runs the server.',
+  ],
 ];
 
 function Trust() {
@@ -207,8 +276,7 @@ function Trust() {
           Someone has root on your update server.
         </h2>
         <p className="mt-3 text-[15.5px] leading-relaxed text-ink/70">
-          This is the question most OTA tooling does not answer. Here is the honest version, in
-          both directions.
+          What root on your server does and doesn’t allow:
         </p>
       </div>
 
@@ -265,8 +333,9 @@ function Dashboard() {
             </h2>
             <p className="mt-3 text-[15px] leading-relaxed text-ink/70">
               Publish, ramp a rollout, pause, roll back and set the force-update policy from a web
-              UI — bound to <code className="font-mono text-[13px] text-steel">127.0.0.1</code>,
-              gated by a token minted per launch, holding nothing.
+              UI bound to <code className="font-mono text-[13px] text-steel">127.0.0.1</code> and
+              gated by a token minted per launch. It talks only to the backends in its config file,
+              and that file holds your key paths and admin tokens.
             </p>
             <ul className="mt-5 space-y-2 text-[14px] text-ink/70">
               {[
@@ -292,14 +361,15 @@ function Dashboard() {
           <div className="border-t border-line p-6 lg:border-l lg:border-t-0 lg:p-8">
             <Terminal
               lines={[
+                '# with dash-ota.config.mjs in the project and OTA_ADMIN_TOKEN set',
                 '$ npx dash-ota dashboard',
-                'dash-ota dashboard → http://127.0.0.1:4460/#t=8Kd2…',
-                '  local only (127.0.0.1) · the link carries',
-                "  this session's token · Ctrl+C to stop",
+                'dash-ota dashboard → http://127.0.0.1:4460/#t=…',
+                "  local only (127.0.0.1) · the link carries this session's token · Ctrl+C to stop",
                 '',
                 '$ npx dash-ota list',
-                'bnd_rt_9f2c1a_7  [android/prod]  v7  10%',
-                '  adoption={"applied":412,"healthy":408,"failed":1}',
+                'bnd_rt1_2_mumketyh  [android/dev]  rt=rt1 v2  100%  adoption={"applied":1,"healthy":1,"failed":0,"rolled_back":0}',
+                '$ npx dash-ota rollback --bundle-id bnd_rt1_2_mumketyh',
+                '✓ release rolled back (paused + flagged)',
               ]}
               copy="npx dash-ota dashboard"
             />
@@ -312,7 +382,7 @@ function Dashboard() {
 
 /* ------------------------------------------------------------------ install */
 
-const TABS: Record<string, { label: string; lines: string[]; copy: string }> = {
+const TABS: Record<string, { label: string; lines: string[] }> = {
   app: {
     label: 'Your app',
     lines: [
@@ -325,6 +395,7 @@ const TABS: Record<string, { label: string; lines: string[]; copy: string }> = {
       '      config={{',
       "        appVersion: '1.4.0',",
       '        storage: AsyncStorage,',
+      '        // your own API: a session token the backend checks in verifyEnrollToken',
       '        getEnrollToken: () => api.otaEnrollToken(),',
       '      }}',
       '    >',
@@ -333,7 +404,6 @@ const TABS: Record<string, { label: string; lines: string[]; copy: string }> = {
       '  );',
       '}',
     ],
-    copy: 'npm i react-native-dash-ota',
   },
   backend: {
     label: 'Your backend',
@@ -342,33 +412,41 @@ const TABS: Record<string, { label: string; lines: string[]; copy: string }> = {
       "import { dashOtaMiddleware, rawBodySaver } from '@dash-ota/backend';",
       '',
       'const app = express();',
-      'app.use(express.json({ verify: rawBodySaver }));',
+      '// Request signatures cover the raw body, and a release manifest can',
+      '// be larger than express.json\'s default 100 kB limit.',
+      "app.use(express.json({ limit: '1mb', verify: rawBodySaver }));",
       '',
       '// Distributes pre-signed releases. Never holds a signing key.',
       'app.use(dashOtaMiddleware({',
       '  adminToken: process.env.OTA_ADMIN_TOKEN,',
       '  databaseUrl: process.env.OTA_DATABASE_URL,',
+      '  // your own session check; by default any non-empty token enrolls',
+      '  verifyEnrollToken: (token) => sessions.isValid(token),',
       '}));',
       '',
       'app.listen(4455);',
     ],
-    copy: 'npm i @dash-ota/backend',
   },
   ci: {
     label: 'Your CI',
     lines: [
+      '# after checkout and npm ci, with @dash-ota/cli in devDependencies',
       '- name: Publish OTA',
       '  run: |',
+      '    mkdir -p .keys',
+      '    echo "$OTA_SIGNING_KEY" > .keys/key_prod.private.pem',
       '    npx dash-ota bundle --platform android --out ./out --hermes',
       '    npx dash-ota publish --bundle-dir ./out \\',
-      '      --app-id com.your.app --channel prod \\',
-      '      --runtime-version auto --bundle-version ${{ github.run_number }} \\',
+      '      --app-id com.your.app --channel prod --key-id key_prod \\',
+      '      --runtime-version rt1 --bundle-version ${{ github.run_number }} \\',
       '      --rollout 10',
       '  env:',
+      '    OTA_SERVER: ${{ secrets.OTA_SERVER }}',
       '    OTA_ADMIN_TOKEN: ${{ secrets.OTA_ADMIN_TOKEN }}',
+      '    OTA_SIGNING_KEY: ${{ secrets.OTA_SIGNING_KEY }}',
+      '    OTA_CONTENT_KEY: ${{ secrets.OTA_CONTENT_KEY }}',
       '    OTA_KEY_PASSPHRASE: ${{ secrets.OTA_KEY_PASSPHRASE }}',
     ],
-    copy: 'npx dash-ota publish --channel prod --rollout 10',
   },
 };
 
@@ -384,8 +462,10 @@ function Install() {
         <p className="mt-3 text-[15.5px] leading-relaxed text-ink/70">
           Autolinked on both platforms. One edit each in{' '}
           <code className="font-mono text-[13.5px] text-steel">MainApplication.kt</code> and{' '}
-          <code className="font-mono text-[13.5px] text-steel">AppDelegate.swift</code> to point
-          React Native at the OTA bundle — no ProGuard rule, no Podfile entry.
+          <code className="font-mono text-[13.5px] text-steel">AppDelegate.swift</code> points
+          React Native at the OTA bundle, and the channel, server URL, public key and runtime
+          version go in string resources on Android and <Code>Info.plist</Code> on iOS. The
+          library ships its own ProGuard rules and needs no Podfile entry.
         </p>
       </div>
 
@@ -406,7 +486,7 @@ function Install() {
         ))}
       </div>
 
-      <Terminal lines={TABS[tab].lines} copy={TABS[tab].copy} />
+      <Terminal lines={TABS[tab].lines} copy={TABS[tab].lines.join('\n')} />
     </Section>
   );
 }
@@ -418,18 +498,26 @@ function Close() {
     <Section className="pb-24 pt-10">
       <div className="rounded-lg border border-line bg-panel p-8 text-center shadow-panel">
         <h2 className="font-display text-[1.8rem] font-bold tracking-tight text-ink">
-          Twenty minutes to your first signed update.
+          Your first signed update, end to end.
         </h2>
         <p className="mx-auto mt-3 max-w-xl text-[15.5px] leading-relaxed text-ink/70">
-          Run a backend, make a key, wire the app, publish, and roll it back — with the exact
-          output you should see at every step.
+          The quickstart runs a backend, makes a key, wires the app, publishes and rolls back, and
+          shows the output to expect at each step. New to OTA updates? Read{' '}
+          <Link to="/docs/getting-started/what-is-an-ota-update" className="text-amber hover:text-amber">
+            what an OTA update is
+          </Link>{' '}
+          and the{' '}
+          <Link to="/docs/getting-started/prerequisites" className="text-amber hover:text-amber">
+            prerequisites
+          </Link>{' '}
+          first.
         </p>
         <div className="mt-6 flex flex-wrap justify-center gap-3">
           <Link
             to="/docs/getting-started/quickstart"
             className="rounded-md bg-amber px-5 py-2.5 font-display text-[15px] font-bold uppercase tracking-wide text-body transition-opacity hover:opacity-90 hover:text-body"
           >
-            Start here
+            Start the quickstart
           </Link>
           <Link
             to="/docs/introduction/comparison"
@@ -449,7 +537,7 @@ export default function Home(): ReactNode {
   return (
     <Layout
       title="Self-hosted OTA updates for React Native"
-      description="Ship JavaScript updates from infrastructure you own. The CLI signs, the device verifies, and a breached server still cannot ship code to your users."
+      description="Self-hosted OTA updates for React Native. Every release is signed in your CI and verified on the device, so a breached update server cannot ship its own code to your users."
     >
       <main className="dash-landing dash-home bg-body font-sans text-ink">
         <Hero />

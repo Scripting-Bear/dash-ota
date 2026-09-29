@@ -218,6 +218,8 @@ dialog h2{margin:0 0 4px;font-size:16px}
   const $$ = (sel) => [...document.querySelectorAll(sel)];
   const enc = encodeURIComponent;
   const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+  // Server numbers go into markup as numbers; anything else a backend sends in their place shows as 0.
+  const count = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
   const saved = {
     get(key) { try { return localStorage.getItem(key); } catch { return null; } },
     set(key, value) { try { localStorage.setItem(key, value); } catch { /* storage unavailable */ } },
@@ -348,12 +350,15 @@ dialog h2{margin:0 0 4px;font-size:16px}
       const [cls, label] = statusOf(r);
       const a = r.adoption || {};
       const pct = Math.max(0, Math.min(100, Number(r.rolloutPercentage) || 0));
+      const rollout = r.finalized === false
+        ? '<span class="muted">—</span>'
+        : `<div class="meter"><div class="bar"><i style="width:${pct}%"></i></div><span class="mono">${pct}%</span></div>`;
       return `<tr data-id="${esc(r.bundleId)}" class="${r.bundleId === state.selected ? 'sel' : ''}" tabindex="0">
         <td><span class="plat">${esc(r.platform)}</span><span class="ver">v${esc(r.bundleVersion)}</span>${r.mandatory ? '<span class="tag">mandatory</span>' : ''}<div class="id">${esc(r.bundleId)}</div></td>
         <td class="mono">${esc(r.runtimeVersion)}</td>
         <td><span class="pill ${cls}">${label}</span></td>
-        <td><div class="meter"><div class="bar"><i style="width:${pct}%"></i></div><span class="mono">${pct}%</span></div></td>
-        <td><div class="adopt"><span class="h"><b>${a.healthy ?? 0}</b> healthy</span><span><b>${a.applied ?? 0}</b> applied</span><span class="f"><b>${(a.failed ?? 0) + (a.rolled_back ?? 0)}</b> failed</span></div></td>
+        <td>${rollout}</td>
+        <td><div class="adopt"><span class="h"><b>${count(a.healthy)}</b> healthy</span><span><b>${count(a.applied)}</b> applied</span><span class="f"><b>${count(a.failed) + count(a.rolled_back)}</b> failed</span></div></td>
         <td class="muted">${esc(ago(r.createdAt))}</td>
         <td><div class="notes" title="${esc(r.releaseNotes || '')}">${esc(r.releaseNotes || '—')}</div></td>
       </tr>`;
@@ -421,10 +426,10 @@ dialog h2{margin:0 0 4px;font-size:16px}
       </dl>
       <div class="section">Adoption</div>
       <div class="stats">
-        <div class="stat"><b>${a.applied ?? 0}</b><span>applied</span></div>
-        <div class="stat h"><b>${a.healthy ?? 0}</b><span>healthy</span></div>
-        <div class="stat f"><b>${a.failed ?? 0}</b><span>crashed, reverted</span></div>
-        <div class="stat f"><b>${a.rolled_back ?? 0}</b><span>reverted by user</span></div>
+        <div class="stat"><b>${count(a.applied)}</b><span>applied</span></div>
+        <div class="stat h"><b>${count(a.healthy)}</b><span>healthy</span></div>
+        <div class="stat f"><b>${count(a.failed)}</b><span>crashed, reverted</span></div>
+        <div class="stat f"><b>${count(a.rolled_back)}</b><span>reverted by user</span></div>
       </div>
       <div class="section">Rollout</div>
       <div class="controls">
@@ -623,16 +628,18 @@ dialog h2{margin:0 0 4px;font-size:16px}
       const headline = result ? `v${result.bundleVersion} · ${result.bundleId}` : lane.step;
       let bar = '';
       if (lane.plan) {
-        const total = lane.plan.total || 1;
-        const reused = total - lane.plan.upload;
-        const progress = lane.plan.upload ? Math.round((lane.done / lane.plan.upload) * 100) : 100;
-        bar = `<div class="split" role="img" aria-label="${reused} of ${total} files reused, ${lane.done} of ${lane.plan.upload} new files uploaded">
+        const total = count(lane.plan.total) || 1;
+        const upload = count(lane.plan.upload);
+        const done = count(lane.done);
+        const reused = total - upload;
+        const progress = upload ? Math.round((done / upload) * 100) : 100;
+        bar = `<div class="split" role="img" aria-label="${reused} of ${total} files reused, ${done} of ${upload} new files uploaded">
             <div class="reuse" style="width:${(reused / total) * 100}%"></div>
-            <div class="new" style="width:${(lane.plan.upload / total) * 100}%"><i style="width:${progress}%"></i></div>
+            <div class="new" style="width:${(upload / total) * 100}%"><i style="width:${progress}%"></i></div>
           </div>
           <div class="legend">
             <span><span class="sw" style="background:rgba(94,106,210,.5)"></span><b>${reused}</b> of ${total} files already on the server</span>
-            <span><span class="sw" style="background:var(--accent)"></span><b>${lane.done}/${lane.plan.upload}</b> new files uploaded</span>
+            <span><span class="sw" style="background:var(--accent)"></span><b>${done}/${upload}</b> new files uploaded</span>
           </div>`;
       }
       return `<div class="lane"><div class="head"><span class="plat">${esc(platform)}</span><span>${esc(headline)}</span></div>${bar}</div>`;

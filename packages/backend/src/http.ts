@@ -6,9 +6,24 @@
  * @module http
  */
 
-import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import { createServer, type IncomingHttpHeaders, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { pipeline, type Readable } from 'node:stream';
 import { URL } from 'node:url';
+
+/** Body cap for a route that declares none. Sized for device requests, which are a few hundred bytes. */
+export const DEFAULT_MAX_BODY_BYTES = 64 * 1024;
+
+/** A client error a handler can throw; every adapter answers it with its status instead of a 500. */
+export class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
 
 /** Per-request context passed to handlers. */
 export interface ReqCtx {
@@ -19,12 +34,14 @@ export interface ReqCtx {
   rawBody: Buffer;
   /** Values captured from `:name` segments in the route path. */
   params: Record<string, string>;
+  /** Peer address as the adapter sees it: the proxy's address unless the host resolves forwarding. */
+  remoteAddress?: string;
   /**
    * The unread request body, when the route opted out of buffering (`streamBody`). Blob uploads
    * use this so a large body is spooled to disk instead of held in memory.
    */
   body?: Readable;
-  /** parse the raw body as JSON (throws on invalid JSON). */
+  /** parse the raw body as JSON; an empty body is `null`, invalid JSON throws a 400 {@link HttpError}. */
   json<T>(): T;
 }
 
@@ -57,7 +74,7 @@ export type Handler = (ctx: ReqCtx) => Promise<HandlerResult> | HandlerResult;
 
 /** A framework-agnostic route: method + exact path + handler. Consumed by every adapter. */
 export interface OtaRoute {
-  method: 'GET' | 'POST' | 'PUT';
+  method: 'GET' | 'HEAD' | 'POST' | 'PUT';
   /** Exact path, or a pattern with `:name` segments, e.g. `/ota/v2/releases/:bundleId/blobs/:sha`. */
   path: string;
   handler: Handler;
@@ -66,6 +83,12 @@ export interface OtaRoute {
    * point of the cap is to stop reading past it, which is impossible once the body is buffered.
    */
   streamBody?: boolean;
+  /**
+   * Largest body buffered for this route; a larger one is read to the end, discarded and answered
+   * 413. Defaults to {@link DEFAULT_MAX_BODY_BYTES}. A function sees the headers, so a route can
+   * raise its cap for an authenticated caller only.
+   */
+  maxBodyBytes?: number | ((headers: IncomingHttpHeaders) => number);
 }
 
 /** Build a JSON response. */
@@ -125,8 +148,148 @@ export function httpError(status: number, error: string, code?: string): JsonRes
   return { kind: 'json', status, body: { error, code } };
 }
 
+/**
+ * A 413 that closes the connection. Send it only once the body has been read: closing while the
+ * client is still uploading resets the socket, and the client sees ECONNRESET instead of the 413.
+ */
+export function payloadTooLarge(error: string): JsonResult {
+  return { kind: 'json', status: 413, body: { error, code: 'too_large' }, headers: { connection: 'close' } };
+}
+
+/** Map a thrown value to a response: an {@link HttpError} keeps its status, anything else is a 500. */
+export function errorResult(err: unknown): JsonResult {
+  if (err instanceof HttpError) return httpError(err.status, err.message, err.code);
+  return httpError(500, err instanceof Error ? err.message : 'internal error', 'internal');
+}
+
+/** Parse a raw body as JSON; an empty body is `null`. @throws {HttpError} 400 on invalid JSON. */
+export function parseJsonBody<T>(raw: Buffer): T {
+  try {
+    return JSON.parse(raw.toString('utf8') || 'null') as T;
+  } catch {
+    throw new HttpError(400, 'request body is not valid JSON', 'bad_request');
+  }
+}
+
+/** Parse a request target; null when it is not a valid URL. */
+export function parseRequestUrl(url: string | undefined): URL | null {
+  try {
+    return new URL(url ?? '/', 'http://localhost');
+  } catch {
+    return null;
+  }
+}
+
+/** The body cap that applies to `route` for a request with these headers. */
+export function bodyLimit(route: Pick<OtaRoute, 'maxBodyBytes'>, headers: IncomingHttpHeaders): number {
+  const cap = typeof route.maxBodyBytes === 'function' ? route.maxBodyBytes(headers) : route.maxBodyBytes;
+  return cap ?? DEFAULT_MAX_BODY_BYTES;
+}
+
+/**
+ * Buffer a request body up to `limit` bytes. A body over the limit (declared or actual) is read to
+ * the end and discarded, so the caller can answer 413 without resetting a client mid-upload.
+ *
+ * @returns the body, or null when it exceeded the limit.
+ */
+export function readBody(req: IncomingMessage, limit: number): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const declared = Number(req.headers['content-length']);
+    let over = Number.isFinite(declared) && declared > limit;
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      if (over) return;
+      size += chunk.length;
+      if (size > limit) {
+        over = true;
+        chunks.length = 0;
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(over ? null : Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+/**
+ * Answer a request whose body will not be used, without buffering it. A declared body within
+ * {@link DEFAULT_MAX_BODY_BYTES} is discarded first so the client reads a clean response; a larger
+ * or unsized one is not read, and the connection is closed. Leaving it unread on a kept-alive
+ * connection stalls the client's upload on Node 20.
+ */
+export function answerUnread(req: IncomingMessage, res: ServerResponse, result: HandlerResult): void {
+  const declared = Number(req.headers['content-length'] ?? 0);
+  const unsized = req.headers['transfer-encoding'] !== undefined;
+  if (req.readableEnded || (!unsized && declared === 0)) {
+    writeNodeResult(res, result);
+  } else if (!unsized && declared <= DEFAULT_MAX_BODY_BYTES) {
+    req.on('end', () => writeNodeResult(res, result));
+    req.on('error', () => res.destroy());
+    req.resume();
+  } else {
+    writeNodeResult(res, { ...result, headers: { ...result.headers, connection: 'close' } });
+  }
+}
+
+/** Decode one path segment; null when its percent-encoding is malformed. */
+function decodeSegment(raw: string): string | null {
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** A matched route with its decoded `:name` parameters. */
+export interface RouteMatch<R> {
+  route: R;
+  params: Record<string, string>;
+}
+
+/**
+ * Find the route for a request, shared by every adapter so they agree on what matches.
+ *
+ * Literal segments beat parameters at the same position, so a literal route can coexist with a
+ * parameterised one.
+ *
+ * @returns the match, `'malformed'` when the path fits a route but a parameter cannot be decoded,
+ *   or null when nothing fits.
+ */
+export function matchRoute<R extends { method: string; path: string }>(
+  routes: readonly R[],
+  method: string,
+  pathname: string,
+): RouteMatch<R> | 'malformed' | null {
+  const parts = pathname.split('/');
+  let best: (RouteMatch<R> & { exactness: number }) | null = null;
+  let malformed = false;
+  for (const route of routes) {
+    const segments = route.path.split('/');
+    if (route.method !== method || segments.length !== parts.length) continue;
+    if (segments.some((seg, i) => !seg.startsWith(':') && seg !== parts[i])) continue;
+    const params: Record<string, string> = {};
+    let decoded = true;
+    segments.forEach((seg, i) => {
+      if (!seg.startsWith(':')) return;
+      const value = decodeSegment(parts[i] as string);
+      if (value === null) decoded = false;
+      else params[seg.slice(1)] = value;
+    });
+    if (!decoded) {
+      malformed = true;
+      continue;
+    }
+    const exactness = segments.filter((seg) => !seg.startsWith(':')).length;
+    if (!best || exactness > best.exactness) best = { route, params, exactness };
+  }
+  if (best) return { route: best.route, params: best.params };
+  return malformed ? 'malformed' : null;
+}
+
 /** Write a {@link HandlerResult} to a `node:http` (or Express) `ServerResponse`. */
-export function writeNodeResult(res: import('node:http').ServerResponse, result: HandlerResult): void {
+export function writeNodeResult(res: ServerResponse, result: HandlerResult): void {
   const status = result.status ?? 200;
   if (result.kind === 'binary') {
     const headers: Record<string, string> = { 'content-type': result.contentType, ...(result.headers ?? {}) };
@@ -146,15 +309,15 @@ export function writeNodeResult(res: import('node:http').ServerResponse, result:
   res.end(JSON.stringify(result.body));
 }
 
-/** One registered route, with its path compiled to a matcher. */
-interface CompiledRoute {
+/** One registered route. */
+interface RouterRoute {
   method: string;
-  segments: string[];
+  path: string;
   handler: Handler;
   streamBody: boolean;
+  maxBodyBytes?: OtaRoute['maxBodyBytes'];
 }
 
-/** A minimal router supporting exact paths and `:name` parameters. */
 /**
  * @param result - a handler's result.
  * @returns the HTTP status it will be written with.
@@ -163,12 +326,13 @@ function resultStatus(result: HandlerResult): number {
   return 'status' in result && typeof result.status === 'number' ? result.status : 200;
 }
 
+/** A minimal router supporting exact paths and `:name` parameters. */
 export class Router {
-  private readonly routes: CompiledRoute[] = [];
+  private readonly routes: RouterRoute[] = [];
 
   /** Register a handler for `METHOD path`. */
   on(method: string, path: string, handler: Handler, streamBody = false): this {
-    this.routes.push({ method: method.toUpperCase(), segments: path.split('/'), handler, streamBody });
+    this.routes.push({ method: method.toUpperCase(), path, handler, streamBody });
     return this;
   }
 
@@ -186,69 +350,54 @@ export class Router {
 
   /** Register a batch of framework-agnostic routes. */
   register(routes: readonly OtaRoute[]): this {
-    for (const r of routes) this.on(r.method, r.path, r.handler, r.streamBody ?? false);
-    return this;
-  }
-
-  /**
-   * Find the route for a path, capturing any `:name` segments.
-   *
-   * Exact segments are preferred over parameters at the same position, so a literal route can
-   * coexist with a parameterised one.
-   */
-  private match(method: string, pathname: string): { route: CompiledRoute; params: Record<string, string> } | null {
-    const parts = pathname.split('/');
-    let best: { route: CompiledRoute; params: Record<string, string>; exactness: number } | null = null;
-    for (const route of this.routes) {
-      if (route.method !== method || route.segments.length !== parts.length) continue;
-      const params: Record<string, string> = {};
-      let exactness = 0;
-      let ok = true;
-      for (let i = 0; i < route.segments.length; i += 1) {
-        const seg = route.segments[i] as string;
-        const got = parts[i] as string;
-        if (seg.startsWith(':')) params[seg.slice(1)] = decodeURIComponent(got);
-        else if (seg === got) exactness += 1;
-        else {
-          ok = false;
-          break;
-        }
-      }
-      if (ok && (!best || exactness > best.exactness)) best = { route, params, exactness };
+    for (const r of routes) {
+      this.routes.push({
+        method: r.method.toUpperCase(),
+        path: r.path,
+        handler: r.handler,
+        streamBody: r.streamBody ?? false,
+        maxBodyBytes: r.maxBodyBytes,
+      });
     }
-    return best ? { route: best.route, params: best.params } : null;
+    return this;
   }
 
   /** Start an HTTP server bound to `port`. Resolves once listening. */
   listen(port: number): Promise<Server> {
-    const server = createServer((req, res) => {
-      const method = req.method ?? 'GET';
-      const url = req.url ?? '/';
-      const fail = (err: unknown): void => {
-        const message = err instanceof Error ? err.message : 'internal error';
-        this.write(res, httpError(500, message, 'internal'));
-      };
-
-      // A streaming route must receive the body unread, so the handler can enforce its cap as the
-      // bytes arrive rather than after they are all in memory.
-      const matched = this.match(method.toUpperCase(), new URL(url, 'http://localhost').pathname);
-      if (matched?.route.streamBody) {
-        void this.dispatch(method, url, req.headers, Buffer.alloc(0), req)
-          .then((result) => this.write(res, result))
-          .catch(fail);
-        return;
-      }
-
-      const chunks: Buffer[] = [];
-      req.on('data', (c: Buffer) => chunks.push(c));
-      req.on('end', () => {
-        void this.dispatch(method, url, req.headers, Buffer.concat(chunks))
-          .then((result) => this.write(res, result))
-          .catch(fail);
-      });
-      req.on('error', () => this.write(res, httpError(400, 'bad request')));
-    });
+    const server = createServer((req, res) => this.handle(req, res));
     return new Promise((resolve) => server.listen(port, () => resolve(server)));
+  }
+
+  /** Answer one request. The route is resolved before any of the body is read. */
+  private handle(req: IncomingMessage, res: ServerResponse): void {
+    const method = (req.method ?? 'GET').toUpperCase();
+    const parsed = parseRequestUrl(req.url);
+    const matched = parsed ? matchRoute(this.routes, method, parsed.pathname) : 'malformed';
+    if (!parsed || matched === 'malformed') {
+      answerUnread(req, res, httpError(400, 'malformed request path', 'bad_request'));
+      return;
+    }
+    if (!matched) {
+      answerUnread(req, res, httpError(404, `no route for ${method} ${parsed.pathname}`, 'not_found'));
+      return;
+    }
+
+    const run = (rawBody: Buffer, body?: Readable): void => {
+      void this.run(matched, method, parsed, req.headers, rawBody, body, req.socket.remoteAddress)
+        .then((result) => this.write(res, result))
+        .catch((err: unknown) => this.write(res, errorResult(err)));
+    };
+    // A streaming route must receive the body unread, so the handler can enforce its cap as the
+    // bytes arrive rather than after they are all in memory.
+    if (matched.route.streamBody) {
+      run(Buffer.alloc(0), req);
+      return;
+    }
+    const limit = bodyLimit(matched.route, req.headers);
+    void readBody(req, limit).then(
+      (rawBody) => (rawBody ? run(rawBody) : this.write(res, payloadTooLarge(`request body exceeds ${limit} bytes`))),
+      () => this.write(res, httpError(400, 'bad request', 'bad_request')),
+    );
   }
 
   /** Resolve a route and run it (also reachable directly from tests). */
@@ -259,19 +408,35 @@ export class Router {
     rawBody: Buffer,
     body?: Readable,
   ): Promise<HandlerResult> {
-    const parsed = new URL(url, 'http://localhost');
-    const matched = this.match(method.toUpperCase(), parsed.pathname);
+    const upper = method.toUpperCase();
+    const parsed = parseRequestUrl(url);
+    const matched = parsed ? matchRoute(this.routes, upper, parsed.pathname) : 'malformed';
+    if (!parsed || matched === 'malformed') return httpError(400, 'malformed request path', 'bad_request');
     if (!matched) return httpError(404, `no route for ${method} ${parsed.pathname}`, 'not_found');
+    return this.run(matched, upper, parsed, headers, rawBody, body);
+  }
+
+  /** Build the context for a matched route and run its handler. */
+  private async run(
+    matched: RouteMatch<RouterRoute>,
+    method: string,
+    parsed: URL,
+    headers: IncomingHttpHeaders,
+    rawBody: Buffer,
+    body?: Readable,
+    remoteAddress?: string,
+  ): Promise<HandlerResult> {
     const ctx: ReqCtx = {
-      method: method.toUpperCase(),
+      method,
       path: parsed.pathname,
       query: parsed.searchParams,
       headers,
       rawBody,
       params: matched.params,
+      ...(remoteAddress ? { remoteAddress } : {}),
       ...(body ? { body } : {}),
       json<T>(): T {
-        return JSON.parse(rawBody.toString('utf8') || 'null') as T;
+        return parseJsonBody<T>(rawBody);
       },
     };
     const result = await matched.route.handler(ctx);
@@ -289,7 +454,7 @@ export class Router {
    */
   accessLog?: (method: string, path: string, status: number) => void;
 
-  private write(res: import('node:http').ServerResponse, result: HandlerResult): void {
+  private write(res: ServerResponse, result: HandlerResult): void {
     writeNodeResult(res, result);
   }
 }

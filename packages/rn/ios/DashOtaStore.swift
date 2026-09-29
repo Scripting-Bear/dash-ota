@@ -111,10 +111,9 @@ final class DashOtaStore {
     var state = input
     state["stateSchema"] = stateSchema
     guard let data = try? JSONSerialization.data(withJSONObject: state) else { return }
-    let tmp = baseDir.appendingPathComponent("state.json.tmp")
-    try? data.write(to: tmp)
-    try? fm.removeItem(at: stateURL)
-    try? fm.moveItem(at: tmp, to: stateURL)
+    // `.atomic` writes a temp file and renames it over the old one, so a crash mid-save leaves
+    // either the old state or the new one, never neither.
+    try? data.write(to: stateURL, options: .atomic)
   }
 
   private func slot(_ state: [String: Any], _ key: String) -> [String: Any]? { state[key] as? [String: Any] }
@@ -340,12 +339,16 @@ final class DashOtaStore {
         if !failedId.isEmpty && !disabled.contains(failedId) { disabled.append(failedId) }
         state["disabledBundles"] = disabled
         state["failedToReport"] = failedId
+        // The fallback goes on trial too, with nothing behind it but the embedded bundle: if it
+        // also loops (state the failed bundle left behind, say), the next revert lands on embedded.
         let lkg = slot(state, "lastKnownGood")
         state["current"] = lkg
-        state["trial"] = false
-        state["bootAttempts"] = 0
+        state["lastKnownGood"] = nil
+        state["trial"] = lkg != nil
+        state["bootAttempts"] = lkg != nil ? 1 : 0
         saveState(state)
-        log.warning("launch: crash loop: disabling \(failedId, privacy: .public), reverting to \((lkg?["bundleId"] as? String) ?? "the embedded bundle", privacy: .public)")
+        let target = (lkg?["bundleId"] as? String).map { "\($0) on trial" } ?? "the embedded bundle"
+        log.warning("launch: crash loop: disabling \(failedId, privacy: .public), reverting to \(target, privacy: .public)")
         return lkg.flatMap { bundlePath($0) }
       }
       if !userReload { attempts += 1 }

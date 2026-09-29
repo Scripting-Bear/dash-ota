@@ -1,44 +1,51 @@
 ---
 sidebar_position: 4
-title: Umbrella factory
+title: Factory
 ---
 
-# Umbrella factory — `createOtaBackend()`
+# The factory: `createOtaBackend()`
 
-When you want to own the store + config once and reach every adapter from a single object:
+Build the store and configuration once, and get every way of serving it from one object:
 
-```ts
+```js
 import { createOtaBackend } from '@dash-ota/backend';
 
 const ota = createOtaBackend({
   adminToken: process.env.OTA_ADMIN_TOKEN,
+  storageDir: '/var/lib/dash-ota/storage',
+  dataDir: '/var/lib/dash-ota/data',
   logger: console,
 });
 
-app.use(ota.middleware);     // Express/Connect middleware
-await ota.listen(4455);      // OR run standalone on node:http
+app.use(ota.middleware);   // mount into your Express/Connect app...
+// await ota.listen(4455); // ...or run it on its own
 ```
+
+`app` is your existing Express or Connect app.
 
 ## What it returns
 
 | Property | Type | Description |
 |---|---|---|
-| `config` | `BackendConfig` | the fully-resolved configuration |
-| `store` | `Store` | the persistence + lookup layer (disk-backed by default) |
-| `routes` | `OtaRoute[]` | the framework-agnostic route table |
-| `middleware` | `(req,res,next) => void` | a Connect/Express middleware over those routes |
-| `listen(port?)` | `Promise<Server>` | start a standalone `node:http` server |
+| `config` | `BackendConfig` | the resolved configuration |
+| `store` | `Store` | storage and lookups (disk by default) |
+| `routes` | `OtaRoute[]` | the route table, independent of any framework |
+| `middleware` | `(req, res, next) => void` | Connect/Express middleware over those routes |
+| `listen(port?)` | `Promise<Server>` | start a `node:http` server (default port: `config.port`) |
 
-The store + routes are built **once**, so `.middleware` and `.listen()` share state — no
-rebuilding per call.
+The store and routes are built once, so `middleware` and `listen()` share the same state.
 
-## Bring your own store
+## Your own storage
 
-Pass a custom `store` to back persistence with Postgres/Redis/object storage instead of disk:
+Pass `providers` to swap the database, file storage or cache for Postgres, SQLite, S3 or Redis:
 
-```ts
-import { createOtaBackend, Store } from '@dash-ota/backend';
-const ota = createOtaBackend({ store: new MyPostgresStore(config) });
+```js
+import { createOtaBackend, PostgresDatabaseProvider } from '@dash-ota/backend';
+
+const ota = createOtaBackend({
+  adminToken: process.env.OTA_ADMIN_TOKEN,
+  providers: { db: new PostgresDatabaseProvider({ url: process.env.OTA_DATABASE_URL }) },
+});
 ```
 
-→ [Storage & providers](/docs/backend/providers)
+→ [Storage providers](/docs/backend/providers)

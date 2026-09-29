@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 
 /**
- * The update lifecycle as the client actually reports it. Each stop carries the real log line
- * the native layer writes on a cold start, so the rail doubles as a reading of `adb logcat -s
- * DashOta:W`. The failure track is the crash-loop breaker.
+ * The update lifecycle as the client reports it. Each stop carries a real log line from an
+ * end-to-end run: `launch:` lines come from native code (Android tag `DashOta`, iOS subsystem
+ * `dash-ota`), `[dash-ota]` lines from the JS provider's default logger. The failure track is
+ * the crash-loop breaker.
  */
 
 type Stop = {
@@ -11,53 +12,76 @@ type Stop = {
   label: string;
   note: string;
   log: string;
+  alarm?: boolean;
 };
 
 const HAPPY: Stop[] = [
   {
-    key: 'check',
-    label: 'Check',
-    note: 'The app asks whether anything newer exists for its channel and runtime version.',
+    key: 'embedded',
+    label: 'Embedded',
+    note: 'A fresh install runs the bundle compiled into the app.',
     log: 'launch: no stored bundle — using the embedded one',
   },
   {
-    key: 'download',
-    label: 'Download',
-    note: 'Only the files this device does not already hold. Unchanged files are reused from the running bundle.',
-    log: 'uploading: 4 of 121 blobs (117 already present)',
+    key: 'check',
+    label: 'Check',
+    note: 'On its first check the app enrolls a device key, then asks whether a newer release exists for its channel and runtime version.',
+    log: '[dash-ota] enrolled device key',
   },
   {
-    key: 'verify',
-    label: 'Verify',
-    note: 'Ed25519 signature checked in native against the key compiled into the binary, then every file hash.',
-    log: 'signature ok · 121/121 file hashes match',
-  },
-  {
-    key: 'armed',
-    label: 'Armed',
-    note: 'Staged on disk and set to apply on the next cold start. Nothing swaps under a running app.',
-    log: 'launch: staged bnd_rt_9f2c1a_2 — applying on next launch',
+    key: 'staged',
+    label: 'Staged',
+    note: 'Native code verifies the release signature against the keys compiled into the app before writing anything, then fetches only the files this device doesn’t already hold and checks each hash. Nothing swaps under a running app.',
+    log: '[dash-ota] staged bnd_rt1_2_mumketyh v2',
   },
   {
     key: 'applied',
     label: 'Applied',
-    note: 'Running the new bundle, on trial. Two failed boots and it goes back.',
-    log: 'launch: applying pending bnd_rt_9f2c1a_2 on trial (attempt 1/2)',
+    note: 'The next cold start runs the new bundle on trial. That launch is attempt 1 of 2.',
+    log: 'launch: applying pending bnd_rt1_2_mumketyh on trial (attempt 1/2)',
+  },
+  {
+    key: 'reported',
+    label: 'Reported',
+    note: 'The app tells the server the bundle applied. Those reports feed adoption and auto-pause.',
+    log: '[dash-ota] reporting applied bnd_rt1_2_mumketyh',
   },
   {
     key: 'healthy',
     label: 'Healthy',
-    note: 'Your app called markHealthy() after the first usable screen. The trial is over.',
-    log: 'confirm: healthy — lastKnownGood = bnd_rt_9f2c1a_2',
+    note: 'Your app called markHealthy() once its first real screen worked, which ended the trial. From the next launch it runs as the last working bundle.',
+    log: 'launch: bnd_rt1_2_mumketyh (healthy)',
   },
 ];
 
-const REVERTED: Stop = {
-  key: 'reverted',
-  label: 'Reverted',
-  note: 'The bundle failed to reach JavaScript twice. It is blocklisted and the last good bundle is restored — without anyone paging you.',
-  log: 'launch: crash loop: disabling bnd_rt_9f2c1a_2, reverting to bnd_rt_9f2c1a_1',
-};
+const FAILING: Stop[] = [
+  {
+    key: 'applied-bad',
+    label: 'Applied',
+    note: 'A later release starts its trial on the next cold start.',
+    log: 'launch: applying pending bnd_rt1_3_mumksul0 on trial (attempt 1/2)',
+  },
+  {
+    key: 'charged',
+    label: 'Charged',
+    note: 'The first launch crashed, so this one counts: attempt 2 of 2. A session that reached JavaScript and then went to the background would not have counted.',
+    log: 'launch: bnd_rt1_3_mumksul0 on trial, attempt 2/2',
+  },
+  {
+    key: 'reverted',
+    label: 'Reverted',
+    note: 'The third launch finds the trial still open. The bundle is disabled on this device and the last working bundle runs again, on trial itself, with the embedded bundle behind it.',
+    log: 'launch: crash loop: disabling bnd_rt1_3_mumksul0, reverting to bnd_rt1_2_mumketyh on trial',
+    alarm: true,
+  },
+  {
+    key: 'failure-reported',
+    label: 'Reported',
+    note: 'The app reports the failure on its next check. Once enough devices report failures, the server pauses the release for everyone else.',
+    log: '[dash-ota] reporting crash-loop failure of bnd_rt1_3_mumksul0',
+    alarm: true,
+  },
+];
 
 const TONE = {
   done: { dot: 'bg-steel', text: 'text-steel', ring: 'ring-steel/30' },
@@ -77,7 +101,7 @@ export default function LifecycleRail() {
       typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   }, []);
 
-  const stops = failing ? [...HAPPY.slice(0, 5), REVERTED] : HAPPY;
+  const stops = failing ? FAILING : HAPPY;
 
   useEffect(() => {
     if (paused || reduced.current) return undefined;
@@ -90,7 +114,7 @@ export default function LifecycleRail() {
   }, [stops.length, index]);
 
   const current = stops[Math.min(index, stops.length - 1)];
-  const isAlarmStop = current.key === 'reverted';
+  const isAlarmStop = Boolean(current.alarm);
 
   return (
     <div
@@ -106,7 +130,7 @@ export default function LifecycleRail() {
           type="button"
           onClick={() => {
             setFailing((f) => !f);
-            setIndex(failing ? 0 : 5);
+            setIndex(failing ? 0 : FAILING.findIndex((stop) => stop.key === 'reverted'));
           }}
           className={`rounded border px-2.5 py-1 font-mono text-[11px] transition-colors ${
             failing
@@ -122,7 +146,7 @@ export default function LifecycleRail() {
         <ol className="flex flex-wrap items-center gap-x-1 gap-y-3">
           {stops.map((stop, i) => {
             const state =
-              stop.key === 'reverted' && i <= index
+              stop.alarm && i <= index
                 ? 'alarm'
                 : i === index
                   ? 'active'

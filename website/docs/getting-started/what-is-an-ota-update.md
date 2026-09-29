@@ -26,7 +26,7 @@ starts cold, it runs the new JavaScript inside the same native binary.
 
 ## What it can and cannot change
 
-This is the single most important thing to understand, and it catches everyone once.
+Read this part before anything else.
 
 | Changed in JavaScript only | Needs a store release |
 |---|---|
@@ -38,42 +38,43 @@ This is the single most important thing to understand, and it catches everyone o
 If you `npm install` something with native code, an OTA cannot deliver it. The JavaScript that
 expects it would be talking to a native module that is not in the binary, and the app would crash.
 
-dash-ota stops that from happening rather than trusting you to remember. Every build has a
-**runtime version** — a fingerprint of its native side — and every update is stamped with the one
-it was built against. An update whose fingerprint does not match the binary is never applied. When
-you do need a native change, the [force-update gate](/docs/concepts/force-update) tells old
-binaries to go to the store instead.
+dash-ota guards against that with a **runtime version**: a name for each native build, compiled
+into the app and stamped on every update. A device only installs an update whose runtime version
+matches its own exactly. It works as long as the runtime version changes whenever native code does:
+change it by hand, or let the CLI compute one from your project. When a fix needs a new binary, the
+[force-update gate](/docs/concepts/force-update) tells older binaries to go to the store.
 
 ## The three ideas
 
 Everything else builds on these.
 
 **A release is a signed bundle.** When you publish, the CLI on your machine bundles your
-JavaScript, encrypts it, and signs it with a private key that only you hold. The signature is what
-makes the update trustworthy — not the server it came from.
+JavaScript, encrypts it, and signs it with a private key that only you hold. The app trusts the
+signature, whichever server the update came through.
 
 **The server only carries bytes.** dash-ota's backend stores releases and hands them out. It never
-has the signing key, so it cannot create a release. This is unusual, and it is the whole point:
-if someone takes over your update server, they still cannot ship code to your users.
+has the signing key, so it cannot create a release. If someone takes over your update server,
+they still can't ship their code to your users. (They can hold updates back or show an update
+prompt; [the breach page](/docs/security/breach) lists everything.)
 
 **Updates apply on a cold start.** A downloaded update does not swap in while someone is using the
 app. It is staged on disk and applied the next time the app starts from scratch. If the new bundle
-fails to boot twice, dash-ota reverts to the last one that worked and reports it. You do not have
-to build that safety net yourself.
+crashes on two cold starts before your app marks it healthy, dash-ota goes back to the last one
+that worked and reports it. You don't have to build that safety net yourself.
 
 ## How a single update actually goes
 
-1. You change some JavaScript and run `dash-ota publish`.
+1. You change some JavaScript and run `npx dash-ota bundle`, then `npx dash-ota publish`.
 2. The CLI bundles it, compresses and encrypts each file, signs the description of the release,
    and uploads it. Files that have not changed since the last release are not uploaded again.
 3. An app starts, asks the server whether there is anything new, and is offered the release.
 4. The app downloads only the files it does not already have, checks the signature **in native
    code** against a key compiled into the binary, verifies every file's hash, and stages it.
-5. On the next cold start, the app runs the new bundle. If it boots and reaches your first screen,
-   your app calls `markHealthy()` and the update is confirmed. If it crashes twice, the app puts
-   the old bundle back.
+5. On the next cold start, the app runs the new bundle. Once your first screen works, your app
+   calls `markHealthy()` and the update is confirmed. If it crashes on two cold starts first, the
+   app puts the old bundle back.
 
-You can ship to 10% of installs first, watch the failure rate, and ramp up — or pull it entirely.
+You can ship to 10% of installs first, watch the failure rate, then ramp up or pull it.
 
 ## What you need
 

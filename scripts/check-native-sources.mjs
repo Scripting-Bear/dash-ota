@@ -100,7 +100,8 @@ try {
       execFileSync('cc', ['-c', '-O1', '-w', '-include', header, join(vendor, 'zstddeclib.c'), '-I', vendor, '-o', object]);
       const leaked = execFileSync('nm', ['-g', '-U', object], { encoding: 'utf8' })
         .split('\n')
-        .map((line) => line.trim().match(/^[0-9a-f]+\s+[TDBSCI]\s+_(\S+)$/i))
+        // Mach-O prefixes C symbols with `_`, ELF does not; `R` is ELF read-only data.
+        .map((line) => line.trim().match(/^[0-9a-f]+\s+[TDBSCIR]\s+_?(\S+)$/i))
         .filter((m) => m !== null)
         .map((m) => m[1])
         .filter((name) => !name.startsWith('DashOtaZ_'));

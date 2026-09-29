@@ -5,99 +5,111 @@ title: Storage & providers
 
 # Storage providers & adapters
 
-The backend keeps **no storage logic of its own**. It composes three pluggable providers, so you
-bring the infrastructure you already run — or nothing at all and get a working single node.
+The backend stores everything through three providers. Use the defaults and you get a working
+single server with nothing extra to run; swap any of them for the infrastructure you already have.
 
 | Provider | Holds | Default | Built-in adapters |
 |---|---|---|---|
 | `DatabaseProvider` | releases, installs, trusted keys, native policies | disk JSON | **SQLite**, **Postgres** |
 | `BlobStore` | the encrypted bundle bytes | disk files | **S3 / R2 / MinIO** |
-| `CacheProvider` | nonces, one-time tokens, rate-limit counters (TTL'd) | in-memory | **Redis** |
+| `CacheProvider` | request nonces, download tokens, rate-limit counters (all expiring) | in-memory | **Redis** |
 
 ## Three levels of effort
 
-Every adapter follows the same model, so you can start trivially and scale when you actually need to:
+Every adapter works the same way, so you can start simple and scale when you need to:
 
-1. **Beginner (default, zero config).** `dashOtaMiddleware()` → disk + in-memory. Nothing to install,
-   works immediately. Fine for a single node.
-2. **Upgrade (one line).** Set a URL/path (or the matching `OTA_*` env) and the backend wires the
-   adapter for you. The driver is an **optional peer dependency**, loaded lazily on first use — a
-   default install never pulls it in, and if it's selected but missing you get a clear
-   `npm i <driver>` error.
-3. **Advanced (full control).** Construct the provider yourself (custom client, Cluster/Sentinel,
-   pooled connections, read replicas) and inject it via `providers`.
+1. **Default.** Disk plus in-memory. Nothing to install. Fine for a single server; set `storageDir`
+   and `dataDir` to a backed-up location.
+2. **One setting.** Set a URL or path (or the matching `OTA_*` variable) and the backend creates the
+   adapter. The driver is an optional peer dependency, loaded on first use: a default install never
+   pulls it in, and if you select one that isn't installed you get an `npm i <driver>` error.
+   Supported majors: `pg` 8, `better-sqlite3` 11, `ioredis` 5, `@aws-sdk/client-s3` 3.
+3. **Your own client.** Construct the provider yourself (Redis Cluster or Sentinel, a pooled
+   Postgres connection, a configured S3 client) and pass it in `providers`.
 
-```ts
-// 1. Beginner — disk + in-memory
-dashOtaMiddleware();
+```js
+import { S3Client } from '@aws-sdk/client-s3';
+import { Redis } from 'ioredis';
+import pg from 'pg';
+import { dashOtaMiddleware, PostgresDatabaseProvider, RedisCacheProvider, S3BlobStore } from '@dash-ota/backend';
 
-// 2. Upgrade — one line each (drivers auto-loaded)
+const adminToken = process.env.OTA_ADMIN_TOKEN;
+
+// 1. Default: disk + in-memory
+dashOtaMiddleware({ adminToken, storageDir: '/var/lib/dash-ota/storage', dataDir: '/var/lib/dash-ota/data' });
+
+// 2. One setting each; the drivers are loaded for you
 dashOtaMiddleware({
+  adminToken,
   databaseUrl: process.env.OTA_DATABASE_URL, // Postgres
   redisUrl: process.env.OTA_REDIS_URL,       // Redis
-  s3Bucket: process.env.OTA_S3_BUCKET,       // S3/R2/MinIO
+  s3Bucket: process.env.OTA_S3_BUCKET,       // S3, R2 or MinIO
 });
 
-// 3. Advanced — inject your own
-import { RedisCacheProvider, PostgresDatabaseProvider, S3BlobStore } from '@dash-ota/backend';
+// 3. Your own clients
 dashOtaMiddleware({
+  adminToken,
   providers: {
-    db: new PostgresDatabaseProvider({ client: myPgPool }),
-    cache: new RedisCacheProvider({ client: myRedisCluster }),
-    blob: new S3BlobStore({ bucket: 'ota', client: myS3Client }),
+    db: new PostgresDatabaseProvider({ client: new pg.Pool({ connectionString: process.env.OTA_DATABASE_URL }) }),
+    cache: new RedisCacheProvider({ client: new Redis(process.env.OTA_REDIS_URL) }),
+    blob: new S3BlobStore({ bucket: 'ota-bundles', client: new S3Client({ region: 'us-east-1' }) }),
   },
 });
 ```
+
+`RedisCacheProvider` accepts an ioredis `Redis` or `Cluster` directly (backend 0.5.1 and later).
 
 Precedence for the database: an explicit `providers.db` wins, else `databaseUrl` (Postgres), else
 `sqlitePath` (SQLite), else the disk default.
 
 ## Why a shared cache matters
 
-The `CacheProvider` guards **anti-replay** (client nonces), **one-time download tokens**, **server
-nonces**, and **rate limiting**. The in-memory default is per-process, so those guarantees only hold
-on a single instance. **Behind a load balancer you must use Redis** (or another shared cache) — the
-counters and replay guard need to be shared across replicas.
+The `CacheProvider` holds request nonces (replay protection), download tokens, the nonces that
+cover `/confirm` reports, and rate-limit counters. The in-memory default lives in one process, so
+those checks only work on a single instance. Behind a load balancer, use Redis (or another shared
+cache) so every instance sees the same state.
 
 ## Adapters
 
-### SQLite — durable, single file, no server
+### SQLite: one file, no server
 
 ```ts
 dashOtaMiddleware({ sqlitePath: './dash-ota.sqlite' }); // or OTA_SQLITE_PATH
 ```
 
-ACID and concurrency-safe, with nothing to run — the sweet spot between the disk default and a full
-Postgres deployment for a single node. Optional peer: `npm i better-sqlite3` (native). The file and
+Transactional, with no database server to run: a good fit for a single server that outgrows the
+disk default. Optional peer: `npm i better-sqlite3` (native). The file and
 schema are created on first use; WAL journal mode is enabled.
 
-### Postgres — durable, scale-out
+### Postgres: several instances
 
 ```ts
 dashOtaMiddleware({ databaseUrl: 'postgres://user:pw@host:5432/db' }); // or OTA_DATABASE_URL
 ```
 
 Optional peer: `npm i pg`. Records are stored as `jsonb` keyed by their natural id; writes are atomic
-UPSERTs. The schema (`ota_releases`, `ota_installs`, `ota_trusted_keys`, `ota_native_policies`) is
-created on first use — no separate migration step.
+UPSERTs. The tables (`ota_releases`, `ota_installs`, `ota_trusted_keys`, `ota_retired_clients`,
+`ota_native_policies`) are created on first use; there is no separate migration step. SQLite uses the
+same five tables.
 
 :::note[Concurrency caveat]
 Per-row writes are atomic, but the adoption counters (`/confirm`) use a read-modify-write in the
-Store, so a counter increment can be lost under very high concurrent `/confirm`. Optimistic-locking
-that path is a tracked follow-up; it affects every `DatabaseProvider`, including the disk default.
+Store, so a counter increment can be lost when many `/confirm` requests for the same release arrive
+at once. This affects every `DatabaseProvider`, including the disk default.
 :::
 
-### Redis — multi-instance cache
+### Redis: shared cache
 
 ```ts
 dashOtaMiddleware({ redisUrl: 'redis://localhost:6379' }); // or OTA_REDIS_URL
 ```
 
-Optional peer: `npm i ioredis` (requires Redis 6.2+ for `GETDEL`). Anti-replay uses `SET NX PX`,
-one-time tokens use atomic `GETDEL`, and the rate limiter is a single Lua `INCR`+`PEXPIRE`+`PTTL`
-(no orphaned-key race). Namespace a shared Redis with `keyPrefix` (default `dashota:`).
+Optional peer: `npm i ioredis` (Redis 6.2 or later). Replay protection uses `SET NX PX`, and the rate
+limiter is one Lua script (`INCR`, `PEXPIRE`, `PTTL`), so a crash can't leave a counter that never
+expires. To share one Redis between apps, construct `RedisCacheProvider` yourself with a
+`keyPrefix` (default `dashota:`); the `redisUrl` shortcut always uses the default prefix.
 
-### S3 / R2 / MinIO — object storage
+### S3, R2 or MinIO: object storage
 
 ```ts
 dashOtaMiddleware({
@@ -109,45 +121,53 @@ dashOtaMiddleware({
 });
 ```
 
-Optional peer: `npm i @aws-sdk/client-s3`. Credentials come from the standard AWS env chain. The
-download path **streams** straight from the object (the backend never buffers a whole ciphertext).
+Optional peer: `npm i @aws-sdk/client-s3`. Credentials come from the standard AWS environment
+variables and config chain. Downloads stream from the object; the backend never holds a whole file
+in memory.
 
 ## How blobs are laid out
 
-Worth knowing before you point this at a bucket: blobs are **content-addressed and global**, stored
-at `blobs/<sha256>`, not grouped per release. One file that appears in twenty releases is stored
-once. Deleting a release only removes the blobs no other release still references, and every read
-re-checks that the requesting release's manifest actually lists that blob.
+Files are stored by the SHA-256 of their contents at `blobs/<sha256>`, shared by all releases
+rather than grouped per release. A file that appears in twenty releases is stored once. Every
+download checks that the release being downloaded actually lists that file. There is no command to
+delete a release, so stored files are never removed.
 
-This is why the content key must stay stable for a channel — see
+This is also why every release on a channel must use the same content key; see
 [Keys, custody & rotation](/docs/security/key-management).
 
 ## Replacing the whole store
 
 The three providers cover the infrastructure most people swap. If you need to replace the
-persistence layer wholesale — a different database shape, an existing service that already owns
-this data — implement `Store` itself and pass it in:
+persistence layer entirely, for example with a service that already owns this data, extend `Store`
+and pass it in:
 
-```ts
-import { createOtaBackend } from '@dash-ota/backend';
-const ota = createOtaBackend({ store: new MyStore(config) });
+```js
+import { createOtaBackend, Store } from '@dash-ota/backend';
+
+class <YOUR_STORE> extends Store {
+  // override the methods your persistence layer handles
+}
+const ota = createOtaBackend({ store: new <YOUR_STORE>(<YOUR_CONFIG>) });
 ```
 
-A `Store` owns six groups of behaviour:
+A `Store` covers:
 
-- **Releases** — `addRelease`, `listReleases`, `getRelease`, `setRollout`, `setPaused`, `rollback`,
-  and `pickEligible`, which does the targeting and rollout matching.
-- **Installs** — `enroll` (stores the device public key, idempotent so key rotation works) and
-  `getDevicePublicKey`.
-- **Trusted keys** — `registerKey`, `getTrustedKey`, used to sanity-check publishes.
-- **Anti-replay** — `registerNonce`, `issueDownloadToken` / `peekDownloadToken`,
-  `issueServerNonce` / `consumeServerNonce`.
-- **Adoption** — `recordConfirm`, which also trips auto-pause past the failure threshold.
-- **Native policy** — `setNativePolicy`, `resolveNativePolicy`.
+- Releases: `createRelease`, `missingBlobs`, `stageBlob`, `finalizeRelease`, `discardRelease`,
+  `listReleases`, `getRelease`, `setRollout`, `setPaused`, `rollback`, and `pickEligible`, which does
+  the targeting and rollout matching.
+- Files: `statBlob`, `openBlobStream`.
+- Installs: `enroll` (stores the device public key) and `getDevicePublicKey`.
+- Trusted keys: `registerKey`, `getTrustedKey`.
+- Replay protection and tokens: `registerNonce`, `rateLimit`, `issueDownloadToken` /
+  `peekDownloadToken`, `issueServerNonce` / `consumeServerNonce`.
+- Adoption: `recordConfirm`, which also triggers auto-pause.
+- Native policy and old clients: `setNativePolicy`, `resolveNativePolicy`, `recordRetiredClient`,
+  `getRetiredClients`, `retiredPolicy`.
 
-Keep `pickEligible`'s semantics identical — exact `runtimeVersion`, the stable rollout bucket,
-`bundleVersion` greater than the device's current, matching channel and platform. Targeting
-correctness lives entirely in that method.
+`pickEligible` decides which release a device gets: exact `runtimeVersion`, the rollout bucket,
+`bundleVersion` higher than the device's current one, matching channel and platform. Keep its rules
+identical, or devices get releases they shouldn't. Replacing the three providers is almost always
+the better option.
 
 → [Deployment](/docs/backend/deployment) · [Production hardening](/docs/backend/hardening)
 ```

@@ -24,14 +24,26 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { URL } from 'node:url';
-import { httpError, type OtaRoute, type ReqCtx, writeNodeResult } from './http.js';
+import {
+  answerUnread,
+  bodyLimit,
+  errorResult,
+  httpError,
+  matchRoute,
+  type OtaRoute,
+  parseJsonBody,
+  parseRequestUrl,
+  payloadTooLarge,
+  readBody,
+  type ReqCtx,
+  writeNodeResult,
+} from './http.js';
 import { createOtaRoutes } from './routes.js';
 import { type OtaBackendOptions, resolveBackendConfig } from './config.js';
 import { Store } from './store.js';
 
 /** A request that may already carry a captured raw/parsed body (Express/Connect). */
-type AdapterReq = IncomingMessage & { rawBody?: Buffer; body?: unknown };
+type AdapterReq = IncomingMessage & { rawBody?: Buffer; body?: unknown; ip?: string };
 /** Connect-style `next` callback. */
 type NextFn = (err?: unknown) => void;
 /** The middleware signature accepted by Express, Connect, and friends. */
@@ -47,66 +59,53 @@ export function rawBodySaver(req: AdapterReq, _res: ServerResponse, buf: Buffer)
   if (buf?.length) req.rawBody = buf;
 }
 
-/** Resolve the raw body: prefer an already-captured buffer, else drain the stream. */
-function readRawBody(req: AdapterReq): Promise<Buffer> {
-  if (Buffer.isBuffer(req.rawBody)) return Promise.resolve(req.rawBody);
-  if (Buffer.isBuffer(req.body)) return Promise.resolve(req.body);
-  // Stream not yet consumed by an upstream parser — drain it ourselves.
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    req.on('data', (c: Buffer) => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
+/**
+ * The body an upstream parser already consumed, or undefined while the stream is still unread.
+ *
+ * Without `rawBodySaver` (or for an empty body, which it skips) the bytes are gone and the stream
+ * will never emit `end` again, so the parsed value is re-serialised instead of waited for.
+ */
+function consumedBody(req: AdapterReq): Buffer | undefined {
+  if (Buffer.isBuffer(req.rawBody)) return req.rawBody;
+  if (Buffer.isBuffer(req.body)) return req.body;
+  if (!req.readableEnded) return undefined;
+  if (typeof req.body === 'string') return Buffer.from(req.body, 'utf8');
+  if (req.body === undefined || req.headers['content-length'] === '0') return Buffer.alloc(0);
+  return Buffer.from(JSON.stringify(req.body), 'utf8');
 }
 
-/** Match a request path against a route pattern, capturing `:name` segments. */
-function matchPath(pattern: string, pathname: string): Record<string, string> | null {
-  const want = pattern.split('/');
-  const got = pathname.split('/');
-  if (want.length !== got.length) return null;
-  const params: Record<string, string> = {};
-  for (let i = 0; i < want.length; i += 1) {
-    const seg = want[i] as string;
-    const value = got[i] as string;
-    if (seg.startsWith(':')) params[seg.slice(1)] = decodeURIComponent(value);
-    else if (seg !== value) return null;
-  }
-  return params;
+/** Resolve the raw body under `limit`: an already-consumed one, else read the stream. Null when over the limit. */
+async function readRawBody(req: AdapterReq, limit: number): Promise<Buffer | null> {
+  const consumed = consumedBody(req);
+  if (consumed) return consumed.length > limit ? null : consumed;
+  return readBody(req, limit);
 }
 
 /** Build a Connect middleware that dispatches a fixed route table; unmatched paths call next(). */
 function middlewareFromRoutes(routes: readonly OtaRoute[]): OtaMiddleware {
   return (req, res, next) => {
     const method = (req.method ?? 'GET').toUpperCase();
-    const parsed = new URL(req.url ?? '/', 'http://localhost');
-
-    let route: OtaRoute | undefined;
-    let params: Record<string, string> = {};
-    for (const r of routes) {
-      if (r.method !== method) continue;
-      const captured = matchPath(r.path, parsed.pathname);
-      // Prefer a literal match over a parameterised one at the same shape.
-      if (captured && (!route || Object.keys(captured).length < Object.keys(params).length)) {
-        route = r;
-        params = captured;
-      }
+    const parsed = parseRequestUrl(req.url);
+    const matched = parsed ? matchRoute(routes, method, parsed.pathname) : null;
+    if (matched === 'malformed') {
+      answerUnread(req, res, httpError(400, 'malformed request path', 'bad_request'));
+      return;
     }
-    if (!route) {
+    if (!parsed || !matched) {
       next();
       return;
     }
+    const { route, params } = matched;
 
-    const fail = (err: unknown): void => {
-      const message = err instanceof Error ? err.message : 'internal error';
-      writeNodeResult(res, httpError(500, message, 'internal'));
-    };
+    const fail = (err: unknown): void => writeNodeResult(res, errorResult(err));
+    const remoteAddress = req.ip ?? req.socket?.remoteAddress;
     const baseCtx = {
       method,
       path: parsed.pathname,
       query: parsed.searchParams,
       headers: req.headers,
       params,
+      ...(remoteAddress ? { remoteAddress } : {}),
     };
 
     // A streaming route needs the body unread. If a host's JSON parser already consumed it, the
@@ -127,13 +126,15 @@ function middlewareFromRoutes(routes: readonly OtaRoute[]): OtaMiddleware {
       return;
     }
 
-    readRawBody(req)
+    const limit = bodyLimit(route, req.headers);
+    readRawBody(req, limit)
       .then((rawBody) => {
+        if (!rawBody) return payloadTooLarge(`request body exceeds ${limit} bytes`);
         const ctx: ReqCtx = {
           ...baseCtx,
           rawBody,
           json<T>(): T {
-            return JSON.parse(rawBody.toString('utf8') || 'null') as T;
+            return parseJsonBody<T>(rawBody);
           },
         };
         return route.handler(ctx);

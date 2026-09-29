@@ -259,6 +259,42 @@ async function main(): Promise<void> {
     assert.ok(onConfirm.includes('bnd_x_v1:healthy'), 'expected onConfirm hook to record the event');
   });
 
+  await check('an undecodable path parameter is a JSON 400, not an HTML 500', async () => {
+    const res = await fetch(`${base}/ota/v2/releases/%/blobs/x`);
+    assert.equal(res.status, 400);
+    assert.match(res.headers.get('content-type') ?? '', /application\/json/);
+    assert.equal(((await res.json()) as { code: string }).code, 'bad_request');
+  });
+
+  await check('an empty JSON body behind express.json is answered, not left hanging', async () => {
+    // express.json consumes the stream and rawBodySaver skips an empty body, so nothing is left to read.
+    const post = (path: string): Promise<Response> =>
+      fetch(`${base}${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '',
+        signal: AbortSignal.timeout(5000),
+      });
+    const enrolled = await post('/ota/v2/enroll');
+    assert.equal(enrolled.status, 400);
+    assert.equal(((await enrolled.json()) as { code: string }).code, 'bad_request');
+    assert.equal((await post('/ota/v2/check')).status, 401, 'unsigned, but answered');
+  });
+
+  await check('HEAD /health and /ready answer 200', async () => {
+    for (const path of ['/health', '/ready']) assert.equal((await fetch(`${base}${path}`, { method: 'HEAD' })).status, 200, path);
+  });
+
+  await check('a device body over 64 KiB is a 413 JSON even when the host parser accepted it', async () => {
+    const res = await fetch(`${base}/ota/v2/enroll`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ installId: 'inst-big', pad: 'a'.repeat(80 * 1024) }), // under express.json's 100 kB
+    });
+    assert.equal(res.status, 413);
+    assert.equal(((await res.json()) as { code: string }).code, 'too_large');
+  });
+
   server.close();
   console.log(`\n${passed} express-adapter checks passed.`);
 }

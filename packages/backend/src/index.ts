@@ -89,7 +89,7 @@ export interface OtaBackend {
  * });
  *
  * const app = express();
- * app.use(express.json({ verify: rawBodySaver })); // keep raw bytes for the request signature
+ * app.use(express.json({ limit: '32mb', verify: rawBodySaver })); // raw bytes for the signature; manifests can be large
  * app.use(ota.middleware);                          // mount at the ROOT
  * app.listen(4455);
  * ```

@@ -5,42 +5,53 @@ title: Hermes & HBC
 
 # Hermes & HBC
 
-The biggest OTA gotcha: **Hermes bytecode (HBC) is tied to the exact Hermes version in the
-installed binary.** A plain JS bundle and the embedded HBC are not interchangeable, and an
-HBC/version mismatch refuses to load or crashes.
+Release builds of a React Native app run Hermes bytecode (HBC), not plain JavaScript. HBC is tied
+to the Hermes version inside the app binary: bytecode from a different Hermes version won't load.
 
 ## The rule
 
-> Compile every OTA bundle to **HBC using the same `hermesc`** that shipped in the app binary, and
-> make sure the `runtimeVersion` encodes the Hermes/native ABI.
+Compile every update with the `hermesc` from the same `react-native` install the store build was
+made from, and change your runtime version whenever you upgrade React Native.
 
-Because dash-ota gates apply on an **exact `runtimeVersion` match** (enforced in native), a bundle
-built for the wrong Hermes ABI simply won't be applied — it's rejected, not crashed-into.
+The runtime version is what keeps a bundle away from a binary it can't run: devices only install
+releases whose `runtimeVersion` equals their own. With `--runtime-version auto`, the React Native
+and Hermes versions are part of the fingerprint, so an upgrade changes it for you. With a fixed
+string such as `rt1`, it's on you to move to `rt2` in the same commit that upgrades React Native.
+If an incompatible bundle does get installed, it fails to load, and the
+[crash-loop breaker](/docs/concepts/crash-loop) takes the device back to the last bundle that
+worked after two failed launches.
 
 ## How to compile
 
-`dash-ota bundle --hermes` compiles the bundle to HBC with the `hermesc` shipped in **your**
-`react-native` install (so it matches the binary) and replaces the plain bundle in place. If
-`--hermes` is requested but `hermesc` can't be found, it **fails loud** rather than silently
-publishing a non-HBC bundle:
+`dash-ota bundle --hermes` runs `react-native bundle`, then compiles the result with your
+project's `hermesc` and replaces the plain bundle:
 
 ```bash
-# 1. bundle + compile to HBC in one step
-dash-ota bundle --project . --platform android --out ./out --hermes
-# 2. publish the HBC payload
-dash-ota publish --bundle-dir ./out --app-id com.example.app --platform android --channel prod \
-  --runtime-version auto --bundle-version 8
+npx dash-ota bundle --project . --platform android --out ./ota-out/android --hermes
+npx dash-ota publish --bundle-dir ./ota-out/android --app-id com.example.app \
+  --platform android --channel prod --key-id key_prod_1 \
+  --runtime-version rt1 --bundle-version 8
 ```
 
-Without `--hermes` the output is a **plain JS bundle** (clearly labelled) — fine for a non-Hermes
-(JSC) app, but for Hermes builds always pass `--hermes`. Recommended: ship **HBC** — it matches the
-embedded behaviour and has faster TTI.
+It finds `hermesc` in `node_modules/react-native/sdks/hermesc/<os>-bin/` (React Native 0.82 and
+older) or in the `hermes-compiler` package (0.83 and later). If neither exists, it stops instead of
+publishing plain JavaScript:
 
-Under the hood this runs `hermesc -emit-binary -O -out <bundle> <bundle>` using
-`node_modules/react-native/sdks/hermesc/<os>-bin/hermesc`.
+```
+✗ hermesc was not found — cannot produce an HBC bundle. Looked for:
+```
+
+followed by both paths it tried.
+
+Without `--hermes` the output is a plain JavaScript bundle. That is right for an app that runs on
+JSC, and wrong for one on Hermes, which is the default.
+
+Keep `--out` the same for every release. The compiler runs on a relative path, so the same source
+always produces the same bytes, and the server skips files it already has.
 
 ## Source maps
 
-OTA stack traces won't symbolicate against the store binary's maps. Generate the Hermes-composed
-source map per OTA and upload it to your crash reporter (Crashlytics/Sentry), keyed by a
-`debugId` + `{runtimeVersion, bundleVersion}`, so on-device OTA crashes resolve to original source.
+Crashes in an OTA bundle won't symbolicate against the store build's source maps. The CLI doesn't
+produce source maps, so generate one yourself when you build the bundle (`react-native bundle
+--sourcemap-output`, then compose it with the Hermes map as your crash reporter documents) and
+upload it keyed by `runtimeVersion` and `bundleVersion`.

@@ -22,47 +22,48 @@ backend receives that manifest already signed, stores it, and hands it out. The 
 against a public key compiled into the app binary, in native code, before anything is written to
 disk.
 
-Nothing in that chain requires the backend to be honest. That is the point, and it is what
-[a breached server](/docs/security/breach) cannot get around.
+Integrity does not require the backend to be honest. A [breached server](/docs/security/breach)
+cannot get around the signature, though it can still withhold updates, re-serve older signed
+releases in some cases, and force a hard update prompt.
 
 ## The one boundary worth understanding
 
 Integrity and confidentiality are not equally protected here, and the difference matters:
 
-> **Integrity holds even if TLS is completely broken. Confidentiality against an active MITM does
-> not, until you turn pinning on.**
+> **Integrity holds even if TLS is completely broken. The encryption does not keep bundles secret
+> from anyone who can read a `/check` response.**
 
-Integrity does not depend on the network at all. The verification key is in the binary, so a forged
+Integrity does not depend on the network. The verification key is in the binary, so a forged
 certificate, hijacked DNS and a hostile server still cannot produce a manifest the device accepts.
 
-Confidentiality is weaker. The bundle bytes are AES-256-GCM ciphertext, but the content key that
-opens them travels inside the manifest, over the same TLS channel. Someone who can forge a
-certificate and read `/check` can read the key. So encryption here buys you protection against
-passive sniffing and against anyone reading the blob store — not against an attacker who is
-actively sitting in the connection.
+Confidentiality is much weaker. The bundle bytes are AES-256-GCM ciphertext, but the content key
+that opens them travels inside the manifest, which `/check` returns to any enrolled install for the
+channel it asks about. The server operator has it, an active MITM who can read `/check` has it, and
+devices store the decrypted files. So the encryption protects blobs from someone who can read the
+blob store or a cache in front of it, and little else.
 
-Closing that last gap is what [TLS pinning](/docs/security/pinning-attestation) is for. It ships,
-and it is off until you set pins.
+[TLS pinning](/docs/security/pinning-attestation) does not close the MITM case on its own: native
+pins cover blob downloads, while `/check` goes through JavaScript `fetch`, which is pinned only if
+you pass a pinned `fetch` as `transport`.
 
-Stated plainly: **rely on signing for integrity, and on pinning for confidentiality against an
-active MITM.** Do not oversell the encryption as MITM-proof — it isn't, and the docs say so on
-purpose.
+Stated plainly: **rely on signing for integrity.** Treat the encryption as protection for the blob
+store, not for the bundle.
 
 ## Two controls that ship turned off
 
-- **TLS certificate pinning** — enforced in native on the blob download. Set `ota_tls_pins`
-  (Android) or `OTA_TLS_PINS` (iOS); a mismatch throws. Both platforms hash the full DER
-  certificate, so one pin value covers both.
+- **TLS certificate pinning** — enforced in native on blob downloads only. Set `ota_tls_pins`
+  (Android) or `OTA_TLS_PINS` (iOS); a mismatch fails the download. Both platforms hash the full
+  DER certificate, so one pin value covers both.
 - **Device attestation** — the client attaches a Play Integrity or App Attest token at enrollment,
   and your `verifyEnrollToken` hook decides whether to trust it. dash-ota does not verify the token
-  for you.
+  for you, and the token is not bound to a server challenge.
 
 Neither is on until you configure it, and the core never depends on either.
 
 ## Going deeper
 
 - [Threat model](/docs/security/threat-model) — the table of threat, control, and where it runs.
-- [Controls explained](/docs/security/controls) — all thirteen controls, property by property.
+- [Controls explained](/docs/security/controls) — each control, property by property.
 - [If your server is breached](/docs/security/breach) — what an attacker with root can and cannot do.
 - [What dash-ota does not do](/docs/security/limitations) — the honest limits.
 - [Keys, custody & rotation](/docs/security/key-management).

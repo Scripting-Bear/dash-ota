@@ -5,62 +5,76 @@ title: Configuration
 
 # Configuration
 
-Every option is optional with a safe default, and each has an **env fallback** (handy for the
-standalone server). Pass only what you need.
+Every option can be passed to `dashOtaMiddleware()` / `createOtaBackend()` or set through an
+environment variable. Options you pass win over the environment; an option passed as `undefined`
+counts as not passed. Pass only what you need.
 
-```ts
+```js
 dashOtaMiddleware({
   adminToken: process.env.OTA_ADMIN_TOKEN,
-  requireRequestSignature: true,
-  requireEnrollAuth: true,
-  // ...hooks (see Hooks page)
+  storageDir: '/var/lib/dash-ota/storage',
+  dataDir: '/var/lib/dash-ota/data',
+  verifyEnrollToken: async (token) => <YOUR_SESSION_CHECK>(token),
 });
 ```
 
-## Options & env
+## Options and environment variables
 
 | Option | Env | Default | Meaning |
 |---|---|---|---|
-| `port` | `OTA_PORT` | `4455` | standalone listen port |
-| `adminToken` | `OTA_ADMIN_TOKEN` | **`''` (empty ⇒ admin disabled)** | bearer for `/admin/*` (header `x-ota-admin-token`) |
-| `storageDir` | `OTA_STORAGE_DIR` | `<pkg>/storage` | where encrypted bundles are stored (disk blob store) |
-| `dataDir` | `OTA_DATA_DIR` | `<pkg>/.data` | release/install metadata (disk JSON store) |
-| `timestampSkewMs` | `OTA_TS_SKEW_MS` | `300000` | allowed client clock skew |
-| `downloadTokenTtlMs` | `OTA_DL_TTL_MS` | `120000` | one-time download token TTL |
-| `nonceTtlMs` | `OTA_NONCE_TTL_MS` | `600000` | replay-nonce cache TTL |
+| `port` | `OTA_PORT` | `4455` | listen port of the standalone server |
+| `adminToken` | `OTA_ADMIN_TOKEN` | empty: admin routes disabled | token for `/admin/*`, sent in the `x-ota-admin-token` header |
+| `storageDir` | `OTA_STORAGE_DIR` | `<cwd>/.dash-ota/storage` | release files, with the disk store |
+| `dataDir` | `OTA_DATA_DIR` | `<cwd>/.dash-ota/data` | release and device metadata, with the disk store |
+| `timestampSkewMs` | `OTA_TS_SKEW_MS` | `300000` (5 min) | allowed clock difference on signed requests |
+| `nonceTtlMs` | `OTA_NONCE_TTL_MS` | `600000` (10 min) | how long a request nonce is remembered; keep it at least twice `timestampSkewMs` |
+| `downloadTokenTtlMs` | `OTA_DL_TTL_MS` | `1800000` (30 min) | lifetime of a download token; reusable for every file of that release until then |
 | `maxBundleBytes` | `OTA_MAX_BUNDLE_BYTES` | `104857600` (100 MiB) | cap on a whole release |
-| `maxBlobBytes` | `OTA_MAX_BLOB_BYTES` | `104857600` (100 MiB) | cap on one uploaded blob, enforced **as the body arrives** |
-| `enrollRateLimit` | `OTA_ENROLL_RATE` | `10` | max `/enroll` per install per window (`0` disables) |
-| `checkRateLimit` | `OTA_CHECK_RATE` | `60` | max `/check` per authenticated install per window (`0` disables) |
-| `rateLimitWindowMs` | `OTA_RATE_WINDOW_MS` | `60000` | fixed rate-limit window |
-| `autoPauseFailureRate` | `OTA_AUTOPAUSE_RATE` | `0.2` | failure rate that auto-pauses a rollout |
-| `autoPauseMinSamples` | `OTA_AUTOPAUSE_MIN` | `5` | min confirms before auto-pause can trip |
-| `requireRequestSignature` | `OTA_REQUIRE_SIG` | `true` | enforce the device-key signature on `/check` + `/confirm` |
-| `requireEnrollAuth` | `OTA_REQUIRE_ENROLL_AUTH` | `true` | require an enroll session token (see [`verifyEnrollToken`](/docs/backend/hooks)) |
+| `maxBlobBytes` | `OTA_MAX_BLOB_BYTES` | `67108864` (64 MiB) | cap on one uploaded file, enforced while it arrives |
+| `maxAdminBodyBytes` | `OTA_MAX_ADMIN_BODY_BYTES` | `33554432` (32 MiB) | cap on an admin JSON body, such as a release manifest |
+| `enrollRateLimit` | `OTA_ENROLL_RATE` | `10` | `/enroll` requests per install per window; `0` turns it off |
+| `checkRateLimit` | `OTA_CHECK_RATE` | `60` | `/check` requests per install per window; `0` turns it off |
+| `rateLimitWindowMs` | `OTA_RATE_WINDOW_MS` | `60000` | rate-limit window |
+| `autoPauseFailureRate` | `OTA_AUTOPAUSE_RATE` | `0.2` | share of failure reports that pauses a release |
+| `autoPauseMinSamples` | `OTA_AUTOPAUSE_MIN` | `5` | reports needed before auto-pause can trigger |
+| `requireRequestSignature` | `OTA_REQUIRE_SIG` | `true` | require the device-key signature on `/check` and `/confirm` |
+| `requireEnrollAuth` | `OTA_REQUIRE_ENROLL_AUTH` | `true` | require an enroll token (checked by `verifyEnrollToken` if you set it, otherwise only for presence) |
 
-### Storage selection
+Other limits are fixed: device and unauthenticated JSON bodies are capped at 64 KiB, and larger
+bodies get `413 too_large`.
 
-Pass a URL/path to swap the disk defaults for a real backend — see
-[Storage providers & adapters](/docs/backend/providers) for the full model.
+The standalone server also reads `OTA_ACCESS_LOG=true`, which logs every request's status, method
+and path.
+
+### Storage
+
+Set one of these to replace the disk defaults. See [Storage providers](/docs/backend/providers).
 
 | Option | Env | Selects |
 |---|---|---|
-| `databaseUrl` | `OTA_DATABASE_URL` | Postgres `DatabaseProvider` (peer `pg`) |
-| `sqlitePath` | `OTA_SQLITE_PATH` | SQLite `DatabaseProvider` (peer `better-sqlite3`) |
-| `redisUrl` | `OTA_REDIS_URL` | Redis `CacheProvider` (peer `ioredis`) — **required for multi-instance** |
-| `s3Bucket` (+ `s3Endpoint`, `s3Region`, `s3ForcePathStyle`, `s3Prefix`) | `OTA_S3_BUCKET`, … | S3/R2/MinIO `BlobStore` (peer `@aws-sdk/client-s3`) |
+| `databaseUrl` | `OTA_DATABASE_URL` | Postgres database (optional peer `pg`) |
+| `sqlitePath` | `OTA_SQLITE_PATH` | SQLite database (optional peer `better-sqlite3`) |
+| `redisUrl` | `OTA_REDIS_URL` | Redis cache (optional peer `ioredis`); needed with more than one instance |
+| `s3Bucket`, `s3Region`, `s3Endpoint`, `s3ForcePathStyle`, `s3Prefix` | `OTA_S3_BUCKET`, `OTA_S3_REGION`, `OTA_S3_ENDPOINT`, `OTA_S3_FORCE_PATH_STYLE=true`, `OTA_S3_PREFIX` | S3, R2 or MinIO file storage (optional peer `@aws-sdk/client-s3`) |
 
-## Production posture
+### Hooks
 
-- **`adminToken` has no default** — leave it unset and `/admin/*` returns `503 admin_disabled`
-  (fail-closed). Set a strong token, and serve `/admin/*` only over HTTPS.
-- Keep `requireRequestSignature` and `requireEnrollAuth` **on**.
-- Behind a load balancer, set `redisUrl` so anti-replay + rate limiting hold across replicas.
-- Tune anti-replay windows, `maxBundleBytes`, and rate limits via env without code changes.
+`verifyEnrollToken`, `onConfirm`, `onPublish` and `logger` are options too. See
+[Hooks](/docs/backend/hooks).
+
+## Production checklist
+
+- Set a long random `adminToken`, and reach `/admin/*` only over HTTPS. With no token the admin
+  routes answer `503 admin_disabled`.
+- Set `verifyEnrollToken` to check a real user session.
+- Leave `requireRequestSignature` and `requireEnrollAuth` on. They exist to be turned off in tests.
+- Set `storageDir` and `dataDir` to a backed-up location, or use a database and object storage.
+- With more than one instance, set `redisUrl` so replay protection and rate limits are shared.
 
 ## `resolveBackendConfig`
 
-`resolveBackendConfig(partial)` layers your options over the env/default config — it's what the
-middleware/factory call internally. Useful if you want the resolved config object directly.
+`resolveBackendConfig(options)` returns the complete configuration: your options over the
+environment over the defaults. The middleware and the factory call it; use it if you need the
+resolved values yourself.
 
 → [Hooks](/docs/backend/hooks) · [Endpoints](/docs/backend/endpoints)

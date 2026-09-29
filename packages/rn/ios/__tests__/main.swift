@@ -89,6 +89,24 @@ check("two real crashes disable the bundle and revert to the embedded one") {
     try expectEqual(store.consumeFailedReport(), "", "and only once")
 }
 
+check("a last-known-good that also crash-loops falls back to the embedded bundle") {
+    try stage("bnd_good", 1)
+    _ = store.promoteStagedToPending()
+    _ = store.resolveBundleAtLaunch()
+    store.markHealthy()
+    try stage("bnd_bad", 2)
+    _ = store.promoteStagedToPending()
+    _ = store.resolveBundleAtLaunch()             // bnd_bad, attempt 1
+    _ = store.resolveBundleAtLaunch()             // attempt 2
+    let reverted = store.resolveBundleAtLaunch()  // breaker: back to bnd_good
+    try expect(reverted != nil, "the first revert lands on the last-known-good bundle")
+    try expect(store.loadState()["trial"] as? Bool == true, "the fallback runs on trial")
+    _ = store.resolveBundleAtLaunch()             // bnd_good, attempt 2
+    let last = store.resolveBundleAtLaunch()      // breaker again
+    try expect(last == nil, "a fallback that also loops must end on the embedded bundle")
+    try expect(store.isDisabled("bnd_good"), "the fallback is blocklisted too")
+}
+
 check("force killing the app never disables a healthy bundle") {
     try stage("bnd_1", 1)
     _ = store.promoteStagedToPending()

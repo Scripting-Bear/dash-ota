@@ -155,6 +155,17 @@ public class DashOtaImpl: NSObject {
     guard (manifest["runtimeVersion"] as? String) == DashOtaConfig.runtimeVersion else {
       throw DashOtaError.message("runtimeVersion does not match this binary")
     }
+    // The server already filters by channel and platform; these stop a breached one serving another
+    // channel's release that the same key ring verifies.
+    guard (manifest["channel"] as? String) == DashOtaConfig.channel else {
+      throw DashOtaError.message("manifest is for another channel")
+    }
+    guard (manifest["platform"] as? String) == "ios" else {
+      throw DashOtaError.message("manifest is for another platform")
+    }
+    if let minNative = manifest["minNativeBuild"] as? Int, DashOtaConfig.nativeBuild < minNative {
+      throw DashOtaError.message("bundle needs native build \(minNative) or later")
+    }
     guard let version = manifest["bundleVersion"] as? Int, version > DashOtaStore.shared.currentBundleVersion() else {
       throw DashOtaError.message("bundleVersion is not newer")
     }
@@ -162,6 +173,10 @@ public class DashOtaImpl: NSObject {
           let encryption = manifest["encryption"] as? [String: Any],
           let entries = manifest["files"] as? [[String: Any]], !entries.isEmpty else {
       throw DashOtaError.message("malformed manifest")
+    }
+    // bundleId and every sha256 become directory and file names below.
+    guard Self.matches(bundleId, Self.bundleIdPattern) else {
+      throw DashOtaError.message("bundleId \(bundleId) is not a safe file name")
     }
     if DashOtaStore.shared.isDisabled(bundleId) {
       throw DashOtaError.message("bundle was disabled after a crash loop")
@@ -173,6 +188,10 @@ public class DashOtaImpl: NSObject {
       guard let path = entry["path"] as? String else { throw DashOtaError.message("manifest entry has no path") }
       if let reason = Self.invalidPath(path) {
         throw DashOtaError.message("manifest path \(path) \(reason)")
+      }
+      let blobSha = (entry["blob"] as? [String: Any])?["sha256"] as? String ?? ""
+      guard Self.matches(entry["sha256"] as? String ?? "", Self.sha256Pattern), Self.matches(blobSha, Self.sha256Pattern) else {
+        throw DashOtaError.message("manifest entry \(path) has a malformed sha256")
       }
     }
 
@@ -313,6 +332,14 @@ public class DashOtaImpl: NSObject {
       if segment == "." || segment == ".." { return "contains a \(segment) segment" }
     }
     return nil
+  }
+
+  /// `\z`, not `$`: ICU's `$` also matches before a trailing newline.
+  static let bundleIdPattern = #"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}\z"#
+  static let sha256Pattern = #"^[0-9a-f]{64}\z"#
+
+  static func matches(_ value: String, _ pattern: String) -> Bool {
+    value.range(of: pattern, options: .regularExpression) != nil
   }
 
   private func downloadSync(_ urlStr: String, token: String, expectedSize: Int) throws -> Data {

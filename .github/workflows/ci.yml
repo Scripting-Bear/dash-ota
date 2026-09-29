@@ -7,6 +7,8 @@ on:
       - 'packages/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - 'scripts/**'
       - 'eslint.config.js'
       - '.prettierrc.json'
       - '.github/workflows/ci.yml'
@@ -15,6 +17,8 @@ on:
       - 'packages/**'
       - 'package.json'
       - 'package-lock.json'
+      - 'tsconfig.base.json'
+      - 'scripts/**'
       - 'eslint.config.js'
       - '.prettierrc.json'
       - '.github/workflows/ci.yml'
@@ -24,12 +28,14 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a PR supersedes the old run; every commit on main keeps its own result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
     name: typecheck · lint · format · test
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -44,6 +50,9 @@ jobs:
         working-directory: packages/rn
       - name: Typecheck
         run: npm run typecheck
+      - name: Typecheck the React Native package
+        run: yarn typecheck
+        working-directory: packages/rn
       - name: Lint
         run: npm run lint
       - name: Format check
@@ -63,6 +72,10 @@ jobs:
   ios:
     name: iOS store tests
     runs-on: macos-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - run: npm run test:ios
+        env:
+          # This job exists to run them, so a skip here is a failure.
+          DASH_OTA_REQUIRE_IOS_TESTS: '1'

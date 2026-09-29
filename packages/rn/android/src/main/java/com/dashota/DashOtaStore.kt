@@ -380,12 +380,15 @@ object DashOtaStore {
         if (failedId.isNotEmpty() && !jsonArrayContains(disabled, failedId)) disabled.put(failedId)
         state.put("disabledBundles", disabled)
         state.put("failedToReport", failedId)
+        // The fallback goes on trial too, with nothing behind it but the embedded bundle: if it
+        // also loops (state the failed bundle left behind, say), the next revert lands on embedded.
         val lkg = slot(state, "lastKnownGood")
         state.put("current", lkg ?: JSONObject.NULL)
-        state.put("trial", false)
-        state.put("bootAttempts", 0)
+        state.put("lastKnownGood", JSONObject.NULL)
+        state.put("trial", lkg != null)
+        state.put("bootAttempts", if (lkg != null) 1 else 0)
         saveState(ctx, state)
-        logLaunch("crash loop: disabling $failedId, reverting to ${lkg?.optString("bundleId") ?: "the embedded bundle"}")
+        logLaunch("crash loop: disabling $failedId, reverting to ${lkg?.optString("bundleId")?.let { "$it on trial" } ?: "the embedded bundle"}")
         return lkg?.let { bundlePath(ctx, it) }
       }
       if (!userReload) attempts += 1

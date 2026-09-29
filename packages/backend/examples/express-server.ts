@@ -12,11 +12,19 @@
 import express from 'express';
 import { rawBodySaver, dashOtaMiddleware } from '@dash-ota/backend';
 
+// No fallback: a default token would be a public admin credential for anyone who read this file.
+const adminToken = process.env.OTA_ADMIN_TOKEN;
+if (!adminToken) {
+  console.error('[example] OTA_ADMIN_TOKEN is not set. Export a long random secret and run again.');
+  process.exit(1);
+}
+
 const app = express();
 
 // Your own app middleware/routes live alongside OTA. A global JSON parser is fine as long as
 // it stashes the raw bytes (the OTA request signature is over the exact body) via rawBodySaver.
-app.use(express.json({ verify: rawBodySaver }));
+// The limit must fit a release manifest: the 100 kB default rejects one of a few hundred files.
+app.use(express.json({ limit: '32mb', verify: rawBodySaver }));
 app.get('/', (_req, res) => {
   res.json({ service: 'my-app', ota: '/ota/v2/*' });
 });
@@ -24,7 +32,7 @@ app.get('/', (_req, res) => {
 // Mount the OTA distributor at the root. Everything it doesn't own falls through to your app.
 app.use(
   dashOtaMiddleware({
-    adminToken: process.env.OTA_ADMIN_TOKEN ?? 'dev-admin-token',
+    adminToken,
     // Plug your real auth here — validate the device's session token against your IdP.
     verifyEnrollToken: async (token) => {
       if (!token) return false;

@@ -104,7 +104,7 @@ const config: Config = {
       hideOnScroll: true,
       items: [
         { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
-        { to: '/docs/getting-started/quickstart', position: 'left', label: 'Start here' },
+        { to: '/docs/getting-started/what-is-an-ota-update', position: 'left', label: 'Start here' },
         { to: '/docs/cli/dashboard', position: 'left', label: 'Dashboard' },
         { to: '/docs/security/breach', position: 'left', label: 'Security' },
         { to: '/docs/introduction/comparison', position: 'left', label: 'Compare' },

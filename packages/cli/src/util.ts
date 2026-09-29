@@ -5,8 +5,9 @@
  * @module util
  */
 
+import { execFileSync } from 'node:child_process';
 import { createHash, createPrivateKey, createPublicKey, type KeyObject } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import * as readline from 'node:readline/promises';
 import { Writable } from 'node:stream';
@@ -97,11 +98,19 @@ export function flagBool(args: ParsedArgs, name: string): boolean {
   return args.flags[name] === true || args.flags[name] === 'true';
 }
 
+/** `rl.question`, rejecting when stdin ends first; left pending, the process would exit 0 mid-command. */
+function questionOrFail(rl: readline.Interface, prompt: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    rl.once('close', () => reject(new Error(`stdin closed before an answer to: ${prompt.trim() || 'the prompt'}`)));
+    rl.question(prompt).then(resolve, reject);
+  });
+}
+
 /** Prompt for a single line, with an optional default. */
 export async function ask(question: string, fallback?: string): Promise<string> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
-    const answer = await rl.question(fallback ? `${question} [${fallback}]: ` : `${question}: `);
+    const answer = await questionOrFail(rl, fallback ? `${question} [${fallback}]: ` : `${question}: `);
     return answer.trim() || fallback || '';
   } finally {
     rl.close();
@@ -125,7 +134,7 @@ export async function askSecret(question: string): Promise<string> {
   process.stdout.write(`${question}: `);
   state.muted = true; // suppress echo of the typed secret
   try {
-    return (await rl.question('')).trim();
+    return (await questionOrFail(rl, '')).trim();
   } finally {
     state.muted = false;
     process.stdout.write('\n');
@@ -146,7 +155,7 @@ export async function askMultiline(question: string): Promise<string> {
   const lines: string[] = [];
   try {
     for (;;) {
-      const line = await rl.question('');
+      const line = await questionOrFail(rl, '');
       if (line.trim() === '.') break;
       lines.push(line);
     }
@@ -177,6 +186,11 @@ export function assertSecureServer(server: string, allowInsecure: boolean): void
   }
 }
 
+/** Drop trailing slashes: admin paths are appended with a leading one, so `https://x/` became `//admin/...`. */
+export function normalizeServer(server: string): string {
+  return server.replace(/\/+$/, '');
+}
+
 /**
  * Resolve the backend base URL + admin token from flags or env. The admin token is the CLI's
  * publish credential (the trust root) — there is **no default**; it must come from `--admin-token`
@@ -185,7 +199,7 @@ export function assertSecureServer(server: string, allowInsecure: boolean): void
  * @throws if no admin token is set, or the server is insecure (see {@link assertSecureServer})
  */
 export function resolveServer(args: ParsedArgs): { server: string; adminToken: string } {
-  const server = flagStr(args, 'server', process.env.OTA_SERVER ?? 'http://localhost:4455');
+  const server = normalizeServer(flagStr(args, 'server', process.env.OTA_SERVER ?? 'http://localhost:4455'));
   const adminToken = flagStr(args, 'admin-token') || process.env.OTA_ADMIN_TOKEN || '';
   if (!adminToken) {
     throw new Error('admin token required: pass --admin-token or set OTA_ADMIN_TOKEN (no default — the CLI is the trust root).');
@@ -292,13 +306,22 @@ export function readBundleDir(dir: string): ArchiveFile[] {
 /** Build-output / tooling dirs excluded from the native fingerprint (non-deterministic noise). */
 const NATIVE_FINGERPRINT_IGNORE = new Set(['build', '.gradle', '.cxx', 'Pods', 'DerivedData', 'node_modules', '.idea']);
 
-/** Recursively list files under a native dir, skipping build-output / tooling subdirs. */
+/**
+ * Machine-local files the React Native template gitignores. Only the walk outside git skips them:
+ * in a git work tree untracked files are never read, and a tracked one is on CI too.
+ */
+const LOCAL_ONLY_DIRS = new Set(['xcuserdata', '.kotlin', 'captures']);
+const LOCAL_ONLY_FILE = /^(local\.properties|\.xcode\.env\.local|\.DS_Store)$|\.(xcuserstate|iml|jsbundle)$/;
+
+/** Recursively list files under a native dir, skipping build output, tooling and machine-local files. */
 function walkNative(dir: string): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      if (!NATIVE_FINGERPRINT_IGNORE.has(entry.name)) out.push(...walkNative(join(dir, entry.name)));
-    } else if (entry.isFile()) {
+      if (!NATIVE_FINGERPRINT_IGNORE.has(entry.name) && !LOCAL_ONLY_DIRS.has(entry.name)) {
+        out.push(...walkNative(join(dir, entry.name)));
+      }
+    } else if (entry.isFile() && !LOCAL_ONLY_FILE.test(entry.name)) {
       out.push(join(dir, entry.name));
     }
   }
@@ -306,31 +329,79 @@ function walkNative(dir: string): string[] {
 }
 
 /**
- * Content-hash a native source tree: sha256 of each file's **bytes** (keyed by relative path),
- * sorted then hashed together. Build-output/tooling dirs are excluded for determinism. Unlike a
- * path+size hash, this flips when native source actually changes — the runtimeVersion gate depends
- * on it, so a same-size edit must not slip through.
+ * The regular files git tracks under `dir`, as POSIX paths relative to it. Null when `dir` is not in
+ * a git work tree, or git tracks nothing there (a generated native folder), so the caller walks the
+ * disk as before. The same build-dir filter as the walk keeps a clean checkout's value unchanged.
  */
-function hashNativeDir(dir: string): string {
-  if (!existsSync(dir)) return 'absent';
-  const entries = walkNative(dir)
-    .map((abs) => {
-      const rel = relative(dir, abs).split(sep).join('/');
-      return `${rel}:${createHash('sha256').update(readFileSync(abs)).digest('hex')}`;
-    })
-    .sort();
-  return createHash('sha256').update(entries.join('\n')).digest('hex').slice(0, 16);
+function gitTrackedNativeFiles(dir: string): string[] | null {
+  const git = (args: string[]): string =>
+    execFileSync('git', args, { cwd: dir, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    if (git(['rev-parse', '--is-inside-work-tree']).trim() !== 'true') return null;
+  } catch {
+    return null;
+  }
+  const tracked = git(['ls-files', '-z', '--recurse-submodules', '--', '.']).split('\0').filter(Boolean);
+  if (tracked.length === 0) return null;
+  return tracked.filter((rel) => {
+    if (
+      rel
+        .split('/')
+        .slice(0, -1)
+        .some((segment) => NATIVE_FINGERPRINT_IGNORE.has(segment))
+    )
+      return false;
+    try {
+      // Symlinks and uninitialised submodules are skipped, as the walk skips them; so is a deleted file.
+      return lstatSync(join(dir, rel)).isFile();
+    } catch {
+      return false;
+    }
+  });
 }
 
 /**
- * Compute a project's runtimeVersion from its native inputs: all dependencies + RN version +
- * Hermes version + **content-hashed** native trees ({@link hashNativeDir}). Conservative by
- * design — any dependency change flips the runtimeVersion (safe over churny). A future refinement
- * is a curated native-dependency allowlist so JS-only bumps don't churn the gate.
- * @param projectPath path to the React Native app
- * @returns the runtimeVersion string
+ * Content-hash a native source tree: sha256 of each file's **bytes** (keyed by relative path),
+ * sorted then hashed together. Unlike a path+size hash, this flips when native source actually
+ * changes — the runtimeVersion gate depends on it, so a same-size edit must not slip through.
+ *
+ * @returns the hash, and whether it covered git-tracked files or everything on disk.
  */
-export function fingerprintProject(projectPath: string): { runtimeVersion: string; inputs: FingerprintInputs } {
+function hashNativeDir(dir: string): { hash: string; source: 'git' | 'disk' | 'absent' } {
+  if (!existsSync(dir)) return { hash: 'absent', source: 'absent' };
+  const tracked = gitTrackedNativeFiles(dir);
+  const files = tracked ?? walkNative(dir).map((abs) => relative(dir, abs).split(sep).join('/'));
+  const entries = files
+    .map(
+      (rel) =>
+        `${rel}:${createHash('sha256')
+          .update(readFileSync(join(dir, rel)))
+          .digest('hex')}`,
+    )
+    .sort();
+  return {
+    hash: createHash('sha256').update(entries.join('\n')).digest('hex').slice(0, 16),
+    source: tracked ? 'git' : 'disk',
+  };
+}
+
+/**
+ * Compute a project's runtimeVersion from every `package.json` dependency (name@spec), the
+ * installed React Native version, the Hermes version and the content of android/ and ios/. Any
+ * dependency change flips it, including a JS-only one.
+ *
+ * Inside a git work tree only files git tracks under android/ and ios/ count, so a laptop and a
+ * clean CI checkout of the same commit agree; elsewhere every file counts except build output and
+ * the template's machine-local files ({@link walkNative}).
+ *
+ * @param projectPath path to the React Native app
+ * @returns the runtimeVersion, its inputs, and which file set each native dir was hashed from.
+ */
+export function fingerprintProject(projectPath: string): {
+  runtimeVersion: string;
+  inputs: FingerprintInputs;
+  nativeSources: Record<'android' | 'ios', 'git' | 'disk' | 'absent'>;
+} {
   const pkgPath = join(projectPath, 'package.json');
   if (!existsSync(pkgPath)) throw new Error(`no package.json at ${projectPath}`);
   const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { dependencies?: Record<string, string> };
@@ -345,13 +416,19 @@ export function fingerprintProject(projectPath: string): { runtimeVersion: strin
   const hermesVersionPath = join(projectPath, 'node_modules', 'react-native', 'sdks', '.hermesversion');
   const hermesVersion = existsSync(hermesVersionPath) ? readFileSync(hermesVersionPath, 'utf8').trim() : 'bundled';
 
+  const android = hashNativeDir(join(projectPath, 'android'));
+  const ios = hashNativeDir(join(projectPath, 'ios'));
   const inputs: FingerprintInputs = {
     nativeDependencies,
-    nativeDirHashes: { android: hashNativeDir(join(projectPath, 'android')), ios: hashNativeDir(join(projectPath, 'ios')) },
+    nativeDirHashes: { android: android.hash, ios: ios.hash },
     hermesVersion,
     reactNativeVersion,
   };
-  return { runtimeVersion: computeRuntimeVersion(inputs), inputs };
+  return {
+    runtimeVersion: computeRuntimeVersion(inputs),
+    inputs,
+    nativeSources: { android: android.source, ios: ios.source },
+  };
 }
 
 /** Flags every command that talks to the backend accepts. */
@@ -363,10 +440,21 @@ const SERVER_FLAGS = ['server', 'admin-token', 'allow-insecure'];
  * never read.
  */
 const KNOWN_FLAGS: Record<string, string[]> = {
-  keygen: ['out', 'key-id', 'passphrase', 'no-encrypt', 'content-key-only', 'force', 'register', 'interactive', ...SERVER_FLAGS],
-  'register-key': ['key-id', 'pub', 'key-file', ...SERVER_FLAGS],
-  fingerprint: ['project'],
-  bundle: ['project', 'platform', 'out', 'entry', 'dev', 'hermes'],
+  keygen: [
+    'out',
+    'key-id',
+    'passphrase',
+    'no-encrypt',
+    'content-key-only',
+    'force',
+    'register',
+    'interactive',
+    ...SERVER_FLAGS,
+    'help',
+  ],
+  'register-key': ['key-id', 'pub', 'key-file', ...SERVER_FLAGS, 'help'],
+  fingerprint: ['project', 'help'],
+  bundle: ['project', 'platform', 'out', 'entry', 'dev', 'hermes', 'help'],
   publish: [
     'bundle-dir',
     'app-id',
@@ -374,6 +462,7 @@ const KNOWN_FLAGS: Record<string, string[]> = {
     'channel',
     'runtime-version',
     'bundle-version',
+    'min-native-build',
     'mandatory',
     'target-app-versions',
     'rollout',
@@ -390,13 +479,14 @@ const KNOWN_FLAGS: Record<string, string[]> = {
     'project',
     'interactive',
     ...SERVER_FLAGS,
+    'help',
   ],
-  list: [...SERVER_FLAGS],
-  rollout: ['bundle-id', 'pct', ...SERVER_FLAGS],
-  pause: ['bundle-id', 'resume', ...SERVER_FLAGS],
-  rollback: ['bundle-id', ...SERVER_FLAGS],
-  'native-policy': ['channel', 'min', 'severity', 'store-url', ...SERVER_FLAGS],
-  dashboard: ['config', 'port', 'no-open'],
+  list: [...SERVER_FLAGS, 'help'],
+  rollout: ['bundle-id', 'pct', ...SERVER_FLAGS, 'help'],
+  pause: ['bundle-id', 'resume', ...SERVER_FLAGS, 'help'],
+  rollback: ['bundle-id', ...SERVER_FLAGS, 'help'],
+  'native-policy': ['channel', 'min', 'severity', 'store-url', ...SERVER_FLAGS, 'help'],
+  dashboard: ['config', 'port', 'no-open', 'help'],
 };
 
 /**
@@ -446,4 +536,41 @@ export function assertKnownFlags(command: string, args: ParsedArgs): void {
     `unknown flag${unknown.length > 1 ? 's' : ''} for \`${command}\`:\n${lines.join('\n')}\n\n` +
       `  accepted: ${known.map((k) => `--${k}`).join(' ')}`,
   );
+}
+
+/** The flags `command` accepts, or undefined for a command that does not exist. */
+export function acceptedFlags(command: string): readonly string[] | undefined {
+  return Object.hasOwn(KNOWN_FLAGS, command) ? KNOWN_FLAGS[command] : undefined;
+}
+
+/** Largest value the device's native code holds as a 32-bit int (build numbers, bundle versions). */
+export const MAX_INT32 = 2_147_483_647;
+
+/**
+ * Parse a whole number strictly: `2.5.0`, `42abc` and `1e3` are refused rather than read as a prefix.
+ *
+ * @param raw - the text given.
+ * @param label - how the value is named in the error, e.g. `--pct`.
+ * @throws when the text is not a whole number within [min, max].
+ */
+export function parseIntStrict(raw: string, label: string, min: number, max: number): number {
+  const text = raw.trim();
+  const value = /^-?\d+$/.test(text) ? Number(text) : Number.NaN;
+  if (!Number.isSafeInteger(value) || value < min || value > max) {
+    throw new Error(`${label} must be a whole number from ${min} to ${max} (got "${raw}")`);
+  }
+  return value;
+}
+
+/**
+ * Read an optional whole-number flag.
+ *
+ * @returns the value, or undefined when the flag was not given.
+ * @throws when it was given without a value or with anything but a whole number within [min, max].
+ */
+export function flagInt(args: ParsedArgs, name: string, min: number, max: number): number | undefined {
+  const value = args.flags[name];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new Error(`--${name} needs a value`);
+  return parseIntStrict(value, `--${name}`, min, max);
 }

@@ -11,6 +11,10 @@ set -e
 # in), which Linux Swift does not ship. Skip cleanly elsewhere rather than failing the run, the
 # same way the Redis/Postgres/S3 adapter tests skip without their service.
 if [ "$(uname -s)" != "Darwin" ] || ! command -v swiftc >/dev/null 2>&1; then
+  if [ "${DASH_OTA_REQUIRE_IOS_TESTS:-}" = "1" ]; then
+    echo "iOS store tests cannot run here, and DASH_OTA_REQUIRE_IOS_TESTS=1 requires them" >&2
+    exit 1
+  fi
   echo "iOS store tests skipped (needs macOS with the Swift toolchain)"
   exit 0
 fi

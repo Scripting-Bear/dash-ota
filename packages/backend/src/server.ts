@@ -3,14 +3,16 @@
  * wires the framework-agnostic {@link createOtaRoutes} into the tiny built-in {@link Router}.
  * The same routes can instead be mounted into an existing Express/Connect app via
  * {@link dashOtaMiddleware} (see `./index.ts`). The backend validates per-install request
- * signatures, applies targeting/rollout to pick a **pre-signed** manifest, hands out one-time
- * download tokens, streams ciphertext, and records adoption/health — it never signs and never
+ * signatures, applies targeting/rollout to pick a **pre-signed** manifest, hands out download
+ * tokens, streams ciphertext, and records adoption/health — it never signs and never
  * holds a private key.
  *
  * @module server
  */
 
-import { type BackendConfig, loadConfig } from './config.js';
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+import { type BackendConfig, loadConfig, type OtaBackendLogger } from './config.js';
 import { Router } from './http.js';
 import { createOtaRoutes } from './routes.js';
 import { Store } from './store.js';
@@ -24,9 +26,27 @@ export function createRouter(store: Store, config: BackendConfig): Router {
   return router;
 }
 
+/**
+ * Whether `moduleUrl` is the script node was started with. Compared through the real path, so a
+ * symlinked bin, a pnpm store path or a path with spaces still matches.
+ */
+export function isEntryPoint(moduleUrl: string, argv1: string | undefined): boolean {
+  if (!argv1) return false;
+  try {
+    return moduleUrl === pathToFileURL(realpathSync(argv1)).href;
+  } catch {
+    return false;
+  }
+}
+
 /** Start the server from the environment (used by `npm run backend`). */
 async function main(): Promise<void> {
-  const config = loadConfig();
+  const logger: OtaBackendLogger = {
+    info: (message) => console.log(`[dash-ota-backend] ${message}`),
+    warn: (message) => console.warn(`[dash-ota-backend] ${message}`),
+    error: (message) => console.error(`[dash-ota-backend] ${message}`),
+  };
+  const config = { ...loadConfig(), logger };
   const store = new Store(config);
   const router = createRouter(store, config);
   await router.listen(config.port);
@@ -34,6 +54,9 @@ async function main(): Promise<void> {
 }
 
 // Run only when executed directly (not when imported by tests).
-if (import.meta.url === `file://${process.argv[1]}`) {
-  void main();
+if (isEntryPoint(import.meta.url, process.argv[1])) {
+  main().catch((err: unknown) => {
+    console.error(`[dash-ota-backend] ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
 }

@@ -56,8 +56,8 @@ const ZONES: Zone[] = [
 ];
 
 const LINKS = [
-  'POST /admin/publish · pre-signed manifest + ciphertext',
-  'check (device-key signed) → signed manifest + one-time token → download → ciphertext',
+  'POST /admin/releases · signed manifest, then each new encrypted blob, then finalize',
+  'check (device-key signed) → signed manifest + download token → download → ciphertext',
   'hands the encrypted bytes to native — before anything is trusted',
 ];
 

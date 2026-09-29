@@ -6,8 +6,8 @@
  * - {@link DatabaseProvider} — durable metadata (releases, installs, trusted signing keys,
  *   native-version policies). Map onto Postgres, SQLite, Cloudflare D1, …
  * - {@link BlobStore} — the encrypted bundle bytes. Map onto local disk, S3 / R2 / MinIO, …
- * - {@link CacheProvider} — ephemeral, TTL'd single-use state (client-nonce replay guard,
- *   one-time download tokens, server nonces). Map onto in-memory (single node) or Redis
+ * - {@link CacheProvider} — ephemeral, TTL'd state (client-nonce replay guard, download
+ *   tokens, server nonces). Map onto in-memory (single node) or Redis
  *   (multi-instance — required for correct anti-replay across >1 replica).
  *
  * The defaults exported here ({@link DiskDatabaseProvider} + {@link DiskBlobStore} +
@@ -161,8 +161,8 @@ export interface RateLimitResult {
 }
 
 /**
- * Ephemeral, TTL'd single-use state. **Must be shared across instances** (e.g. Redis) for the
- * anti-replay, one-time-token, and rate-limit guarantees to hold when running more than one
+ * Ephemeral, TTL'd state. **Must be shared across instances** (e.g. Redis) for the
+ * anti-replay (client and server nonces) and rate-limit guarantees to hold when running more than one
  * replica; the in-memory default only protects a single process.
  */
 export interface CacheProvider {
@@ -338,7 +338,7 @@ export class DiskBlobStore implements BlobStore {
 
 /**
  * Default cache: in-process maps with lazy TTL sweeping. Single-node only — the replay guard
- * and one-time tokens are per-process, so use a shared {@link CacheProvider} (Redis) when
+ * and tokens are per-process, so use a shared {@link CacheProvider} (Redis) when
  * running more than one instance.
  */
 export class MemoryCacheProvider implements CacheProvider {

@@ -18,8 +18,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # allow one concurrent deployment; don't cancel an in-progress production deploy
 concurrency:
@@ -29,11 +27,16 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: website
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Full history: each page's "Last updated" date comes from git log.
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           # 20.19 is the floor @mongodb-js/zstd sets for the CLI and backend; keep the docs
@@ -42,11 +45,10 @@ jobs:
           cache: npm
           cache-dependency-path: website/package-lock.json
       - run: npm ci
+      - run: npm run typecheck
       # `prebuild` runs check:docs (commands, flags, admonitions, Node floor, API drift) and
       # regenerates llms.txt. `onBrokenLinks: throw` makes a dead link fail the build.
       - run: npm run build
-      - uses: actions/configure-pages@v6
-        if: github.event_name != 'pull_request'
       - uses: actions/upload-pages-artifact@v5
         if: github.event_name != 'pull_request'
         with:
@@ -56,6 +58,10 @@ jobs:
     needs: build
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

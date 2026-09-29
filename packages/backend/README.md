@@ -1,38 +1,41 @@
 # @dash-ota/backend
 
-The [dash-ota](https://github.com/Scripting-Bear/dash-ota) OTA distributor — a **config-driven,
-plug-and-play** backend for React Native over-the-air updates. Serves **pre-signed** manifests +
-AES-256-GCM ciphertext, enforces targeting / rollout / anti-replay, and authenticates devices by
-their **hardware public key (ECDSA P-256)**. It **never signs and never holds the signing key**.
+The server half of [dash-ota](https://scripting-bear.github.io/dash-ota/), self-hosted over-the-air
+updates for React Native. It stores the releases `@dash-ota/cli` publishes and hands them to
+devices: it checks each device's request signature (ECDSA P-256 device keys), picks the release a
+device should get (runtime version, channel, rollout), issues download tokens and records adoption.
+It never signs anything and never holds your signing key, so a breach of this server can't produce
+an update your apps will accept.
 
-Mount it into any **Express / Connect** app with one middleware, or run it standalone — both
-share the same framework-agnostic route core.
+Docs: https://scripting-bear.github.io/dash-ota/docs/backend/installation
 
-> 📖 **Full integration guide:** https://github.com/Scripting-Bear/dash-ota/blob/main/docs/backend.md
+## Install
 
-## Installation
+Node 20.19 or later.
 
 ```sh
 npm install @dash-ota/backend
-npm install express   # optional — only if mounting into an Express app
+npm install express   # only if you mount it into Express
 ```
 
-## Usage
+## Use
 
-```ts
+```js
+// server.mjs
 import express from 'express';
 import { dashOtaMiddleware, rawBodySaver } from '@dash-ota/backend';
 
 const app = express();
 
-// The OTA request signature is over the RAW body. Keep the raw bytes (or mount before any parser).
-app.use(express.json({ verify: rawBodySaver }));
+// Request signatures cover the raw body; release manifests can exceed express.json's 100 kB default.
+app.use(express.json({ limit: '32mb', verify: rawBodySaver }));
 
 app.use(
   dashOtaMiddleware({
-    adminToken: process.env.OTA_ADMIN_TOKEN,            // protects /admin/* (used by @dash-ota/cli)
-    verifyEnrollToken: (token) => auth.verify(token),   // your app-session auth
-    onConfirm: (e) => metrics.track('ota_confirm', e),  // your analytics
+    adminToken: process.env.OTA_ADMIN_TOKEN,         // protects /admin/*; no default
+    storageDir: '/var/lib/dash-ota/storage',         // release files
+    dataDir: '/var/lib/dash-ota/data',               // release and device metadata
+    verifyEnrollToken: async (token) => checkSession(token), // your own session check
     logger: console,
   }),
 );
@@ -40,18 +43,25 @@ app.use(
 app.listen(4455);
 ```
 
-Mount at the **root** — routes are absolute (`/ota/v2/*`, `/admin/*`, `/health`) and anything the
-middleware doesn't own falls through to `next()`. Also available: `createOtaBackend(options)`
-(umbrella with `.middleware` / `.listen()`), a standalone `node:http` server, and a bring-your-own
-`store`.
+`checkSession` stands for your own function that returns `true` for a valid user session token.
+Mount the middleware at the root: the routes are absolute (`/ota/v2/*`, `/admin/*`, `/health`,
+`/ready`) and anything else falls through to `next()`. The same routes are available as
+`createOtaBackend(options)` (with `.middleware` and `.listen()`), as a standalone server
+(`node node_modules/@dash-ota/backend/dist/server.js`, configured by environment variables), and
+through Postgres, SQLite, Redis and S3 adapters.
 
-## Config & hooks
+## Upgrading from 0.5.0
 
-All optional with safe defaults (and env fallbacks): `adminToken`, `storageDir`, `dataDir`,
-`timestampSkewMs`, `downloadTokenTtlMs`, `nonceTtlMs`, `autoPauseFailureRate`,
-`autoPauseMinSamples`, `requireRequestSignature`, `requireEnrollAuth`, plus hooks
-`verifyEnrollToken` / `onConfirm` / `onPublish` / `logger` / `store`. Full table + endpoint
-reference in the [guide](https://github.com/Scripting-Bear/dash-ota/blob/main/docs/backend.md).
+0.5.0 kept its data inside `node_modules/@dash-ota/backend/` by default, which `npm install` deletes.
+From 0.5.1 the defaults are `<working directory>/.dash-ota/storage` and `.dash-ota/data`, and the
+server refuses to start with a data directory inside `node_modules`. If you relied on the old
+defaults, copy `node_modules/@dash-ota/backend/storage` and `.data` somewhere safe before upgrading,
+and point `storageDir` and `dataDir` at them.
+
+## Configuration
+
+Every option has an environment variable and a default that fails closed:
+https://scripting-bear.github.io/dash-ota/docs/backend/configuration
 
 ## License
 

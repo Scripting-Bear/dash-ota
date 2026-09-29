@@ -29,11 +29,14 @@ import {
   encryptPrivateKeyPem,
   fingerprintProject,
   flagBool,
+  flagInt,
   flagStr,
   isEncryptedPem,
   assertKnownFlags,
+  MAX_INT32,
   type ParsedArgs,
   parseArgs,
+  parseIntStrict,
   readBundleDir,
   resolveServer,
   resolveVerifyKey,
@@ -43,6 +46,7 @@ import {
   listReleases,
   type OnEvent,
   prepareRelease,
+  releaseState,
   rollbackRelease,
   setNativePolicy,
   setPaused,
@@ -50,6 +54,7 @@ import {
   uploadRelease,
 } from './core.js';
 import { loadDashboardConfig, startDashboard } from './dashboard/server.js';
+import { assertFlagValues, formatCommandHelp, formatGlobalHelp, isCommand } from './usage.js';
 
 function asPlatform(v: string): Platform {
   if (v !== 'ios' && v !== 'android') throw new Error(`--platform must be ios|android (got "${v}")`);
@@ -59,13 +64,16 @@ function asChannel(v: string): Channel {
   if (v !== 'dev' && v !== 'uat' && v !== 'prod') throw new Error(`--channel must be dev|uat|prod (got "${v}")`);
   return v;
 }
+function requireFlag(args: ParsedArgs, name: string): string {
+  const value = flagStr(args, name);
+  if (!value) throw new Error(`--${name} is required`);
+  return value;
+}
 
 /** Generate a signing keypair and write it out. */
 async function cmdKeygen(args: ParsedArgs): Promise<void> {
   const out = flagStr(args, 'out', '.keys');
   const keyId = flagStr(args, 'key-id', 'key_dev_1');
-  mkdirSync(out, { recursive: true });
-
   const privatePath = join(out, `${keyId}.private.pem`);
   const contentKeyPath = join(out, `${keyId}.content.key`);
 
@@ -105,17 +113,27 @@ async function cmdKeygen(args: ParsedArgs): Promise<void> {
     console.warn('    store build ships with the new one.');
   }
 
-  const kp = generateSigningKeyPair();
+  // Checked before any file is written, so a missing admin token cannot leave a key that was never registered.
+  const registerTarget = flagBool(args, 'register') ? resolveServer(args) : undefined;
 
-  // Encrypt the private key at rest unless explicitly opted out. Passphrase from flag/env, or
-  // prompt interactively (blank = store unencrypted, with a loud warning).
+  // Encrypt the private key at rest unless explicitly opted out. Passphrase from flag/env, or a
+  // prompt on a terminal (blank = store unencrypted, with a loud warning).
   let passphrase = flagStr(args, 'passphrase') || process.env.OTA_KEY_PASSPHRASE || '';
   const noEncrypt = flagBool(args, 'no-encrypt');
   if (!passphrase && !noEncrypt) {
+    if (!process.stdin.isTTY) {
+      throw new Error(
+        'no passphrase for the signing key, and stdin is not a terminal to ask for one. Pass ' +
+          '--passphrase <p> or set OTA_KEY_PASSPHRASE to encrypt it, or pass --no-encrypt to store it unencrypted.',
+      );
+    }
     passphrase = await askSecret('Passphrase to encrypt the signing key at rest (blank = store UNENCRYPTED)');
+    if (!passphrase) console.warn('  ⚠ no passphrase entered: the signing key will be stored UNENCRYPTED.');
   }
+  const kp = generateSigningKeyPair();
   const privatePem = passphrase ? encryptPrivateKeyPem(kp.privateKeyPem, passphrase) : kp.privateKeyPem;
 
+  mkdirSync(out, { recursive: true });
   writeFileSync(privatePath, privatePem, { mode: 0o600 });
   // The content key seals blob bytes. It is carried in every manifest in the clear, so it is not
   // a secret from any device — but it must be the SAME key for every release on this channel, or
@@ -137,13 +155,14 @@ async function cmdKeygen(args: ParsedArgs): Promise<void> {
   console.log(`\n  → Embed publicKeyRawB64 in the app (per channel) and KEEP THE PRIVATE KEY in CI secrets only.`);
   // Only ever prompt when the caller asked for a conversation. A bare `keygen` in CI must not
   // block on a question nobody can answer; `--register` is the scripted way to say yes.
-  const register = flagBool(args, 'register')
-    ? true
-    : flagBool(args, 'interactive') && (await askYesNo('\nRegister this public key with the backend now?', false));
-  if (register) {
-    const { server, adminToken } = resolveServer(args);
-    await adminPost(server, '/admin/keys', { keyId, publicKeyRawB64: kp.publicKeyRawB64 }, adminToken);
-    console.log(`✓ registered ${keyId} with ${server}`);
+  const target =
+    registerTarget ??
+    (flagBool(args, 'interactive') && (await askYesNo('\nRegister this public key with the backend now?', false))
+      ? resolveServer(args)
+      : undefined);
+  if (target) {
+    await adminPost(target.server, '/admin/keys', { keyId, publicKeyRawB64: kp.publicKeyRawB64 }, target.adminToken);
+    console.log(`✓ registered ${keyId} with ${target.server}`);
   }
 }
 
@@ -195,13 +214,16 @@ async function cmdRegisterKey(args: ParsedArgs): Promise<void> {
 /** Print a project's runtimeVersion. */
 function cmdFingerprint(args: ParsedArgs): void {
   const project = flagStr(args, 'project', process.cwd());
-  const { runtimeVersion, inputs } = fingerprintProject(project);
+  const { runtimeVersion, inputs, nativeSources } = fingerprintProject(project);
+  const sourceNote = { git: ' (files git tracks)', disk: ' (files on disk)', absent: '' };
   console.log(`runtimeVersion: ${runtimeVersion}`);
   console.log(`  rn:      ${inputs.reactNativeVersion}`);
   console.log(`  hermes:  ${inputs.hermesVersion}`);
-  console.log(`  deps:    ${inputs.nativeDependencies.length}`);
-  console.log(`  android: ${inputs.nativeDirHashes.android}`);
-  console.log(`  ios:     ${inputs.nativeDirHashes.ios}`);
+  console.log(
+    `  deps:    ${inputs.nativeDependencies.length} (any change to package.json dependencies changes the runtimeVersion)`,
+  );
+  console.log(`  android: ${inputs.nativeDirHashes.android}${sourceNote[nativeSources.android]}`);
+  console.log(`  ios:     ${inputs.nativeDirHashes.ios}${sourceNote[nativeSources.ios]}`);
 }
 
 const printEvent: OnEvent = (event) => {
@@ -230,8 +252,12 @@ async function cmdBundle(args: ParsedArgs): Promise<void> {
 /** Build, sign, and upload a release. */
 async function cmdPublish(args: ParsedArgs): Promise<void> {
   const interactive = flagBool(args, 'interactive');
-  const bundleDir = flagStr(args, 'bundle-dir');
-  if (!bundleDir) throw new Error('--bundle-dir is required');
+  const bundleDir = requireFlag(args, 'bundle-dir');
+  // Numbers are checked before any prompt, fingerprint or key read.
+  const bundleVersionFlag = flagInt(args, 'bundle-version', 1, MAX_INT32);
+  const rolloutFlag = flagInt(args, 'rollout', 0, 100);
+  const minNativeBuild = flagInt(args, 'min-native-build', 0, MAX_INT32);
+  const compressionLevel = flagInt(args, 'compression-level', 1, 22);
   const files = readBundleDir(bundleDir);
   if (files.length === 0) throw new Error(`no files in ${bundleDir}`);
 
@@ -248,16 +274,14 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
     console.log(`runtimeVersion (auto): ${runtimeVersion}`);
   }
 
-  const bundleVersion = Number.parseInt(
-    flagStr(args, 'bundle-version') || (interactive ? await ask('bundleVersion (integer)', '1') : '1'),
-    10,
-  );
-  if (!Number.isInteger(bundleVersion)) throw new Error('--bundle-version must be an integer');
+  const bundleVersion =
+    bundleVersionFlag ??
+    (interactive ? parseIntStrict(await ask('bundleVersion (integer)', '1'), 'bundleVersion', 1, MAX_INT32) : 1);
 
   const mandatory = flagBool(args, 'mandatory') || (interactive ? await askYesNo('mandatory update?', false) : false);
   const targetAppVersions =
     flagStr(args, 'target-app-versions') || (interactive ? await ask('targetAppVersions (blank = any)', '') : '');
-  const rollout = Number.parseInt(flagStr(args, 'rollout') || (interactive ? await ask('rollout %', '100') : '100'), 10);
+  const rollout = rolloutFlag ?? (interactive ? parseIntStrict(await ask('rollout %', '100'), 'rollout', 0, 100) : 100);
 
   let releaseNotes = flagStr(args, 'release-note');
   if (!releaseNotes && interactive) releaseNotes = await askMultiline('Release notes');
@@ -283,7 +307,6 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
   if (!appId) throw new Error('--app-id is required: the device refuses a manifest built for a different app');
   const encrypt = !flagBool(args, 'no-encrypt');
   const contentKey = encrypt ? resolveContentKey(args, keyPath, keyId) : undefined;
-  const levelFlag = flagStr(args, 'compression-level');
   const bundleIdFlag = flagStr(args, 'bundle-id');
 
   const prepared = await prepareRelease(
@@ -301,7 +324,8 @@ async function cmdPublish(args: ParsedArgs): Promise<void> {
       verifyKey: resolveVerifyKey(args, keyPath, privateKeyPem),
       ...(contentKey ? { contentKey } : {}),
       ...(bundleIdFlag ? { bundleId: bundleIdFlag } : {}),
-      ...(levelFlag ? { compressionLevel: Number.parseInt(levelFlag, 10) } : {}),
+      ...(compressionLevel !== undefined ? { compressionLevel } : {}),
+      ...(minNativeBuild !== undefined ? { minNativeBuild } : {}),
       ...(targetAppVersions ? { targetAppVersions } : {}),
       ...(releaseNotes ? { releaseNotes } : {}),
     },
@@ -330,34 +354,44 @@ async function cmdList(args: ParsedArgs): Promise<void> {
     return;
   }
   for (const r of releases) {
-    const state = r.rolledBack ? 'ROLLED_BACK' : r.paused ? 'PAUSED' : `${r.rolloutPercentage}%`;
     console.log(
-      `${r.bundleId}  [${r.platform}/${r.channel}]  rt=${r.runtimeVersion} v${r.bundleVersion}  ${state}  adoption=${JSON.stringify(r.adoption)}`,
+      `${r.bundleId}  [${r.platform}/${r.channel}]  rt=${r.runtimeVersion} v${r.bundleVersion}  ${releaseState(r)}  adoption=${JSON.stringify(r.adoption)}`,
     );
+  }
+  if (releases.some((r) => r.finalized === false)) {
+    console.log('\nINCOMPLETE: declared but never finalized (an interrupted publish). Devices are never offered it.');
   }
 }
 
 async function cmdRollout(args: ParsedArgs): Promise<void> {
-  await setRollout(resolveServer(args), flagStr(args, 'bundle-id'), Number.parseInt(flagStr(args, 'pct', '100'), 10));
-  console.log('✓ rollout updated');
+  const bundleId = requireFlag(args, 'bundle-id');
+  const pct = flagInt(args, 'pct', 0, 100) ?? 100;
+  await setRollout(resolveServer(args), bundleId, pct);
+  console.log(`✓ rollout updated to ${pct}%`);
 }
 
 async function cmdPause(args: ParsedArgs): Promise<void> {
-  await setPaused(resolveServer(args), flagStr(args, 'bundle-id'), !flagBool(args, 'resume'));
+  const bundleId = requireFlag(args, 'bundle-id');
+  await setPaused(resolveServer(args), bundleId, !flagBool(args, 'resume'));
   console.log('✓ pause state updated');
 }
 
 async function cmdRollback(args: ParsedArgs): Promise<void> {
-  await rollbackRelease(resolveServer(args), flagStr(args, 'bundle-id'));
+  const bundleId = requireFlag(args, 'bundle-id');
+  await rollbackRelease(resolveServer(args), bundleId);
   console.log('✓ release rolled back (paused + flagged)');
 }
 
 async function cmdNativePolicy(args: ParsedArgs): Promise<void> {
   const storeUrl = flagStr(args, 'store-url');
+  const channel = asChannel(flagStr(args, 'channel', 'dev'));
+  const minSupportedNativeVersion = flagInt(args, 'min', 0, MAX_INT32) ?? 0;
+  const severity = flagStr(args, 'severity', 'hard');
+  if (severity !== 'soft' && severity !== 'hard') throw new Error(`--severity must be soft or hard (got "${severity}")`);
   await setNativePolicy(resolveServer(args), {
-    channel: asChannel(flagStr(args, 'channel', 'dev')),
-    minSupportedNativeVersion: Number.parseInt(flagStr(args, 'min', '0'), 10),
-    severity: flagStr(args, 'severity', 'hard'),
+    channel,
+    minSupportedNativeVersion,
+    severity,
     ...(storeUrl ? { storeUrl } : {}),
   });
   console.log('✓ native policy updated');
@@ -377,8 +411,9 @@ function openBrowser(url: string): void {
 
 /** Serve the local dashboard until Ctrl+C. */
 async function cmdDashboard(args: ParsedArgs): Promise<void> {
+  const port = flagInt(args, 'port', 0, 65535) ?? 4460;
   const { config, project } = await loadDashboardConfig(flagStr(args, 'config', 'dash-ota.config.mjs'));
-  const handle = await startDashboard({ config, project, port: Number.parseInt(flagStr(args, 'port', '4460'), 10) });
+  const handle = await startDashboard({ config, project, port });
   console.log(`dash-ota dashboard → ${handle.url}`);
   console.log("  local only (127.0.0.1) · the link carries this session's token · Ctrl+C to stop");
   if (!flagBool(args, 'no-open')) openBrowser(handle.url);
@@ -389,46 +424,29 @@ async function cmdDashboard(args: ParsedArgs): Promise<void> {
   });
 }
 
-function printHelp(): void {
-  console.log(`dash-ota <command> [flags]
-
-  keygen          --out .keys --key-id key_dev_1 [--passphrase <p> | --no-encrypt]
-                  [--content-key-only] [--force] [--register --server --admin-token]
-                  [--interactive]
-  register-key    --key-id <id> (--pub <rawB64> | --key-file <.public.json>)
-  fingerprint     --project <path>
-  bundle          --project <path> --platform ios|android --out <dir> [--dev] [--hermes]
-  publish         --bundle-dir <dir> --app-id <package name> --platform ios|android
-                  --channel dev|uat|prod --runtime-version auto|<R> --bundle-version <n>
-                  [--mandatory] [--target-app-versions <range>] [--rollout <pct>]
-                  [--release-note <txt>] [--bundle-id <id>] [--interactive]
-                  [--no-encrypt] [--content-key <b64>] [--compression-level <1-22>] [--no-upload]
-                  [--key <pem>] [--key-id <id>] [--passphrase <p>] [--verify-pub <rawB64>]
-                  [--server --admin-token]
-  list            [--server --admin-token]
-  rollout         --bundle-id <id> --pct <0-100>
-  pause           --bundle-id <id> [--resume]
-  rollback        --bundle-id <id>
-  native-policy   --channel <c> --min <build> --severity soft|hard [--store-url <url>]
-  dashboard       [--config dash-ota.config.mjs] [--port 4460] [--no-open]
-                  local web UI for all of the above (127.0.0.1 only)
-
-  Wire format: protocol 2 — one content-addressed blob per distinct file, compressed with zstd
-  and (unless --no-encrypt) encrypted per release. Publishing uploads only the blobs the server
-  is missing; a device downloads only the files it does not already hold. --app-id is required:
-  a device refuses a manifest built for a different app. Releases are immutable once finalized.
-
-  Trust root: --admin-token (or OTA_ADMIN_TOKEN) is required for server calls — no default.
-  Plaintext http:// to a remote host is refused (use https://, or --allow-insecure on a
-  trusted network). Encrypted signing keys need a passphrase — prefer OTA_KEY_PASSPHRASE or the
-  masked prompt over --passphrase (a CLI flag is visible in process listings / shell history).
-`);
+function unknownCommand(command: string): void {
+  console.error(`✗ unknown command "${command}"`);
+  console.log(formatGlobalHelp());
+  process.exitCode = 1;
 }
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const command = args._[0];
-  if (command) assertKnownFlags(command, args);
+  const [command, ...rest] = args._;
+  if (!command || command === 'help' || command === '-h') {
+    const topic = command === 'help' ? rest[0] : undefined;
+    if (!topic) console.log(formatGlobalHelp());
+    else if (isCommand(topic)) console.log(formatCommandHelp(topic));
+    else unknownCommand(topic);
+    return;
+  }
+  if (!isCommand(command)) return unknownCommand(command);
+  if (args.flags.help !== undefined || rest.includes('-h')) {
+    console.log(formatCommandHelp(command));
+    return;
+  }
+  assertKnownFlags(command, args);
+  assertFlagValues(command, args);
   switch (command) {
     case 'keygen':
       return cmdKeygen(args);
@@ -453,8 +471,7 @@ async function main(): Promise<void> {
     case 'dashboard':
       return cmdDashboard(args);
     default:
-      printHelp();
-      if (command && command !== 'help') process.exitCode = 1;
+      return unknownCommand(command);
   }
 }
 

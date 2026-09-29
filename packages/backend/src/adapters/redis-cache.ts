@@ -1,6 +1,6 @@
 /**
- * Redis-backed {@link CacheProvider} — the multi-instance upgrade for the ephemeral single-use
- * state (client-nonce replay guard, one-time download tokens, server nonces, rate-limit counters).
+ * Redis-backed {@link CacheProvider} — the multi-instance upgrade for the ephemeral state
+ * (client-nonce replay guard, download tokens, server nonces, rate-limit counters).
  * The in-memory default only protects one process; behind a load balancer you **need** a shared
  * cache for the anti-replay and rate-limit guarantees to actually hold.
  *
@@ -13,7 +13,7 @@
  * 3. **Advanced** — construct it yourself with your own client (Cluster / Sentinel / shared pool):
  *    `new RedisCacheProvider({ client: myIoredisClient })`.
  *
- * Requires Redis 6.2+ (uses `GETDEL` for the atomic one-time-token consume).
+ * Requires Redis 6.2+ (`consumeToken` uses `GETDEL`).
  *
  * @module adapters/redis-cache
  */
@@ -25,7 +25,9 @@ import type { CacheProvider, RateLimitResult } from '../providers.js';
  * client (a Cluster, a wrapped pool) can be injected without depending on the exact `ioredis` type.
  */
 export interface RedisLike {
-  set(key: string, value: string, ...args: (string | number)[]): Promise<unknown>;
+  /** Overloads mirror the exact calls made, so ioredis `Redis` and `Cluster` assign without a cast. */
+  set(key: string, value: string, px: 'PX', milliseconds: number, nx: 'NX'): Promise<unknown>;
+  set(key: string, value: string, px: 'PX', milliseconds: number): Promise<unknown>;
   get(key: string): Promise<string | null>;
   getdel(key: string): Promise<string | null>;
   eval(script: string, numKeys: number, ...args: (string | number)[]): Promise<unknown>;
@@ -69,7 +71,7 @@ export class RedisCacheProvider implements CacheProvider {
           // (e.g. a bad URL) must propagate as themselves, not be mislabelled as a missing dep.
           throw new Error("dash-ota: the Redis cache needs the optional 'ioredis' peer dependency — run `npm i ioredis`.");
         })
-        .then((mod) => new mod.Redis(this.opts.url ?? 'redis://localhost:6379') as unknown as RedisLike);
+        .then((mod): RedisLike => new mod.Redis(this.opts.url ?? 'redis://localhost:6379'));
     }
     return this.clientPromise;
   }

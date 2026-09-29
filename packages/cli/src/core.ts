@@ -7,7 +7,8 @@
 import { spawn } from 'node:child_process';
 import type { KeyObject } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   type ArchiveFile,
   buildReleaseV2,
@@ -48,20 +49,59 @@ export interface ReleaseSummary {
   mandatory?: boolean;
   releaseNotes?: string;
   createdAt?: string;
+  /** False while a publish is declared but not finalized; absent from backends older than protocol 2. */
+  finalized?: boolean;
   adoption: Record<string, number>;
 }
 
-/** Locate the RN-bundled `hermesc` binary for the current OS, or null if absent. */
-export function resolveHermesc(project: string): string | null {
-  const base = join(project, 'node_modules', 'react-native', 'sdks', 'hermesc');
-  const rel =
+/** How `list` shows a release. An unfinalized one is never offered, so it gets no percentage. */
+export function releaseState(r: Pick<ReleaseSummary, 'finalized' | 'rolledBack' | 'paused' | 'rolloutPercentage'>): string {
+  if (r.finalized === false) return 'INCOMPLETE';
+  if (r.rolledBack) return 'ROLLED_BACK';
+  if (r.paused) return 'PAUSED';
+  return `${r.rolloutPercentage}%`;
+}
+
+function resolveFrom(from: string, request: string): string | null {
+  try {
+    return createRequire(from).resolve(request);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where `hermesc` can be for this project, most likely first. React Native 0.83+ depends on the
+ * `hermes-compiler` package and no longer ships `sdks/hermesc`; older versions are the reverse.
+ */
+export function hermescCandidates(project: string): string[] {
+  const bin =
     process.platform === 'darwin'
       ? 'osx-bin/hermesc'
       : process.platform === 'win32'
         ? 'win64-bin/hermesc.exe'
         : 'linux64-bin/hermesc';
-  const p = join(base, rel);
-  return existsSync(p) ? p : null;
+  const root = resolve(project);
+  const rnPackage =
+    resolveFrom(join(root, 'package.json'), 'react-native/package.json') ??
+    join(root, 'node_modules', 'react-native', 'package.json');
+  const compilerPackage =
+    resolveFrom(rnPackage, 'hermes-compiler/package.json') ?? join(root, 'node_modules', 'hermes-compiler', 'package.json');
+  const legacy = join(dirname(rnPackage), 'sdks', 'hermesc', bin);
+  const compiler = join(dirname(compilerPackage), 'hermesc', bin);
+  let rnUsesCompilerPackage = false;
+  try {
+    const rn = JSON.parse(readFileSync(rnPackage, 'utf8')) as { dependencies?: Record<string, string> };
+    rnUsesCompilerPackage = Boolean(rn.dependencies?.['hermes-compiler']);
+  } catch {
+    // react-native is not installed; both locations are still reported.
+  }
+  return rnUsesCompilerPackage ? [compiler, legacy] : [legacy, compiler];
+}
+
+/** Locate the project's `hermesc` for the current OS, or null if absent. */
+export function resolveHermesc(project: string): string | null {
+  return hermescCandidates(project).find((p) => existsSync(p)) ?? null;
 }
 
 function lineSink(onEvent: OnEvent): { write: (chunk: Buffer) => void; end: () => void } {
@@ -111,8 +151,10 @@ export interface BundleOptions {
 
 /** `react-native bundle` into `out`, optionally compiled to Hermes bytecode in place. Returns the bundle path. */
 export async function bundleProject(opts: BundleOptions, onEvent: OnEvent = silent): Promise<string> {
-  mkdirSync(opts.out, { recursive: true });
-  const bundle = join(opts.out, opts.platform === 'android' ? 'index.android.bundle' : 'main.jsbundle');
+  // `react-native bundle` runs in the project; an absolute out keeps a relative --out where the caller meant it.
+  const out = resolve(opts.out);
+  mkdirSync(out, { recursive: true });
+  const bundle = join(out, opts.platform === 'android' ? 'index.android.bundle' : 'main.jsbundle');
   const args = [
     'react-native',
     'bundle',
@@ -120,7 +162,7 @@ export async function bundleProject(opts: BundleOptions, onEvent: OnEvent = sile
     `--dev=${Boolean(opts.dev)}`,
     `--entry-file=${opts.entry ?? 'index.js'}`,
     `--bundle-output=${bundle}`,
-    `--assets-dest=${opts.out}`,
+    `--assets-dest=${out}`,
   ];
   onEvent({ type: 'log', message: `$ npx ${args.join(' ')}` });
   await runStreaming('react-native bundle', 'npx', args, opts.project, onEvent);
@@ -129,12 +171,21 @@ export async function bundleProject(opts: BundleOptions, onEvent: OnEvent = sile
     // Fail loud rather than ship a plain JS bundle to a Hermes app.
     const hermesc = resolveHermesc(opts.project);
     if (!hermesc) {
-      throw new Error('hermesc was not found under node_modules/react-native/sdks/hermesc — cannot produce an HBC bundle');
+      throw new Error(
+        `hermesc was not found — cannot produce an HBC bundle. Looked for:\n` +
+          hermescCandidates(opts.project)
+            .map((p) => `  ${p}`)
+            .join('\n') +
+          `\nInstall the app's dependencies, or bundle without --hermes.`,
+      );
     }
-    const hbc = `${bundle}.hbc`;
-    onEvent({ type: 'log', message: `$ ${hermesc} -emit-binary -O -out ${hbc} ${bundle}` });
-    await runStreaming('hermesc', hermesc, ['-emit-binary', '-O', '-out', hbc, bundle], opts.project, onEvent);
-    renameSync(hbc, bundle);
+    // hermesc records the input path in the bytecode; a relative one keeps the output identical
+    // whatever folder it is built in, so an unchanged bundle is stored once.
+    const name = basename(bundle);
+    // -w: hermesc's undeclared-global warnings echo whole minified lines and change nothing in the output.
+    onEvent({ type: 'log', message: `$ ${hermesc} -emit-binary -O -w -out ${name}.hbc ${name}   (in ${out})` });
+    await runStreaming('hermesc', hermesc, ['-emit-binary', '-O', '-w', '-out', `${name}.hbc`, name], dirname(bundle), onEvent);
+    renameSync(`${bundle}.hbc`, bundle);
     onEvent({ type: 'log', message: `✓ compiled Hermes bytecode (HBC): ${bundle}` });
   }
   return bundle;
@@ -176,6 +227,8 @@ export interface ReleaseInput {
   verifyKey: { key: KeyObject; source: string };
   bundleId?: string;
   compressionLevel?: number;
+  /** Devices whose native build number is lower skip the release. */
+  minNativeBuild?: number;
   targetAppVersions?: string;
   releaseNotes?: string;
 }
@@ -207,6 +260,7 @@ export async function prepareRelease(input: ReleaseInput, onEvent: OnEvent = sil
     encrypt: input.encrypt,
     ...(input.contentKey ? { contentKey: input.contentKey } : {}),
     ...(input.compressionLevel ? { bundleCompressionLevel: input.compressionLevel } : {}),
+    ...(input.minNativeBuild !== undefined ? { minNativeBuild: input.minNativeBuild } : {}),
     ...(input.targetAppVersions ? { targetAppVersions: input.targetAppVersions } : {}),
     ...(input.releaseNotes ? { releaseNotes: input.releaseNotes } : {}),
   });
@@ -224,6 +278,9 @@ export async function prepareRelease(input: ReleaseInput, onEvent: OnEvent = sil
   const storedBytes = [...built.blobs.values()].reduce((sum, b) => sum + b.length, 0);
   onEvent({ type: 'log', message: `\n  bundleId:        ${bundleId}` });
   onEvent({ type: 'log', message: `  runtimeVersion:  ${input.runtimeVersion}   bundleVersion: ${input.bundleVersion}` });
+  if (input.minNativeBuild !== undefined) {
+    onEvent({ type: 'log', message: `  minNativeBuild:  ${input.minNativeBuild} (older native builds skip this release)` });
+  }
   onEvent({
     type: 'log',
     message:
@@ -235,8 +292,9 @@ export async function prepareRelease(input: ReleaseInput, onEvent: OnEvent = sil
 }
 
 /**
- * Declare the release, upload only the blobs the server lacks, then finalize. Re-running after a
- * failure re-declares the same manifest and uploads only the gap.
+ * Declare the release, upload only the blobs the server lacks, then finalize. Calling it again with
+ * the same prepared release re-declares that manifest and uploads only the gap; preparing again
+ * mints a new bundleId unless one is given.
  */
 export async function uploadRelease(
   target: Target,
@@ -252,6 +310,9 @@ export async function uploadRelease(
     target.adminToken,
   )) as { missing?: string[] };
   const missing = created.missing ?? [];
+  if (!Array.isArray(missing) || missing.some((sha) => typeof sha !== 'string')) {
+    throw new Error('the server answered the release declaration with an invalid list of missing blobs');
+  }
   const total = prepared.blobs.size;
   onEvent({ type: 'plan', upload: missing.length, total });
   onEvent({

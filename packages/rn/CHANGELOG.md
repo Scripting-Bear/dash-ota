@@ -1,5 +1,37 @@
 # react-native-dash-ota
 
+## 0.5.1
+
+Fixes an iOS crash introduced in 0.5.0 and closes the gaps a review of the client turned up. No
+API changes; the native changes need a new store build, like any native update.
+
+- **fix (iOS, crash):** 0.5.0 subscribed to download progress through `NativeEventEmitter` on both
+  platforms, but the iOS module did not implement `addListener`/`removeListeners`, so starting a
+  download raised an unrecognized-selector exception. iOS now implements both as no-ops, and the
+  client only subscribes on Android, where the event exists.
+- **fix (iOS):** `applyUpdate(true)` reloaded the old bundle. The bundle loader resolves once per
+  process, and a reload is the same process; the restart now clears that cache first.
+- **fix (iOS):** rejections carried a generic "The operation couldn't be completed" message instead
+  of the real reason, such as `manifest signature did not verify`. That also stopped the automatic
+  re-check after an expired download token from ever firing on iOS.
+- **security:** native code now rejects a signed manifest whose `channel` or `platform` differs from
+  the binary's, or whose `minNativeBuild` is above the installed build. The server already filters
+  on these; the device checks them too, so a breached server cannot hand one channel's release to
+  another channel that trusts the same key. `bundleId` and every file hash are checked for safe
+  characters before they are used as file names.
+- **fix:** an update announced as mandatory kept `isMandatory` and `ui.blocking` set after its
+  download or verification failed, which could leave a blocking screen up with nothing to install.
+  An announcement is unverified until native checks the signature, so it now stops blocking when
+  the download fails or the bundle is disabled. A verified, staged mandatory bundle still blocks.
+- **fix:** the `healthy` report was never sent when `markHealthy()` ran on mount, before the first
+  check had loaded the current bundle. It is now sent after the next check.
+- **fix:** if the last-known-good bundle also crash-loops after a revert, the device now falls back
+  to the embedded bundle. Previously the fallback ran without the breaker watching it.
+- **fix (iOS):** the slot state file is written atomically.
+- **fix:** a check response without `nativePolicy` no longer throws.
+- **package:** repository links point at the real repository, `peerDependencies` states the React
+  Native 0.79 floor, and Android unit tests are no longer published.
+
 ## 0.5.0
 
 Closes a hole in the force-update gate: the policy that drives it is not covered by the manifest
@@ -63,6 +95,8 @@ unchanged file is stored and transferred once across every release that contains
   update policy and no releases; the v1 routes are tombstones that return 410.
 
 ## 0.3.2
+
+Never published to npm: the next release on npm after 0.3.1 is 0.4.0, which includes these fixes.
 
 Fixes a bug that made every OTA update appear to apply, lose all of its bundled images, and then
 revert on the next launch.

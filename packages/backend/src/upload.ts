@@ -34,9 +34,9 @@ export interface SpooledBlob {
  * Read a request body to a temp file, hashing as it goes.
  *
  * @param body - the request stream.
- * @param maxBytes - hard cap; exceeding it aborts the read and throws.
+ * @param maxBytes - hard cap; past it nothing more is written and the rest is discarded.
  * @returns the spooled file, its size and its SHA-256.
- * @throws {BlobTooLargeError} when the body exceeds `maxBytes`.
+ * @throws {BlobTooLargeError} once an over-cap body has been read to the end.
  */
 export async function spoolToTemp(body: Readable, maxBytes: number): Promise<SpooledBlob> {
   const dir = mkdtempSync(join(tmpdir(), 'dash-ota-'));
@@ -44,17 +44,20 @@ export async function spoolToTemp(body: Readable, maxBytes: number): Promise<Spo
   const out = createWriteStream(path);
   const hash = createHash('sha256');
   let size = 0;
+  let tooLarge = false;
   const dispose = (): void => rmSync(dir, { recursive: true, force: true });
 
   try {
     await new Promise<void>((resolve, reject) => {
       body.on('data', (chunk: Buffer) => {
+        if (tooLarge) return;
         size += chunk.length;
         if (size > maxBytes) {
-          // Stop reading immediately rather than draining a hostile body to the end.
-          body.destroy();
+          // Discard the rest instead of destroying the socket, so the client reads a 413 rather
+          // than a connection reset it would retry as a network fault.
+          tooLarge = true;
           out.destroy();
-          reject(new BlobTooLargeError(maxBytes));
+          body.resume();
           return;
         }
         hash.update(chunk);
@@ -64,7 +67,7 @@ export async function spoolToTemp(body: Readable, maxBytes: number): Promise<Spo
         }
       });
       body.on('error', reject);
-      body.on('end', () => out.end(resolve));
+      body.on('end', () => (tooLarge ? reject(new BlobTooLargeError(maxBytes)) : out.end(resolve)));
       out.on('error', reject);
     });
   } catch (err) {

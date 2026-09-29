@@ -7,7 +7,7 @@ const STORAGE_KEYS: {
 };
 ```
 
-Defined in: [config.ts:91](https://github.com/Scripting-Bear/dash-ota/blob/df5363f74f8243f8cfb8ecb1e117a3b2926aac5c/packages/rn/src/config.ts#L91)
+Defined in: [config.ts:91](https://github.com/Scripting-Bear/dash-ota/blob/main/packages/rn/src/config.ts#L91)
 
 Storage keys used internally.
 

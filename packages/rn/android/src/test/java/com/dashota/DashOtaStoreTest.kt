@@ -95,6 +95,31 @@ class DashOtaStoreTest {
   }
 
   @Test
+  fun `a last known good that also crash-loops falls back to the embedded bundle`() {
+    stagePending("bnd_good", 1)
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markHealthy(ctx)
+
+    stagePending("bnd_bad", 2)
+    repeat(2) {
+      DashOtaStore.resolveBundleAtLaunch(ctx)
+      DashOtaStore.markBeacon(ctx)
+    }
+    // The breaker reverts to bnd_good, which now runs on trial with only the embedded bundle behind it.
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markBeacon(ctx)
+    assertEquals("bnd_good", slotId("current"))
+    assertTrue(state().getBoolean("trial"))
+    assertNull(slotId("lastKnownGood"))
+
+    DashOtaStore.resolveBundleAtLaunch(ctx)
+    DashOtaStore.markBeacon(ctx)
+    assertNull(DashOtaStore.resolveBundleAtLaunch(ctx))
+    assertNull(slotId("current"))
+    assertTrue(DashOtaStore.isDisabled(ctx, "bnd_good"))
+  }
+
+  @Test
   fun `force killing the app never disables a healthy bundle`() {
     stagePending("bnd_1", 1)
     DashOtaStore.resolveBundleAtLaunch(ctx)

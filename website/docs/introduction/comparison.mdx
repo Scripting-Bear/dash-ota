@@ -1,70 +1,99 @@
 ---
 sidebar_position: 2
 title: dash-ota vs alternatives
-description: How dash-ota compares to Stallion, hot-updater, CodePush, and expo-updates.
+description: How dash-ota compares to Stallion, hot-updater, CodePush and expo-updates, including where the others are ahead.
 ---
 
 import ComparisonMatrix from '@site/src/components/ComparisonMatrix';
 
 # dash-ota vs the alternatives
 
-There are good OTA tools for React Native, and several of them do more than this page used to
-give them credit for. Stallion signs its bundles with RSA/SHA-256 and verifies them on device.
-hot-updater and Stallion both recover automatically from a bundle that fails to start. Expo's
-`expo-updates` has opt-in code signing and its own error-recovery path.
+Every tool on this page can sign bundles and verify the signature on the device. Stallion,
+hot-updater, CodePush and Expo's `expo-updates` all offer it, and in each of them the private key
+stays with you rather than on the update server. In all four, signing is opt-in.
 
-So "we sign and they don't" is not the honest pitch. What is left, and what this page tries to
-show, is narrower: where the signing key lives, what the update request itself proves, and what
-the server can still do to you when it is hostile rather than merely wrong.
+## What dash-ota does differently
+
+- Signing is mandatory. There is no unsigned mode: the CLI signs every release with Ed25519, and
+  native code on the device rejects any release that doesn't verify against the public keys
+  compiled into the app. There is no setting to forget.
+- The update server never holds the signing key. The backend stores and serves releases that were
+  signed before they reached it. Someone with root on it can hold back updates or re-serve old
+  ones you signed, but can't create a new one.
+- Delivery is per file and content-addressed, meaning each file is stored under the SHA-256 hash
+  of its contents. A device downloads only the files it doesn't already have, and checks each one
+  against the hash in the signed manifest.
+- Requests are signed with a device key. Each install creates its own key pair (Android Keystore,
+  or the Secure Enclave on iOS) and signs every request with a timestamp and a random nonce, a
+  value the server refuses to accept twice.
+- Auto-pause is on by default. Devices report when a release fails on them; once at least 5
+  reports are in and 20% or more of them are failures, the server stops offering that release.
+- You host all of it. The client, CLI and backend are MIT-licensed, and no vendor service sits
+  between your CI and your users' devices.
+
+Two limits to know before you rely on those points. A device key proves that requests come from
+the same install; it doesn't prove the install is a genuine copy of your app. Enrollment accepts
+whatever your backend's `verifyEnrollToken` hook accepts, attestation is an optional hook that is
+off by default, and on iOS the key falls back to software unless you set
+`OTA_REQUIRE_HARDWARE_KEY`. And the AES-256-GCM payload encryption only hides blobs from someone
+who can read your storage and nothing else: the backend and every enrolled install can decrypt
+them.
+
+See the [security model](/docs/concepts/security-model) and the
+[breach walkthrough](/docs/security/breach) for what a compromised server can still do.
 
 ## Feature matrix
 
 <ComparisonMatrix />
 
-Competitor rows were checked against each project's own documentation in September 2026. If
-something here is out of date or unfair, [open an issue](https://github.com/Scripting-Bear/dash-ota/issues)
-— a comparison table nobody corrects is a marketing page, not a comparison.
+Competitor cells were checked against each project's own documentation in September 2026. Hover
+a cell for its note. If something here is out of date or unfair, [open an
+issue](https://github.com/Scripting-Bear/dash-ota/issues).
 
-## Where the security rows actually differ
+## Where the others are ahead
 
-Signing is table stakes now. The differences are further down:
+- Patches. hot-updater, Stallion (Pro plan and up) and EAS Update (bundle diffing, on by default
+  from SDK 56) send a diff against the bundle the device already has. hot-updater's docs give the
+  example of a 10 MB archive shipping as a patch of about 600 KB. dash-ota doesn't generate
+  patches: unchanged files aren't downloaded again, but a changed JS bundle downloads whole.
+- CDN delivery. hot-updater gives the device a signed URL to your storage. dash-ota streams every
+  blob through your own API, so your API carries all of the download traffic.
+- Switching channels for QA. EAS Update's "channel surfing", hot-updater's runtime channel switch,
+  Stallion's in-app testing modal and CodePush's `deploymentKey` option all let a tester point one
+  build at another channel. In dash-ota the channel is compiled into the binary, so testing
+  another channel means installing another build.
+- Hosted free tiers. Stallion is free up to 10K monthly active users and EAS Update up to 1K.
+  dash-ota has no hosted option; you run the backend.
+- The Expo workflow. EAS Update can publish an update from a pull request and preview it in a
+  development build. If your app is built with Expo and EAS, `expo-updates` fits that toolchain
+  far better.
+- Crash tooling. hot-updater has `withSentry()`, which uploads source maps. dash-ota has nothing
+  built in; you upload source maps to your crash reporter yourself.
+- Adoption. npm downloads for the last month: `expo-updates` about 13.9 million,
+  `@hot-updater/react-native` about 131k, `react-native-stallion` about 28k,
+  `react-native-dash-ota` about 460. More users means more bugs already found and more answers
+  already written.
+- Older React Native. Stallion supports React Native 0.69 and later. dash-ota needs 0.79 or later
+  with the New Architecture.
 
-- **Where the signing key lives.** dash-ota's CLI signs and the backend never receives the key,
-  so a breached distribution server has nothing to forge with. Stallion self-hosted lets you hold
-  your own keys; its managed tier does not document where they live. With `expo-updates` it
-  depends on whether you enabled code signing and who holds the certificate.
-- **What the request proves.** Every dash-ota request is signed by a non-exportable key generated
-  in the Secure Enclave or AndroidKeyStore, with a server-issued nonce and a timestamp. No other
-  tool here authenticates the *device* rather than the *app*, so nothing else can tell a real
-  install from a replayed or scripted one.
-- **Whether the payload is readable.** dash-ota bundles are AES-256-GCM ciphertext. Everyone else
-  ships plaintext JS over TLS to a bucket or CDN.
-- **Who stops a bad release.** Every tool here rolls back on the device. dash-ota also pauses the
-  release server-side once the failure rate crosses a threshold, so a bad bundle stops spreading
-  without anyone being awake. That is the difference between recovering and containing.
+The [roadmap](/docs/contributing/roadmap) lists which of these dash-ota plans to close.
 
-None of this makes dash-ota strictly better. It makes it a different trade: more moving parts and
-more to understand, in exchange for a server you do not have to trust.
+## When not to choose dash-ota
 
-See the [full security model](/docs/concepts/security-model) and [threat model](/docs/security/threat-model).
+- You want a managed dashboard, analytics and support, and are comfortable with a vendor:
+  Stallion is less setup, has a free tier up to 10K MAU, and can sign its bundles too.
+- You build with Expo and EAS: `expo-updates` has X.509 code signing (on EAS it needs a
+  Production or Enterprise plan) and is built into that toolchain.
+- You want the fastest path to a self-hosted setup: hot-updater works with Supabase, Cloudflare,
+  AWS and Firebase, has a web console and bundle signing, and ships binary patches. dash-ota asks
+  you to set up signing keys before your first publish.
+- Your app runs React Native older than 0.79 or the old architecture.
 
-## When *not* to choose dash-ota
-
-- You want a managed dashboard, analytics and support, and are comfortable with a vendor →
-  Stallion is less setup, has a free tier to 10K MAU, and signs its bundles too.
-- You're all-in on Expo/EAS → `expo-updates` has opt-in code signing with an embedded X.509
-  certificate and is far better integrated with that toolchain.
-- You want the fastest path to a working self-hosted setup → `hot-updater` has an interactive
-  `init`, adapters for Supabase, Cloudflare and S3, and a web console. dash-ota asks you to
-  understand key custody before your first publish, on purpose.
-- You need OTA on RN versions older than 0.79 / old architecture → dash-ota targets New Arch.
-
-dash-ota's sweet spot is narrow and worth stating plainly: teams that must be able to say what
-happens when the update server is compromised, and are willing to run a backend and understand
-key custody to get there. If that sentence does not describe a requirement you actually have,
-one of the others will get you shipping faster.
+dash-ota fits teams that must be able to say what happens when the update server is compromised,
+and who will run a backend and manage signing keys to get there. If that isn't a requirement you
+have, one of the others will get you shipping faster.
 
 ## Migrating?
 
-- [Migrate from Stallion →](/docs/guides/migrate-from-stallion)
-- [Migrate from CodePush / hot-updater →](/docs/guides/migrate-from-codepush)
+- [Migrate from Stallion](/docs/guides/migrate-from-stallion)
+- [Migrate from CodePush or hot-updater](/docs/guides/migrate-from-codepush)

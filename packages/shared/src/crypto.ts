@@ -230,7 +230,7 @@ export function randomNonceB64(bytes = 18): string {
 }
 
 /**
- * Random high-entropy token as base64 (one-time download tokens, server-issued nonces).
+ * Random high-entropy token as base64 (download tokens, server-issued nonces).
  * @param bytes token length in bytes (default 32)
  */
 export function randomSecretB64(bytes = 32): string {

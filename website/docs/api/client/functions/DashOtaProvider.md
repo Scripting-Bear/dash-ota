@@ -4,7 +4,7 @@
 function DashOtaProvider(props): ReactElement;
 ```
 
-Defined in: [DashOtaProvider.tsx:62](https://github.com/Scripting-Bear/dash-ota/blob/df5363f74f8243f8cfb8ecb1e117a3b2926aac5c/packages/rn/src/DashOtaProvider.tsx#L62)
+Defined in: [DashOtaProvider.tsx:77](https://github.com/Scripting-Bear/dash-ota/blob/main/packages/rn/src/DashOtaProvider.tsx#L77)
 
 Wrap your app root to enable OTA. On launch it reads the current bundle, enrolls the hardware
 device key (once), and — by default — checks → downloads → natively verifies/stages → schedules

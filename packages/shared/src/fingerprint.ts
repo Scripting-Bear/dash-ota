@@ -15,7 +15,7 @@ import { sha256Hex } from './crypto.js';
 
 /** The native inputs whose change should invalidate JS↔native compatibility. */
 export interface FingerprintInputs {
-  /** sorted "name@version" of every dependency that contributes native code. */
+  /** sorted "name@version" entries; the CLI passes every dependency in package.json, JS-only ones included. */
   nativeDependencies: string[];
   /** hashes of native source trees, e.g. { 'android': '<sha>', 'ios': '<sha>' }. */
   nativeDirHashes: Record<string, string>;

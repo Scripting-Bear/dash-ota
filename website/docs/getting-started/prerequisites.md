@@ -1,37 +1,45 @@
 ---
 sidebar_position: 2
-title: Prerequisites
+title: Before you start
 ---
 
-# Prerequisites
+# Before you start
 
-dash-ota targets modern React Native and a Node backend.
+What you need for each of the three pieces.
 
-## App (client)
+## Your app
 
-- **React Native 0.79+** with the **New Architecture enabled** (TurboModules/Fabric).
-- **Hermes** enabled (the default). OTA bundles are shipped as Hermes bytecode (HBC).
-- **Android** minSdk **24+** (the example uses 29). **iOS 16+**.
-- A storage adapter for a stable install id — e.g. `@react-native-async-storage/async-storage`,
-  `react-native-mmkv`, or any secure storage. You inject it via config.
+- React Native 0.79 or later with the New Architecture, which is the default from 0.76. Verified
+  on 0.79 and 0.87.
+- Hermes, the default engine. Updates ship as Hermes bytecode; an app on JSC can ship plain
+  JavaScript instead.
+- Android: minSdk 24 or higher. iOS: whatever your React Native version requires (15.1 for 0.79
+  to 0.87).
+- A place to keep a small install id between launches: AsyncStorage, MMKV or a secure store. Any
+  object with `getItem` and `setItem` works.
+- A way to run a release build on an emulator, simulator or device. Updates never apply to debug
+  builds, because those load JavaScript from Metro.
 
-## Release tooling (CLI)
+## The CLI
 
-- **Node 20.19+** (for `npx dash-ota`). The zstd binding the CLI compresses with declares `node >= 20.19.0`.
-- The **same `hermesc`** that ships in your app binary, to compile OTA bundles to matching HBC
-  (the CLI's `bundle`/publish flow and the example's `publish-ota.mjs` handle this).
+- Node 20.19 or later. The zstd module the CLI compresses with requires it.
+- It runs from your app's folder, because it uses your app's own `react-native` and `hermesc` to
+  build update bundles. That's what keeps an update's bytecode in step with the Hermes inside your
+  binary.
 
-## Backend
+## The backend
 
-- **Node 20.19+**. Express is optional (the middleware works with any Connect-style framework, or
-  standalone via `node:http`).
-- For production: a place to store update blobs (the filesystem to start with; object storage or a
-  CDN later) and release/install metadata (JSON to start with; Postgres and Redis later).
+- Node 20.19 or later. Express is optional: the middleware also works with Connect, Fastify and Koa,
+  or on its own with `node:http`.
+- Somewhere to keep releases. A directory on disk is enough to start; Postgres or SQLite, Redis and
+  S3-compatible storage are built in for later.
+- For real users: HTTPS, and a way for the backend to check that a device registering belongs to
+  a signed-in user (your existing session tokens).
 
-## Knowledge
+## What you need to know
 
-You don't need to be a crypto expert — the trust-critical work is in native and the CLI. But
-skimming [Core Concepts](/docs/concepts/lifecycle) (especially `runtimeVersion`) will save you
-debugging time.
+Nothing about cryptography: the CLI signs and the app verifies without you writing any of it. The
+one idea worth understanding first is the runtime version, which decides which builds an update
+can reach. [Concepts & glossary](/docs/getting-started/concepts) covers it in a paragraph.
 
-Next: [Quickstart →](/docs/getting-started/quickstart)
+Next: [Ship your first update](/docs/getting-started/quickstart)

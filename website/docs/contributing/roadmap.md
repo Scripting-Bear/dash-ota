@@ -19,6 +19,35 @@ side is ready: `BundleMeta.bundleSha256` is now populated on both platforms, so 
 server exactly which bundle is running and what a delta would have to apply against. What is
 missing is the producer in the CLI and the matching selection logic in the backend.
 
+**CDN delivery.** Every blob streams through your own API, authorised by a download token, so
+your API carries all of the download traffic. Tools that hand the device a signed bucket or CDN
+URL don't have that cost. Serving blobs from a CDN without giving up the scoped token is not
+designed yet.
+
+**Switching channels at runtime.** The channel is compiled into the binary and JS cannot change
+it, so a tester who wants to try another channel installs another build. EAS Update, hot-updater,
+Stallion and CodePush all let one build switch. Doing it here needs a way to keep a production
+build from being pointed at a dev channel.
+
+**A persisted downgrade floor.** Native code refuses a `bundleVersion` that isn't higher than the
+bundle running now, but it keeps no high-water mark. After a store update, a `rollback()` or a
+crash-loop revert, the running version is lower, so an older release that is still validly
+signed can install again. Storing the highest version a device has accepted would close that.
+
+**TLS pinning for the JS requests.** Native pinning covers blob downloads only. `/enroll`,
+`/check` and `/confirm` go through JS `fetch`, which is pinned only if you pass your own
+`transport`. Those requests carry the content key and the download token, so first-party
+pinning for them is the next step for pinning.
+
+**Remote key revocation.** A binary trusts every public key compiled into it. A leaked signing
+key stays trusted by every binary that contains it until users install a store update without it.
+There is no way to revoke a key over the air.
+
+**Download progress and resumable downloads on iOS.** Android reports download progress and
+resumes an interrupted blob with a Range request. On iOS `ui.progress` stays `null` until the
+download completes, so render a spinner for `null` rather than a zero-width bar. iOS also can't
+resume an interrupted blob download.
+
 **A first-party Fastify or Koa adapter.** Both work today by bridging the Connect-style middleware
 through `@fastify/middie` or `koa-connect`, which is documented and takes three lines. A dedicated
 adapter package would only save those three lines, so it has stayed low priority.
@@ -52,10 +81,6 @@ These are shipped and working, with sharp corners worth knowing about:
 - **No `promote` command.** The channel is signed into the manifest, so moving a release from dev
   to prod is a fresh `publish --channel prod`, not a promotion. Blobs that prod already has are
   skipped, so the re-upload is usually small.
-- **Download progress is Android-only.** The client subscribes to the native `onDashOtaProgress`
-  event and reports 0–1 while downloading, but only Android emits it. On iOS `ui.progress` stays
-  `null` (indeterminate) until the download completes, so render a spinner for `null` rather than
-  a zero-width bar.
 - **The dashboard cannot express every CLI option** — no `--no-encrypt`, no `--allow-insecure`, no
   explicit `--bundle-version`. Its `runtimeVersion` is a static config string with no fingerprint
   integration, so a native change can publish under a stale runtime if you forget to update it.

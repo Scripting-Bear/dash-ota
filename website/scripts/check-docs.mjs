@@ -59,7 +59,8 @@ function markdownFiles(dir) {
 
 const CLI = readCliFlags();
 const KNOWN_COMMANDS = new Set(Object.keys(CLI));
-const ADMONITIONS = /^:::(note|tip|info|caution|warning|danger)\s+\S/;
+// Indented admonitions (inside lists or tabs) render the same way.
+const ADMONITIONS = /^\s*:::(note|tip|info|caution|warning|danger)\s+\S/;
 
 /**
  * Commands inside fenced blocks, with `\` continuations joined so a flag list stays one command.

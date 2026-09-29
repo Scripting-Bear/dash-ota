@@ -8,64 +8,75 @@ title: If your server is breached
 Assume the worst case. Someone has root on the machine serving your updates. They have the
 database, the blob store, the admin token, and they can change any response the server sends.
 
-This page is the honest answer to what happens next. It is the question most OTA tooling does not
-answer, and it is the reason dash-ota is built the way it is.
+This page lists what they can and cannot do to your users from there.
 
 ## What they cannot do
 
-**They cannot ship code to your users.** The Ed25519 private key lives in your CI or your key
+**They cannot forge or modify a release.** The Ed25519 private key lives in your CI or your key
 store. It is never uploaded, never held by the backend, and never present in any request. The
-device verifies every manifest against a public key compiled into the app binary, in native code,
-before a single byte is written to disk. A manifest the attacker edits — even by one character —
-fails that check and the update is discarded.
+device verifies every manifest against the public keys compiled into the app binary, in native
+code, before it writes anything to disk. A manifest changed by even one character fails that check
+and the update is discarded.
 
 This holds even if TLS is completely broken. It does not depend on the network being honest.
 
-Four more things the signature closes off, because each of these fields is inside the signed
-manifest and therefore covered by it:
+The signature covers every field in the manifest, which closes off a few more things:
 
-- **They cannot swap a file inside a release.** Every file carries its own SHA-256 in the manifest,
-  and native re-hashes each one after decrypting. Blobs are addressed by content, so a substituted
-  blob does not even resolve.
-- **They cannot move a release between channels.** `channel` is signed, and the device checks it
-  against the channel compiled into its own build.
-- **They cannot aim a release at the wrong app.** `appId` is signed and compared to the running
-  package name.
-- **They cannot land a release on an incompatible binary.** `runtimeVersion` is signed, and the
-  stored slot additionally records the native build number it was applied under. A slot that does
-  not match both is dropped rather than loaded.
+- **They cannot swap a file inside a release.** Every file carries its own SHA-256 in the manifest.
+  Native checks each blob's hash before decrypting it and each file's hash after unpacking it.
+- **They cannot aim a release at the wrong app or binary.** `appId` is signed and compared to the
+  running package name or bundle identifier. `runtimeVersion` is signed and must equal the one
+  compiled into the binary. From client 0.5.1, a signed `minNativeBuild` above the installed native
+  build is refused too.
+- **They cannot move a release to another channel or platform** (client 0.5.1 and later). `channel`
+  and `platform` are signed, and native compares them to the binary's own. Before 0.5.1 only the
+  server checked them, so a breached server could hand one channel's release to a binary on
+  another channel, if that binary's key ring trusts the key that signed it.
+- **They cannot send users to their own store link** (client 0.5.0 and later). The client drops
+  the server's `storeUrl` and uses your `config.storeUrl` instead. More on this below.
 
-And they cannot roll you backwards: `bundleVersion` is monotonic, so a release older than the one
-the device is running is refused.
+**They cannot run code on the device.** Anything the update path installs was signed by your key.
+The parts of the response they do control (whether an update is offered, the force-update policy,
+the download token) are data your app reads, never code.
 
 ## What they can do
 
-Being honest about this is the point of the page.
+**They can withhold updates.** Returning `update: null` forever looks exactly like "you are up to
+date", and they can choose per install. Your users keep running what they have. Nothing on the
+device signals that this is happening, so an update pipeline that has gone quiet is worth
+investigating.
 
-**They can stop updates.** Returning `update: null` forever is indistinguishable from "you are up
-to date". Your users keep running whatever they have. There is no client-side signal that this is
-happening, so an update pipeline that has gone quiet deserves investigation rather than a shrug.
+**They can re-serve an older or withdrawn release that is still validly signed.** `paused` and
+`rolledBack` are server-side flags, not part of anything signed. The device's only defence is the
+downgrade guard, which refuses a release whose `bundleVersion` is not higher than the bundle it is
+running right now. Nothing is persisted beyond that, so a signed release for the same app,
+`runtimeVersion`, channel and platform installs whenever its `bundleVersion` is higher than what the
+device currently runs. That covers:
 
-**They can re-serve a release you withdrew.** This is the sharpest one. `paused` and `rolledBack`
-are server-side state, not signed facts. A release that was validly signed at some point, and
-carries a higher `bundleVersion` than the device is running, can be served again by an attacker who
-controls the server — including the bad release you rolled back an hour ago. The downgrade guard
-blocks *older* versions; it has no way to know you withdrew a newer one.
+- a release you rolled back or paused, on any device still below it (including devices that never
+  took it);
+- after a store update that changes the native build number: the new binary drops the old
+  binary's bundles and runs the embedded one (version 0), so any OTA for that `runtimeVersion` is
+  accepted, however old;
+- after the app calls `rollback()`, or after a crash-loop revert, when the device runs an older
+  bundle than before. A bundle the crash-loop breaker disabled is never installed again on that
+  device.
 
-The client-side backstop is the crash-loop breaker: if the re-served release crashes, it is
-disabled after two boot attempts and the device reverts. That helps for a release that crashes. It
-does nothing for one that merely misbehaves.
+They cannot forge a release to fill a gap, only re-send ones you signed. Changing `runtimeVersion`
+with every store build closes the store-update case, because no older OTA matches the new binary.
+If a re-served release crashes, the [crash-loop breaker](/docs/concepts/crash-loop) disables it and
+reverts. That does nothing for a release that runs but misbehaves.
 
-**They can force your users into an update wall.** This is the weakest link in the design, and it
-is worth reading carefully:
+**They can force a hard update prompt.** The force-update policy travels beside the signed manifest,
+not inside it:
 
 ```ts
-// CheckResponse — note where the signature does and does not reach
+// CheckResponse: what the signature covers and what it doesn't
 {
-  update: SignedManifest | null,   // ← signed, verified in native
-  downloadToken?: string,
-  serverNonce: string,
-  nativePolicy: {                  // ← NOT signed. Sibling of the manifest.
+  update: SignedManifest | null,   // signed, verified in native
+  downloadToken?: string,          // not signed
+  serverNonce: string,             // not signed
+  nativePolicy: {                  // not signed
     minSupportedNativeVersion: number,
     severity: 'none' | 'soft' | 'hard',
     storeUrl?: string,
@@ -73,57 +84,67 @@ is worth reading carefully:
 }
 ```
 
-`nativePolicy` sits beside the signed manifest, not inside it, so all three of its fields are
-whatever the server said.
+The server computes `severity` from the device's native build and `minSupportedNativeVersion`; the
+client does not check that arithmetic. So an attacker can send `severity: 'hard'` to every install.
+The library itself renders nothing. What happens next is up to your app: if it shows a blocking
+screen on `hard`, as the [force-update recipe](/docs/concepts/force-update) does, users are locked
+out on every launch where `/check` succeeds. The policy is not stored on the device, so the app
+still opens offline. This is a denial of service, not code execution. If a lock-out you cannot
+lift without the server is unacceptable, give the hard gate a way out in your app, for example a
+"continue anyway" option that appears once the store link has been opened.
 
-**The destination is no longer one of them.** The client replaces `storeUrl` with your
-`config.storeUrl` and drops the server's value outright — not scheme-checked and passed through,
-dropped — because `https://attacker.example` passes any scheme check you could write. An attacker
-cannot point your users anywhere.
+Where the gate's button points is a separate question:
 
-**The decision still is.** `severity` and `minSupportedNativeVersion` are unsigned, so someone who
-controls the backend can set `severity: 'hard'` for every install and hold the whole user base
-behind a non-dismissible screen. For a trading app that is a denial of service with real cost,
-timed at whatever moment suits them. `minSupportedNativeVersion` is the sharper of the two: it
-decides whether the installed binary is allowed to run at all.
+- **Client 0.5.0 and later** ignore the server's `storeUrl`. The gate uses your `config.storeUrl`,
+  and only if it starts with `https://`, `market://` or `itms-apps://`. Without a valid
+  `config.storeUrl` the gate has no link, and the dropped server value is logged as a warning.
+- **Clients before 0.5.0** open whatever `storeUrl` the server sends. Backend 0.5.1 only stores an
+  `https://`, `market://` or `itms-apps://` URL with no credentials or whitespace, and drops stored
+  values that fail that check. That limits the scheme a leaked admin token can set, but any `https`
+  host passes, so it does not stop a phishing link. It does nothing against someone who owns the
+  server, because they can bypass the server's own validation. Old clients get a trustworthy link
+  only from a store build on 0.5.0 or later.
 
-There is no client-side fix for that — a policy the server cannot set is a policy you cannot
-change without a release. Closing it properly means signing the policy, which is
-[on the roadmap](/docs/contributing/roadmap) as a protocol change rather than a patch.
+Signing the policy is [on the roadmap](/docs/contributing/roadmap).
 
-:::warning[Set `config.storeUrl`]
-Without it, `nativePolicy.storeUrl` is `undefined` and your force-update gate renders with no
-link — the client will not fall back to the server's value. That is deliberate: a gate missing a
-button is recoverable, a gate pointing at an attacker is not.
+**They can make iOS downloads use a lot of memory.** iOS reads a blob's whole response into memory
+before comparing its size with the signed one, so an oversized response is refused only after it
+has been held. Android stops reading as soon as a download passes the signed size.
 
-The backend also refuses to *store* a `storeUrl` that is not `https://` or `market://`, which
-stops a leaked admin token from setting one. That is a separate control, and it does not help
-against an attacker who owns the server — they bypass the server's own validation.
-:::
+**They can read your bundles.** They hold the blobs, and every manifest carries the content key, so
+they can decrypt everything. Encryption keeps blob bytes unreadable to someone who can read the
+blob store or a cache in front of it but not the manifests. It does not hide anything from whoever
+runs the server.
 
-**They can read your bundles.** They already hold the blobs, and the content key travels inside
-the manifest, so they can decrypt them. Encryption here is defence in depth against someone
-sniffing the wire or reading the blob store — it is not a defence against someone who owns the
-server.
+**They can collect enrollment tokens.** The client sends whatever your `getEnrollToken` returns on
+`/enroll`, and a server that answers a check with `not_enrolled` makes the client enroll again. If
+that function returns your app's main session token, a breached server can harvest it from every
+active install. Hand it a short-lived token that is only good for enrollment.
 
-**They can enroll devices** if `verifyEnrollToken` is weak or absent, since `installId` is not a
-secret and enrollment overwrites the stored device key. Bind enrollment to an authenticated
-session; this is the one control the backend genuinely owns.
+**They can falsify release state and adoption numbers.** Rollout percentages, pause flags,
+auto-pause and the adoption counts in `list`, the dashboard and your `onConfirm` hook all live on
+the server, so they show whatever the attacker writes. None of it reaches a device except as
+"offer this release or not".
+
+Enrollment and request signing protect the server from fake devices. They do not protect devices
+from the server.
 
 ## What to do after a breach
 
 1. **Rotate the admin token** and revoke the compromised host's access. The signing key does not
-   need rotating — it was never there.
-2. **Publish a new release with a higher `bundleVersion`** than anything that was ever signed for
-   that channel. This is what displaces a re-served withdrawn release, because the device always
-   prefers the highest eligible version.
-3. **Pin your store URL in the app** if you have not already, then ship that as a store build.
-4. **Re-register your public key** on the rebuilt backend before publishing, or `/admin/releases`
+   need rotating, because it was never there.
+2. **Treat enrollment tokens sent during the breach as exposed**, and revoke them if they are
+   session tokens.
+3. **Re-register your public key** on the rebuilt backend before publishing, or `/admin/releases`
    rejects the release with `unknown_key`.
+4. **Publish a new release with a higher `bundleVersion`** than anything ever signed for that
+   runtime and channel. Once a device runs it, the downgrade guard refuses every lower version
+   until the next store update, `rollback()` or crash-loop revert.
+5. **Set `config.storeUrl` in the app** if you have not already, and ship it in a store build.
+   Clients older than 0.5.0 need that store build before their gate link is safe.
 
-The key never needing rotation is the part worth noticing. In a system where the distribution
-server signs, a breach means rotating the signing key, rebuilding every app that embeds it, and
-shipping a store release to every user before you can safely publish again.
+A breach of this server never forces a key rotation or an emergency store release to restore
+integrity. That is what keeping the signing key off the server buys.
 
 → [Threat model](/docs/security/threat-model) · [Key custody](/docs/security/key-management) ·
 [What dash-ota does not do](/docs/security/limitations)

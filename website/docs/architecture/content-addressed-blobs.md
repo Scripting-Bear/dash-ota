@@ -63,14 +63,16 @@ uploading:       1 of 6 blobs (5 already present)
 ```
 
 This works because encryption is convergent — see
-[the security model](/docs/concepts/security-model). Sharing extends across platforms too: an iOS
-release whose assets match an Android one uploads only its bundle.
+[one content key per channel](/docs/architecture/manifest-schema#one-content-key-per-channel).
+Sharing extends across platforms too: an iOS release signed with the same key as an Android one,
+whose assets match, uploads only its bundle.
 
 ## Why not a single archive
 
 Earlier versions shipped one encrypted archive containing everything. It was simple, but every
 update re-downloaded every byte — a one-line JS change cost the full payload, assets included.
-Splitting into content-addressed blobs is what makes reuse possible at all, and it is the same
-approach used by every other serious content-distribution system.
+Splitting into content-addressed blobs is what makes reuse possible at all. It does not make a
+changed JS bundle smaller: the bundle still downloads whole, because nothing generates binary
+patches yet.
 
 → [Manifest schema](/docs/architecture/manifest-schema) · [Slot model](/docs/architecture/slot-model)

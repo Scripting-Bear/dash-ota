@@ -5,59 +5,78 @@ title: Other frameworks & standalone
 
 # Other frameworks & standalone
 
-The middleware is a plain Connect-style `(req, res, next)` function with **zero dependency on
-Express**, so it works with Connect, and (via an adapter) Fastify/Koa. There's also a
-zero-dependency standalone server.
+The middleware is a plain Connect-style `(req, res, next)` function that doesn't depend on Express,
+so it runs in Connect directly and in Fastify or Koa through their usual adapters. There is also a
+standalone server with no framework at all.
+
+In each example below, `adminToken` comes from `process.env.OTA_ADMIN_TOKEN`; add
+`verifyEnrollToken` and explicit data directories as in [Express integration](/docs/backend/express).
 
 ## Connect
 
-```ts
+```js
 import connect from 'connect';
 import { dashOtaMiddleware } from '@dash-ota/backend';
+
 const app = connect();
-app.use(dashOtaMiddleware({ adminToken }));
+app.use(dashOtaMiddleware({ adminToken: process.env.OTA_ADMIN_TOKEN }));
+app.listen(4455);
 ```
 
 ## Fastify
 
-Use `@fastify/middie` (or `@fastify/express`) to mount Connect-style middleware:
+Mount Connect-style middleware with `@fastify/middie`:
 
-```ts
+```js
 import Fastify from 'fastify';
 import middie from '@fastify/middie';
 import { dashOtaMiddleware } from '@dash-ota/backend';
 
 const app = Fastify();
 await app.register(middie);
-app.use(dashOtaMiddleware({ adminToken }));
+app.use(dashOtaMiddleware({ adminToken: process.env.OTA_ADMIN_TOKEN }));
+await app.listen({ port: 4455 });
 ```
 
 ## Koa
 
-Bridge with `koa-connect`:
+Bridge it with `koa-connect`:
 
-```ts
+```js
 import Koa from 'koa';
 import c2k from 'koa-connect';
 import { dashOtaMiddleware } from '@dash-ota/backend';
 
 const app = new Koa();
-app.use(c2k(dashOtaMiddleware({ adminToken })));
+app.use(c2k(dashOtaMiddleware({ adminToken: process.env.OTA_ADMIN_TOKEN })));
+app.listen(4455);
 ```
 
-## Standalone (zero deps)
+## Standalone
 
-The umbrella factory boots a `node:http` server with no Express:
+The factory starts a plain `node:http` server:
 
-```ts
+```js title="server.mjs"
 import { createOtaBackend } from '@dash-ota/backend';
+
 await createOtaBackend({ adminToken: process.env.OTA_ADMIN_TOKEN }).listen(4455);
 ```
 
-Or via env only (the package's own `server` entry reads `OTA_*` env vars):
+Or skip writing a file and run the server that ships in the package, configured entirely by
+environment variables ([Configuration](/docs/backend/configuration)):
 
 ```bash
-OTA_ADMIN_TOKEN=… OTA_PORT=4455 node -e "require('@dash-ota/backend').createOtaBackend().listen()"
+OTA_ADMIN_TOKEN=<YOUR_ADMIN_TOKEN> \
+OTA_STORAGE_DIR=/var/lib/dash-ota/storage OTA_DATA_DIR=/var/lib/dash-ota/data \
+node node_modules/@dash-ota/backend/dist/server.js
 ```
 
-→ [Umbrella factory](/docs/backend/umbrella)
+It prints where it keeps its data and the address it listens on:
+
+```
+[dash-ota-backend] metadata directory: /var/lib/dash-ota/data
+[dash-ota-backend] blob directory: /var/lib/dash-ota/storage
+[dash-ota-backend] listening on http://localhost:4455 (require-sig=true)
+```
+
+→ [Factory](/docs/backend/umbrella) · [Deployment](/docs/backend/deployment)

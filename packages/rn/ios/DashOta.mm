@@ -88,10 +88,16 @@
   // Flag the coming launch as user-initiated so the crash-loop breaker doesn't charge it a boot
   // attempt (see DashOtaStore.markUserReload).
   [_impl markUserReload];
+  [DashOtaBundleLoader invalidate];
   dispatch_async(dispatch_get_main_queue(), ^{
     RCTTriggerReloadCommandListeners(@"dash-ota: applying update");
   });
 }
+
+// NativeEventEmitter calls these through the spec. Progress events are Android-only, so there is
+// nothing to track; without them the call is an unrecognized selector and the app aborts.
+- (void)addListener:(NSString *)eventName {}
+- (void)removeListeners:(double)count {}
 
 // --- Hardware-backed device identity (sync) ---
 - (NSString *)getDevicePublicKeyB64 {

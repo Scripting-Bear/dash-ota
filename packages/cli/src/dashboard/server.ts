@@ -7,10 +7,10 @@
  * @module dashboard/server
  */
 
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { tmpdir } from 'node:os';
+import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Channel, Platform } from '@dash-ota/shared';
@@ -31,7 +31,7 @@ import {
   type Target,
   uploadRelease,
 } from '../core.js';
-import { assertSecureServer, readBundleDir, verifyKeyFromPath } from '../util.js';
+import { assertSecureServer, normalizeServer, readBundleDir, verifyKeyFromPath } from '../util.js';
 
 /** One environment the dashboard operates. Relative paths resolve against the project. */
 export interface DashboardEnv {
@@ -107,16 +107,47 @@ const HEADERS = {
   'referrer-policy': 'no-referrer',
   'x-frame-options': 'DENY',
 };
-const PAGE_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; " +
+/** Only the page's own script runs: its nonce is new per response, so markup injected into the page cannot carry it. */
+const pageCsp = (nonce: string): string =>
+  `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline'; connect-src 'self'; ` +
   "img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const DOCS_URL = 'https://scripting-bear.github.io/dash-ota/docs/cli/dashboard';
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** The example config shipped at the package root: one level above dist/, two above src/dashboard/. */
+export function exampleConfigPath(): string {
+  for (const rel of ['../dash-ota.config.example.mjs', '../../dash-ota.config.example.mjs']) {
+    const candidate = fileURLToPath(new URL(rel, import.meta.url));
+    if (existsSync(candidate)) return candidate;
+  }
+  return '@dash-ota/cli/dash-ota.config.example.mjs';
+}
+
+/**
+ * A fixed build folder per project, environment and platform. A custom `bundle` that runs hermesc
+ * on an absolute path records it in the bytecode, so a new folder per publish meant new bytes.
+ */
+function buildDirFor(project: string, env: string, platform: Platform): string {
+  const cache =
+    process.env.XDG_CACHE_HOME ||
+    (process.platform === 'darwin'
+      ? join(homedir(), 'Library', 'Caches')
+      : process.platform === 'win32'
+        ? process.env.LOCALAPPDATA || join(homedir(), 'AppData', 'Local')
+        : join(homedir(), '.cache'));
+  const projectKey = createHash('sha256').update(project).digest('hex').slice(0, 12);
+  return join(cache, 'dash-ota', 'build', projectKey, env.replace(/[^\w-]/g, '_'), platform);
+}
 
 /** Load and validate a `dash-ota.config.mjs`. */
 export async function loadDashboardConfig(file: string): Promise<{ config: DashboardConfig; project: string }> {
   const abs = resolve(file);
-  if (!existsSync(abs)) throw new Error(`dashboard config not found: ${abs} — see \`dash-ota help\``);
+  if (!existsSync(abs)) {
+    throw new Error(
+      `dashboard config not found: ${abs}\n` + `  start from the example: ${exampleConfigPath()}\n` + `  docs: ${DOCS_URL}`,
+    );
+  }
   const mod = (await import(pathToFileURL(abs).href)) as { default?: DashboardConfig };
   if (!mod.default) throw new Error(`${abs} must \`export default\` a config object`);
   validateConfig(mod.default);
@@ -142,8 +173,9 @@ function send(res: ServerResponse, status: number, body: unknown): void {
 }
 
 function sendPage(res: ServerResponse, html: string): void {
-  res.writeHead(200, { ...HEADERS, 'content-type': 'text/html; charset=utf-8', 'content-security-policy': PAGE_CSP });
-  res.end(html);
+  const nonce = randomBytes(16).toString('base64');
+  res.writeHead(200, { ...HEADERS, 'content-type': 'text/html; charset=utf-8', 'content-security-policy': pageCsp(nonce) });
+  res.end(html.replace('<script>', `<script nonce="${nonce}">`));
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -196,6 +228,7 @@ export async function startDashboard(opts: {
   const token = randomBytes(24).toString('base64url');
   const expected = Buffer.from(token);
   const page = readFileSync(fileURLToPath(new URL('./ui.html', import.meta.url)), 'utf8');
+  if (page.split('<script>').length !== 2) throw new Error('ui.html must hold exactly one plain <script> tag for the CSP nonce');
   const jobs = new Map<string, Job>();
   let latest: Job | undefined;
   let port = 0;
@@ -211,7 +244,7 @@ export async function startDashboard(opts: {
 
   function targetOf(name: string, env: DashboardEnv): Target {
     if (!env.adminToken) throw new HttpError(400, `no admin token configured for ${name}`);
-    return { server: env.server, adminToken: env.adminToken };
+    return { server: normalizeServer(env.server), adminToken: env.adminToken };
   }
 
   function requireConfirm(name: string, env: DashboardEnv, body: Record<string, unknown>): void {
@@ -278,7 +311,10 @@ export async function startDashboard(opts: {
           const emit = (event: OtaEvent): void => push(event, platform);
           push({ type: 'step', message: 'resolving the next bundle version' }, platform);
           const bundleVersion = await nextBundleVersion(target, env.channel, platform);
-          const out = mkdtempSync(join(tmpdir(), `dash-ota-${name}-${platform}-`));
+          const out = buildDirFor(project, name, platform);
+          // Emptied first: a file left by the previous build would otherwise ship in this release.
+          rmSync(out, { recursive: true, force: true });
+          mkdirSync(out, { recursive: true });
           try {
             push({ type: 'step', message: `building v${bundleVersion}` }, platform);
             if (config.bundle) {

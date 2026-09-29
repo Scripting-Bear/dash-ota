@@ -2,7 +2,7 @@
  * The backend's persistence + lookup layer — a thin, storage-agnostic facade over three
  * pluggable providers ({@link DatabaseProvider} + {@link BlobStore} + {@link CacheProvider}).
  * The Store holds the OTA **business logic** (targeting/rollout eligibility, adoption
- * accounting + server-side auto-pause, one-time token / server-nonce minting); it delegates
+ * accounting + server-side auto-pause, download-token / server-nonce minting); it delegates
  * all storage to the providers, so swapping in Postgres + Redis + object storage never touches
  * this class or the route core.
  *
@@ -27,6 +27,7 @@ import {
   randomSecretB64,
   sha256Hex,
 } from '@dash-ota/shared';
+import { resolve, sep } from 'node:path';
 import type { Readable } from 'node:stream';
 import { PostgresDatabaseProvider } from './adapters/postgres-db.js';
 import { RedisCacheProvider } from './adapters/redis-cache.js';
@@ -36,6 +37,7 @@ import { BlobTooLargeError, drain, type SpooledBlob, spoolToTemp } from './uploa
 import { SqliteDatabaseProvider } from './adapters/sqlite-db.js';
 import type { BackendConfig } from './config.js';
 import {
+  type AdoptionStats,
   type BlobStore,
   blobKey,
   type ByteRange,
@@ -48,6 +50,87 @@ import {
   type ReleaseRecord,
   type StoreProviders,
 } from './providers.js';
+
+/** Channel names accepted from callers, including unauthenticated ones. */
+const CHANNEL_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+
+/** Whether `value` is a channel name the backend will store or look up. */
+export function isValidChannel(value: unknown): value is string {
+  return typeof value === 'string' && CHANNEL_PATTERN.test(value);
+}
+
+/** Whether `value` is a platform a release can target. */
+export function isValidPlatform(value: unknown): value is 'android' | 'ios' {
+  return value === 'android' || value === 'ios';
+}
+
+/** Schemes an app-store link may use. The client enforces the same list before opening one. */
+const STORE_URL_PROTOCOLS = new Set(['https:', 'market:', 'itms-apps:']);
+
+/**
+ * Whether `value` is a store link the app may open: an allowed scheme, no userinfo, and no
+ * whitespace or control characters. The host is not checked, so any https page passes.
+ */
+export function isValidStoreUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || /\s/.test(value) || [...value].some(isControlChar)) return false;
+  if (!/^[a-z-]+:\/\//.test(value)) return false;
+  try {
+    const url = new URL(value);
+    return STORE_URL_PROTOCOLS.has(url.protocol) && url.username === '' && url.password === '';
+  } catch {
+    return false;
+  }
+}
+
+/** C0 and C1 control characters, which `new URL` would silently strip or percent-encode. */
+function isControlChar(ch: string): boolean {
+  const code = ch.charCodeAt(0);
+  return code < 0x20 || (code >= 0x7f && code <= 0x9f);
+}
+
+/** A stored policy with a storeUrl that fails {@link isValidStoreUrl} dropped; older versions stored any string. */
+function withSafeStoreUrl(policy: NativeVersionPolicy): NativeVersionPolicy {
+  if (policy.storeUrl === undefined || isValidStoreUrl(policy.storeUrl)) return policy;
+  const { storeUrl: _dropped, ...rest } = policy;
+  return rest;
+}
+
+/**
+ * Refuse a disk directory inside `node_modules`: npm deletes it on the next install or upgrade.
+ *
+ * @throws when `dir` resolves inside a `node_modules` directory.
+ */
+function assertOutsideNodeModules(name: string, dir: string): void {
+  const absolute = resolve(dir);
+  if (absolute.split(sep).includes('node_modules')) {
+    throw new Error(
+      `dash-ota: ${name} resolves inside node_modules (${absolute}), which npm deletes on install or upgrade. ` +
+        `Set ${name} (or its OTA_* environment variable) to a directory outside node_modules.`,
+    );
+  }
+}
+
+/**
+ * Prefix for keys the backend itself registers through {@link CacheProvider.registerNonce}. No header
+ * value can contain a newline, so no client request nonce can collide with them.
+ */
+const INTERNAL_KEY = '\n';
+
+/** How long an install's failure report for a bundle is remembered, so it is counted once. */
+const FAILURE_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * What a `/check` made a server nonce valid for. Channel, platform and the current bundle are
+ * device-reported, so this scopes a nonce; it does not prove the device runs that bundle.
+ */
+export interface ConfirmScope {
+  /** the bundle offered and the bundle the device reported running; empty ids are ignored. */
+  bundleIds: string[];
+  platform: string;
+  channel: string;
+  runtimeVersion: string;
+  currentBundleVersion: number;
+}
 
 /** A refusal a route can turn straight into a response. */
 export interface StoreFailure {
@@ -80,6 +163,10 @@ export class Store {
     private readonly config: BackendConfig,
     providers?: Partial<StoreProviders>,
   ) {
+    const diskDb = !providers?.db && !config.databaseUrl && !config.sqlitePath;
+    const diskBlob = !providers?.blob && !config.s3Bucket;
+    if (diskDb) assertOutsideNodeModules('dataDir', config.dataDir);
+    if (diskBlob) assertOutsideNodeModules('storageDir', config.storageDir);
     // DB: explicit provider wins; else Postgres (`databaseUrl`); else SQLite (`sqlitePath`); else disk JSON.
     this.db =
       providers?.db ??
@@ -103,6 +190,8 @@ export class Store {
     // Cache: explicit provider wins; else the one-line `redisUrl` upgrade; else in-memory (single node).
     this.cache =
       providers?.cache ?? (config.redisUrl ? new RedisCacheProvider({ url: config.redisUrl }) : new MemoryCacheProvider());
+    if (diskDb) config.logger?.info(`metadata directory: ${resolve(config.dataDir)}`);
+    if (diskBlob) config.logger?.info(`blob directory: ${resolve(config.storageDir)}`);
   }
 
   // ---- trusted signing keys ---------------------------------------------
@@ -134,7 +223,7 @@ export class Store {
     const cfg = await this.db.getNativePolicy(channel);
     if (!cfg) return { minSupportedNativeVersion: 0, severity: 'none' };
     const severity = buildNumber < cfg.minSupportedNativeVersion ? cfg.severity : 'none';
-    return { ...cfg, severity };
+    return withSafeStoreUrl({ ...cfg, severity });
   }
 
   // ---- installs ----------------------------------------------------------
@@ -395,8 +484,12 @@ export class Store {
     return true;
   }
 
-  /** Count a request from a client too old to speak protocol 2. */
+  /**
+   * Count a request from a client too old to speak protocol 2. The caller is unauthenticated, so
+   * only a known platform and a well-formed channel are persisted.
+   */
   async recordRetiredClient(channel: string, platform: string): Promise<void> {
+    if (!isValidChannel(channel) || !isValidPlatform(platform)) return;
     await this.db.incrementRetiredClient(channel, platform);
   }
 
@@ -414,7 +507,7 @@ export class Store {
     return {
       minSupportedNativeVersion: cfg?.minSupportedNativeVersion ?? 0,
       severity: 'hard',
-      ...(cfg?.storeUrl ? { storeUrl: cfg.storeUrl } : {}),
+      ...(cfg && isValidStoreUrl(cfg.storeUrl) ? { storeUrl: cfg.storeUrl } : {}),
     };
   }
 
@@ -464,9 +557,9 @@ export class Store {
     return this.cache.rateLimit(`rl:${scope}:${identity}`, limit, windowMs);
   }
 
-  // ---- one-time download tokens -----------------------------------------
+  // ---- download tokens ---------------------------------------------------
 
-  /** Issue a one-time, short-TTL token bound to a bundle. */
+  /** Issue a download token bound to a bundle, reusable until `downloadTokenTtlMs` expires. */
   async issueDownloadToken(bundleId: string, installId: string): Promise<string> {
     const token = randomSecretB64(24);
     await this.cache.putToken(token, `${bundleId}|${installId}`, this.config.downloadTokenTtlMs);
@@ -487,42 +580,50 @@ export class Store {
     return bundleId && installId ? { bundleId, installId } : null;
   }
 
-  /** Consume a download token; returns the bundleId once, then never again. */
-
   // ---- server nonces (bind /confirm to a real /check) -------------------
 
   /**
-   * Issue a server nonce returned from /check and echoed on /confirm, bound to **both** the install
-   * and the offered bundle — so a device can only confirm the bundle it was actually offered (an
-   * arbitrary-bundle confirm can't poison adoption or trip a targeted rollout's auto-pause).
-   * An up-to-date check offers no bundle and passes `''`, which binds the nonce to the install only.
+   * Issue the server nonce `/check` returns and `/confirm` echoes, bound to the install and to what
+   * that check made relevant (see {@link ConfirmScope}).
    */
-  async issueServerNonce(installId: string, bundleId: string): Promise<string> {
+  async issueServerNonce(installId: string, scope: ConfirmScope): Promise<string> {
     const nonce = randomSecretB64(18);
-    await this.cache.putToken(nonce, JSON.stringify({ installId, bundleId }), this.config.nonceTtlMs);
+    const bundleIds = [...new Set(scope.bundleIds.filter((id) => id !== ''))];
+    await this.cache.putToken(nonce, JSON.stringify({ ...scope, installId, bundleIds }), this.config.nonceTtlMs);
     return nonce;
   }
 
   /**
-   * Consume a server nonce, asserting it was issued to this install for this bundle.
+   * Spend a server nonce on one report, if it covers it: same install, a release on the check's
+   * channel and platform, and a bundle that check offered or the device reported running.
    *
-   * A nonce issued by an **up-to-date** check carries no bundle binding (`''`), but the device still
-   * confirms with the bundle it is actually running — that is how a `healthy` report arrives, since
-   * the launch that runs a bundle to healthy is by definition the launch with nothing newer to
-   * fetch. Requiring an exact match there rejected every healthy confirm (401 `bad_nonce`), so
-   * adoption's `healthy` counter could never leave 0. An install-only binding is therefore accepted
-   * as a wildcard over that install's own bundles; a bundle-bound nonce still has to match exactly.
+   * Spendable once per (bundle, status) pair: clients send every report after a check (`applied`
+   * then `healthy`, say) with that check's one nonce.
+   *
+   * `failed` also covers a newer release on the same runtime. The client reports a crash-loop
+   * revert only after reverting, so the failed bundle is no longer current, and a paused or
+   * superseded release is no longer offered.
    */
-  async consumeServerNonce(nonce: string, installId: string, bundleId: string): Promise<boolean> {
-    const value = await this.cache.consumeToken(nonce);
+  async consumeServerNonce(nonce: unknown, installId: string, bundleId: string, status: ConfirmStatus): Promise<boolean> {
+    if (typeof nonce !== 'string' || nonce === '') return false;
+    const value = await this.cache.peekToken(nonce);
     if (value === null) return false;
+    let scope: Partial<ConfirmScope> & { installId?: unknown };
     try {
-      const parsed = JSON.parse(value) as { installId: string; bundleId: string };
-      if (parsed.installId !== installId) return false;
-      return parsed.bundleId === '' || parsed.bundleId === bundleId;
+      scope = JSON.parse(value) as typeof scope;
     } catch {
       return false;
     }
+    if (scope.installId !== installId || !Array.isArray(scope.bundleIds)) return false;
+    const release = await this.db.getRelease(bundleId);
+    if (!release || release.platform !== scope.platform || release.channel !== scope.channel) return false;
+    const covered =
+      scope.bundleIds.includes(bundleId) ||
+      (status === 'failed' &&
+        release.runtimeVersion === scope.runtimeVersion &&
+        release.bundleVersion > Number(scope.currentBundleVersion));
+    if (!covered) return false;
+    return this.cache.registerNonce(`${INTERNAL_KEY}confirm:${nonce}:${status}:${bundleId}`, this.config.nonceTtlMs);
   }
 
   // ---- adoption + auto-pause --------------------------------------------
@@ -531,12 +632,22 @@ export class Store {
    * Record a confirm event and auto-pause the rollout if the failure rate is too high.
    * @param bundleId the release
    * @param status the reported status
+   * @param installId the reporting install; with it, a second failure report from that install for
+   *   this bundle is not counted, so one device cannot drive an auto-pause
    * @returns whether this confirm triggered an auto-pause
    */
-  async recordConfirm(bundleId: string, status: ConfirmStatus): Promise<boolean> {
+  async recordConfirm(bundleId: string, status: ConfirmStatus, installId?: string): Promise<boolean> {
     const r = await this.db.getRelease(bundleId);
     if (!r) return false;
-    r.adoption[status] += 1;
+    if (installId && (status === 'failed' || status === 'rolled_back')) {
+      const first = await this.cache.registerNonce(`${INTERNAL_KEY}failure:${installId}:${bundleId}`, FAILURE_DEDUPE_TTL_MS);
+      if (!first) return false;
+    }
+    // Rebuilt from the known keys on a null prototype, which also drops keys an older version let in.
+    const counts = Object.create(null) as AdoptionStats;
+    for (const key of ['applied', 'healthy', 'failed', 'rolled_back'] as const) counts[key] = Number(r.adoption?.[key]) || 0;
+    counts[status] += 1;
+    r.adoption = counts;
     const total = r.adoption.applied + r.adoption.healthy + r.adoption.failed + r.adoption.rolled_back;
     const failures = r.adoption.failed + r.adoption.rolled_back;
     let autoPaused = false;

@@ -3,6 +3,7 @@ package com.dashota
 import android.app.Activity
 import android.app.Application
 import android.content.Intent
+import android.net.http.X509TrustManagerExtensions
 import android.system.Os
 import android.os.Bundle
 import android.util.Base64
@@ -16,9 +17,13 @@ import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 
 /**
  * The DashOta TurboModule. JS orchestrates; this implements the trust-critical native work:
@@ -134,12 +139,31 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
           promise.reject("runtime_mismatch", "bundle runtimeVersion does not match this binary")
           return@Thread
         }
+        // The server picks releases by channel and platform, so these are only a breached server's
+        // lever — one key ring commonly verifies more than one channel.
+        if (manifest.optString("channel") != getChannel()) {
+          promise.reject("channel_mismatch", "manifest is for channel ${manifest.optString("channel")}, not ${getChannel()}")
+          return@Thread
+        }
+        if (manifest.optString("platform") != "android") {
+          promise.reject("platform_mismatch", "manifest is for platform ${manifest.optString("platform")}")
+          return@Thread
+        }
+        if (manifest.has("minNativeBuild") && getNativeBuildNumber() < manifest.getDouble("minNativeBuild")) {
+          promise.reject("native_too_old", "bundle needs native build ${manifest.getInt("minNativeBuild")} or later")
+          return@Thread
+        }
         val version = manifest.getInt("bundleVersion")
         if (version <= DashOtaStore.currentBundleVersion(reactContext)) {
           promise.reject("downgrade", "bundleVersion is not newer than current")
           return@Thread
         }
         val bundleId = manifest.getString("bundleId")
+        // bundleId and every sha256 become directory and file names below.
+        if (!SAFE_BUNDLE_ID.matches(bundleId)) {
+          promise.reject("bad_manifest", "bundleId $bundleId is not a safe file name")
+          return@Thread
+        }
         if (DashOtaStore.isDisabled(reactContext, bundleId)) {
           promise.reject("bundle_disabled", "bundle was disabled after a crash loop")
           return@Thread
@@ -154,10 +178,15 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
         // Every path is checked before anything is written: a valid signature over "../../x" is
         // still a valid signature.
         for (i in 0 until entries.length()) {
-          val path = entries.getJSONObject(i).getString("path")
+          val entry = entries.getJSONObject(i)
+          val path = entry.getString("path")
           val bad = invalidPath(path)
           if (bad != null) {
             promise.reject("path_invalid", "manifest path $path $bad")
+            return@Thread
+          }
+          if (!SHA256_HEX.matches(entry.getString("sha256")) || !SHA256_HEX.matches(entry.getJSONObject("blob").getString("sha256"))) {
+            promise.reject("bad_manifest", "manifest entry $path has a malformed sha256")
             return@Thread
           }
         }
@@ -409,11 +438,21 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
     if (pins.isEmpty()) return
     if (conn !is HttpsURLConnection) throw RuntimeException("TLS pinning is enabled but the download URL is not https")
     conn.connect()
+    // Match against the chain the platform validated, not the one the server sent: a server holding
+    // any trusted certificate for this host could append the pinned certificate to its own chain.
+    val presented = conn.serverCertificates.filterIsInstance<X509Certificate>().toTypedArray()
+    val validated = X509TrustManagerExtensions(platformTrustManager()).checkServerTrusted(presented, "RSA", conn.url.host)
     val md = MessageDigest.getInstance("SHA-256")
-    val matched = conn.serverCertificates.any { cert ->
+    val matched = validated.any { cert ->
       pins.contains(Base64.encodeToString(md.digest(cert.encoded), Base64.NO_WRAP))
     }
     if (!matched) throw RuntimeException("TLS pin mismatch: server certificate not in the configured pin set")
+  }
+
+  private fun platformTrustManager(): X509TrustManager {
+    val factory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+    factory.init(null as KeyStore?)
+    return factory.trustManagers.filterIsInstance<X509TrustManager>().first()
   }
 
   override fun isBundleDisabled(bundleId: String): Boolean = DashOtaStore.isDisabled(reactContext, bundleId)
@@ -508,6 +547,10 @@ class DashOtaModule(private val reactContext: ReactApplicationContext) :
 
     /** Shared with DashOtaStore so one `adb logcat -s DashOta` shows the whole update path. */
     private const val TAG = "DashOta"
+
+    /** Starts alphanumeric, so "." and ".." cannot pass. */
+    private val SAFE_BUNDLE_ID = Regex("^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
+    private val SHA256_HEX = Regex("^[0-9a-f]{64}$")
 
     /** Process-wide: the module can be recreated across reloads, the callback must not stack up. */
     @Volatile

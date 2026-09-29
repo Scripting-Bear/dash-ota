@@ -1,13 +1,13 @@
 {
   "name": "@dash-ota/backend",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Config-driven, plug-and-play OTA distributor for React Native (dash-ota). Mounts into Express/Connect via one middleware or runs standalone. Serves pre-signed manifests + ciphertext; never holds the signing key.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "source": "./src/index.ts",
+      "@dash-ota/source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
@@ -64,5 +64,12 @@
     "e2e": "tsx src/e2e.test.ts",
     "smoke:express": "tsx src/express.smoke.test.ts",
     "prepublishOnly": "npm run build"
+  },
+  "homepage": "https://scripting-bear.github.io/dash-ota/",
+  "bugs": {
+    "url": "https://github.com/Scripting-Bear/dash-ota/issues"
+  },
+  "engines": {
+    "node": ">=20.19.0"
   }
 }

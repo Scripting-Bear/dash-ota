@@ -5,24 +5,26 @@ title: Express integration
 
 # Express integration
 
-`dashOtaMiddleware(options)` returns a standard `(req, res, next)` handler. It owns the OTA routes
-and lets everything else fall through to your app.
+`dashOtaMiddleware(options)` returns a standard `(req, res, next)` handler. It answers the OTA
+routes and passes everything else on to the rest of your app.
 
-```ts
+```js title="server.mjs"
 import express from 'express';
 import { dashOtaMiddleware, rawBodySaver } from '@dash-ota/backend';
 
 const app = express();
 
-// The OTA request signature is over the RAW body. If a global JSON parser runs first,
-// stash the raw bytes with rawBodySaver; otherwise mount the OTA middleware BEFORE any parser.
-app.use(express.json({ verify: rawBodySaver }));
+// Request signatures cover the raw body. With a global JSON parser, keep the raw bytes with
+// rawBodySaver, and raise the limit: release manifests can exceed express.json's 100 kB default.
+app.use(express.json({ limit: '32mb', verify: rawBodySaver }));
 
 app.use(
   dashOtaMiddleware({
     adminToken: process.env.OTA_ADMIN_TOKEN,
-    verifyEnrollToken: (token) => auth.verify(token), // your app-session auth
-    onConfirm: (e) => metrics.track('ota_confirm', e),
+    storageDir: './ota-data/storage',
+    dataDir: './ota-data/db',
+    verifyEnrollToken: async (token) => <YOUR_SESSION_CHECK>(token),
+    onConfirm: (event) => console.log('ota confirm', event.bundleId, event.status),
     logger: console,
   }),
 );
@@ -30,25 +32,29 @@ app.use(
 app.listen(4455);
 ```
 
-## Mount at the root
+`<YOUR_SESSION_CHECK>` is your own function that returns `true` for a valid session token. The
+middleware applies its own size limits on top of the parser's: 64 KiB for device requests, and
+`maxAdminBodyBytes` (32 MiB by default) for authenticated admin requests.
 
-The routes are **absolute** (`/ota/v2/*`, `/admin/*`, `/health`). Do **not** mount under a
-sub-path — the device signs over the request `path`, so it must match what the client signed.
+## Mount it at the root
 
-```ts
-app.use(dashOtaMiddleware(opts));        // ✅ correct
-app.use('/ota', dashOtaMiddleware(opts)); // ❌ breaks signature verification
+The routes are absolute (`/ota/v2/*`, `/admin/*`, `/health`, `/ready`). The device signs the
+request path it sends, so the path the server sees has to be the same.
+
+```js
+app.use(dashOtaMiddleware(options));        // correct
+app.use('/ota', dashOtaMiddleware(options)); // breaks signature verification
 ```
 
-## The raw-body requirement
+## The raw body
 
-The device signs `[METHOD, path, installId, nonce, timestamp, sha256(body)]`, so the backend must
-verify against the **exact** body bytes. Two supported setups:
+The device signs the method, path, install id, nonce, timestamp and the SHA-256 of the body, so the
+server has to check the exact bytes it received. Either:
 
-1. Mount `dashOtaMiddleware` **before** any body parser (it drains the stream itself), **or**
-2. Keep your global `express.json()` but add `verify: rawBodySaver` so the raw bytes are stashed on
+1. mount `dashOtaMiddleware` before any body parser (it reads the stream itself), or
+2. keep your global `express.json()` and add `verify: rawBodySaver`, which keeps the raw bytes on
    `req.rawBody`.
 
-`rawBodySaver` is a body-parser `verify` callback exported for exactly this.
+A request with an empty or malformed JSON body gets `400 bad_request` either way.
 
 → [Configuration](/docs/backend/configuration) · [Hooks](/docs/backend/hooks) · [Endpoints](/docs/backend/endpoints)

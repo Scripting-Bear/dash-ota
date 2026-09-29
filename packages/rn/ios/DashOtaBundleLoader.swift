@@ -38,4 +38,12 @@ public class DashOtaBundleLoader: NSObject {
     }
     return resolved
   }
+
+  /// An in-process reload must resolve again, or it keeps running the bundle it started with.
+  @objc public static func invalidate() {
+    lock.lock()
+    defer { lock.unlock() }
+    resolvedOnce = false
+    resolved = nil
+  }
 }

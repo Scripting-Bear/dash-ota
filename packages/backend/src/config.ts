@@ -6,14 +6,16 @@
  * @module config
  */
 
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import type { ConfirmStatus } from '@dash-ota/shared';
 
-const here = dirname(fileURLToPath(import.meta.url));
-const pkgRoot = join(here, '..');
+/** Default cap on an authenticated admin JSON body; a signed manifest grows with its file count. */
+export const DEFAULT_MAX_ADMIN_BODY_BYTES = 32 * 1024 * 1024;
 
-/** Minimal logger the backend emits through (defaults to `console`). */
+/**
+ * Minimal logger the backend emits through. When none is configured nothing is logged, except
+ * hook failures, which go to `console.error`.
+ */
 export interface OtaBackendLogger {
   info(message: string): void;
   warn(message: string): void;
@@ -59,7 +61,7 @@ export interface PublishEvent {
  * forking the core.
  */
 export interface BackendHooks {
-  /** sink for the backend's own logs (default: `console`). */
+  /** sink for the backend's own logs; see {@link OtaBackendLogger} for what happens without one. */
   logger?: OtaBackendLogger;
   /**
    * Validate the enroll session token against your auth service. Return `true` to allow the
@@ -67,9 +69,12 @@ export interface BackendHooks {
    * (presence-only) checking.
    */
   verifyEnrollToken?: (token: string | undefined, principal: EnrollPrincipal) => boolean | Promise<boolean>;
-  /** called after every `/confirm` (adoption/health telemetry, alerting). */
+  /**
+   * called after every accepted `/confirm` (adoption/health telemetry, alerting). Not awaited; a
+   * throw or rejection is logged and never affects the response.
+   */
   onConfirm?: (event: ConfirmEvent) => void;
-  /** called once a release is finalized and becomes visible to devices. */
+  /** called once a release is finalized and becomes visible to devices. Same error handling as `onConfirm`. */
   onPublish?: (event: PublishEvent) => void;
 }
 
@@ -82,13 +87,13 @@ export interface BackendConfig extends BackendHooks {
    * `adminToken` option. Never commit it, and serve `/admin/*` only over TLS.
    */
   adminToken: string;
-  /** directory where encrypted bundle archives are stored. */
+  /** directory for blobs with the disk blob store. Default `<cwd>/.dash-ota/storage`; must not be inside `node_modules`. */
   storageDir: string;
-  /** directory for persisted release/install metadata. */
+  /** directory for release/install metadata with the disk database. Default `<cwd>/.dash-ota/data`; same rule. */
   dataDir: string;
   /** allowed clock skew for request timestamps (ms). */
   timestampSkewMs: number;
-  /** TTL for one-time download tokens (ms). */
+  /** TTL for download tokens (ms). A token is reusable for every blob request until it expires. */
   downloadTokenTtlMs: number;
   /** TTL for replay-protection nonce cache (ms). */
   nonceTtlMs: number;
@@ -100,6 +105,11 @@ export interface BackendConfig extends BackendHooks {
   maxBundleBytes: number;
   /** Hard cap on one uploaded blob. Enforced as the body arrives, not after. */
   maxBlobBytes: number;
+  /**
+   * Cap on an admin JSON body (or `OTA_MAX_ADMIN_BODY_BYTES`), applied only once the admin token
+   * checks out. Device and unauthenticated bodies are capped at 64 KiB. Default 32 MiB.
+   */
+  maxAdminBodyBytes?: number;
   /** max `/enroll` requests per install per {@link rateLimitWindowMs} window; `0` disables. */
   enrollRateLimit: number;
   /** max `/check` requests per authenticated install per {@link rateLimitWindowMs} window; `0` disables. */
@@ -160,8 +170,9 @@ export function loadConfig(): BackendConfig {
   return {
     port: envNum('OTA_PORT', 4455),
     adminToken: process.env.OTA_ADMIN_TOKEN ?? '',
-    storageDir: process.env.OTA_STORAGE_DIR ?? join(pkgRoot, 'storage'),
-    dataDir: process.env.OTA_DATA_DIR ?? join(pkgRoot, '.data'),
+    // Outside the package: npm replaces the package directory on every install or upgrade.
+    storageDir: process.env.OTA_STORAGE_DIR ?? join(process.cwd(), '.dash-ota', 'storage'),
+    dataDir: process.env.OTA_DATA_DIR ?? join(process.cwd(), '.dash-ota', 'data'),
     timestampSkewMs: envNum('OTA_TS_SKEW_MS', 5 * 60 * 1000),
     // A v2 update is many blob requests and a resumed download is many more, so the token is
     // reusable within a longer window rather than one-shot with a two-minute life.
@@ -171,6 +182,7 @@ export function loadConfig(): BackendConfig {
     autoPauseMinSamples: envNum('OTA_AUTOPAUSE_MIN', 5),
     maxBundleBytes: envNum('OTA_MAX_BUNDLE_BYTES', 100 * 1024 * 1024),
     maxBlobBytes: envNum('OTA_MAX_BLOB_BYTES', 64 * 1024 * 1024),
+    maxAdminBodyBytes: envNum('OTA_MAX_ADMIN_BODY_BYTES', DEFAULT_MAX_ADMIN_BODY_BYTES),
     enrollRateLimit: envNum('OTA_ENROLL_RATE', 10),
     checkRateLimit: envNum('OTA_CHECK_RATE', 60),
     rateLimitWindowMs: envNum('OTA_RATE_WINDOW_MS', 60 * 1000),
@@ -212,5 +224,7 @@ export type OtaBackendOptions = Partial<BackendConfig> & {
  */
 export function resolveBackendConfig(options: OtaBackendOptions = {}): BackendConfig {
   const { store: _store, providers: _providers, ...overrides } = options;
-  return { ...loadConfig(), ...overrides };
+  // An explicit `undefined` means "not set": spread as-is, it would overwrite a fail-closed default.
+  const defined = Object.fromEntries(Object.entries(overrides).filter(([, value]) => value !== undefined));
+  return { ...loadConfig(), ...defined };
 }

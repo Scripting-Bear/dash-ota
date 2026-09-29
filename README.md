@@ -1,12 +1,12 @@
 # dash-ota
 
-A custom, self-hosted, **hardened over-the-air (OTA) update system for React Native** — full
-ownership of the client, the release tooling, and the backend, built to replace a managed OTA
-SDK (Stallion / CodePush) with a security model strong enough for a financial-grade app.
+A self-hosted, **signed over-the-air (OTA) update system for React Native**: you own the client,
+the release tooling and the backend. It was built to replace a managed OTA SDK (Stallion /
+CodePush) in a financial app.
 
-The single most important property: **bundle integrity is verified in native against an Ed25519
-public key baked into the app binary**, and **signing happens only in the CLI** — so even a fully
-breached backend cannot forge an update.
+The most important property: **bundle integrity is verified in native against Ed25519 public keys
+compiled into the app binary**, and **signing happens only in the CLI**, so even a fully breached
+backend cannot forge or modify an update. Signing is mandatory; there is no unsigned mode.
 
 ---
 
@@ -31,26 +31,33 @@ Four packages over one shared core (npm workspaces monorepo):
 | Package | Role |
 |---|---|
 | **`packages/rn`** → `react-native-dash-ota` | Client library: one `<DashOtaProvider>` + `useOtaUpdate()` over native Android (Kotlin + Tink) / iOS (Swift CryptoKit). TurboModule (New Arch). Verifies + decrypts in native, applies on next cold start, rolls back on crash. |
-| **`packages/cli`** → `@dash-ota/cli` | Release tooling, **`npx dash-ota`**. Bundles, encrypts, **signs** (holds the Ed25519 private key, CI only), publishes, operates rollouts. |
+| **`packages/cli`** → `@dash-ota/cli` | Release tooling; the binary is `dash-ota` (`npx @dash-ota/cli …`, or `npx dash-ota …` once `@dash-ota/cli` is installed in your project). Bundles, encrypts, **signs** with your Ed25519 private key (keep it in CI or a KMS), publishes, operates rollouts. |
 | **`packages/backend`** → `@dash-ota/backend` | Config-driven, plug-and-play distributor. One `dashOtaMiddleware()` into any Express/Connect app, or standalone. Serves **pre-signed** manifests + ciphertext; **never holds the signing key**. |
-| **`packages/shared`** → `@dash-ota/shared` | Crypto/protocol core (Ed25519, AES-256-GCM, ECDSA device-key auth, canonical JSON, manifest schema). Pure Node `crypto`. |
+| **`packages/shared`** → `@dash-ota/shared` | Crypto/protocol core (Ed25519, AES-256-GCM, ECDSA device-key auth, canonical JSON, manifest schema). Crypto from Node's built-in `crypto`; zstd from `@mongodb-js/zstd`. |
 
 ---
 
-## Security model (v1)
+## Security model
 
 - **Integrity** — every manifest is **Ed25519-signed in the CLI** and **verified in native** with
-  a public key embedded in the binary. Holds even if TLS is broken.
-- **Confidentiality** — bundle bytes are **AES-256-GCM** ciphertext (defense-in-depth; active-MITM
-  confidentiality lands with the deferred TLS-pinning plug-in).
-- **Anti-replay & enrollment** — each install holds a **hardware-backed device key** (AndroidKeyStore
-  / Secure Enclave); enrollment registers only the **public** key (gated by an app session token),
-  and requests are signed with **ECDSA P-256** + nonce + timestamp. No symmetric secret is ever
-  transmitted, so there's nothing to intercept at bootstrap.
+  public keys embedded in the binary. Holds even if TLS is broken.
+- **Confidentiality** — blobs are **AES-256-GCM** ciphertext, which protects the blob store. The
+  content key travels in the manifest, so the server, every enrolled install and an active MITM on
+  `/check` can read bundles. Optional native TLS pinning covers blob downloads only.
+- **Anti-replay & enrollment** — each install holds a **device key** (AndroidKeyStore / Secure
+  Enclave, with a software fallback on iOS by default); enrollment registers only the **public**
+  key, and requests are signed with **ECDSA P-256** + nonce + timestamp. No symmetric secret is
+  transmitted. Who may enroll is decided by your `verifyEnrollToken` hook; the default only checks
+  that a token is present.
 - **Targeting** — exact `runtimeVersion` (native-compat key) + optional `targetAppVersions` +
-  `channel` + staged `rollout %`. An OTA can never land on an incompatible native build.
-- **Reliability** — atomic apply on cold start, crash-loop circuit breaker (revert → last-known-good
-  → embedded), monotonic downgrade guard, server-side auto-pause, fail-closed everywhere.
+  `channel` + staged `rollout %`. An OTA only installs on a binary with the same `runtimeVersion`.
+- **Reliability** — apply on the next cold start, crash-loop circuit breaker (revert to
+  last-known-good, and from 0.5.1 to the embedded bundle if that also loops), a downgrade guard
+  that refuses anything not newer than the running bundle, and server-side auto-pause.
+
+What a breached server can still do (withhold updates, re-serve older signed releases, force a hard
+update prompt, read bundles) is listed in
+[If your server is breached](https://scripting-bear.github.io/dash-ota/docs/security/breach).
 
 Full threat model and rationale: **[DESIGN.md](./DESIGN.md)**.
 
@@ -86,5 +93,5 @@ docs/        integration guides (backend, react-native, cli)
 DESIGN.md       design & threat model
 ```
 
-> The CLI's Ed25519 **private** signing keys live only in CI/KMS — never committed (`.keys/`,
-> `*.private.pem` are gitignored).
+> Keep Ed25519 **private** signing keys in CI secrets or a KMS, never in the repo (`.keys/` and
+> `*.private.pem` are gitignored here).
