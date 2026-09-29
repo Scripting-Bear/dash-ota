@@ -48,5 +48,11 @@ jobs:
         run: npm run lint
       - name: Format check
         run: npm run format:check
+      - name: Native source check
+        run: npm run lint:native
+      # test:dist exercises the built artifacts on purpose — every other suite runs against src
+      # via --conditions source, so a stale dist would otherwise stay invisible.
+      - name: Build
+        run: npm run build
       - name: Tests
         run: npm test
