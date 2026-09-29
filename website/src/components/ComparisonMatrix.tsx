@@ -15,19 +15,40 @@ const COLS = ['dash-ota', 'Stallion', 'hot-updater', 'CodePush', 'expo-updates']
 const ROWS: { cap: string; key?: boolean; cells: string[] }[] = [
   {
     cap: 'Self-hosted backend',
-    cells: ['y:You run it — Express middleware or standalone', 'n:Managed SaaS only', 'y:Your S3 / Supabase / Cloudflare', 'p:Self-host only — App Center retired Mar 2025, server source archived May 2025', 'p:EAS-hosted, or self-host the updates server'],
+    cells: [
+      'y:You run it — Express middleware or standalone',
+      'p:Self-hosted and on-prem exist, but it is proprietary and tier-gated',
+      'y:Your S3 / Supabase / Cloudflare',
+      'p:Self-host only — App Center retired Mar 2025, server source archived May 2025',
+      'p:EAS-hosted, or self-host the updates server',
+    ],
   },
   {
-    cap: 'Signed bundles, verified in native',
-    key: true,
-    cells: ['y:Ed25519 manifest, key embedded in the binary', 'n', 'n', 'n', 'y:Code signing, opt-in'],
+    cap: 'Open source',
+    cells: ['y:MIT, all four packages', 'n:Proprietary, freemium to 10K MAU', 'y:MIT', 'y:MIT, but archived', 'y:MIT client, paid service'],
   },
   {
-    cap: 'Safe if the backend is breached',
-    key: true,
-    cells: ["y:Backend never holds the signing key — can't forge", 'n', 'n', 'n', 'y:Only if code signing is enabled'],
+    cap: 'Signed bundles, verified on device',
+    cells: [
+      'y:Ed25519 manifest, key compiled into the binary',
+      'y:RSA/SHA-256, verified before install',
+      'n:No signing in the published docs',
+      'n',
+      'y:Code signing, opt-in',
+    ],
   },
-  { cap: 'Payload encryption (AES-256-GCM)', cells: ['y:AES-256-GCM authenticated payloads', 'n', 'n', 'n', 'n'] },
+  {
+    cap: 'Signing key never on the distribution server',
+    key: true,
+    cells: [
+      'y:The CLI signs; the backend has no key to steal',
+      'p:Self-hosted controls its own keys; managed is not documented',
+      'n',
+      'n',
+      'p:Only if you enable code signing and hold the key',
+    ],
+  },
+  { cap: 'Payload encryption (AES-256-GCM)', key: true, cells: ['y:AES-256-GCM authenticated payloads', 'n', 'n', 'n', 'n'] },
   {
     cap: 'Hardware device-key request auth',
     key: true,
@@ -35,27 +56,55 @@ const ROWS: { cap: string; key?: boolean; cells: string[] }[] = [
   },
   {
     cap: 'Anti-replay (nonce + timestamp)',
-    cells: ['y:Server-issued nonce + timestamp', 'n', 'n', 'p:Limited / not documented', 'p:Limited / not documented'],
-  },
-  { cap: 'No S3 URL on the client', cells: ['y:API-only delivery + one-time download token', 'n', 'n:Client fetches a signed URL', 'n', 'n'] },
-  {
-    cap: 'runtimeVersion / native-compat gate',
-    cells: ['y:Enforced on the backend AND in native', 'p:Manual / by convention', 'y', 'p:targetBinaryVersion (semver range)', 'y'],
-  },
-  { cap: 'Channels (dev / uat / prod)', cells: ['y:Per-flavour signing key + channel', 'y', 'y', 'y:Deployments', 'y'] },
-  { cap: 'Staged rollout %', cells: ['y:Deterministic install-id bucketing', 'y', 'y', 'y', 'y'] },
-  {
-    cap: 'Crash-loop auto-rollback',
     key: true,
-    cells: ['y:→ last-known-good → embedded, then disables the bundle', 'p:Manual rollback', 'p:Manual rollback', 'y', 'y'],
+    cells: ['y:Server-issued nonce + timestamp', 'n', 'n', 'p:Not documented', 'p:Not documented'],
+  },
+  { cap: 'No bucket URL on the client', cells: ['y:API-only delivery + a scoped download token', 'n', 'n:Client fetches a signed URL', 'n', 'n'] },
+  {
+    cap: 'Native-compatibility gate',
+    cells: [
+      'y:runtimeVersion, enforced on the backend and in native',
+      'p:Target app versions',
+      'y:Fingerprint strategy, embedded in the binary',
+      'p:targetBinaryVersion (semver range)',
+      'y:Runtime version',
+    ],
+  },
+  { cap: 'Channels (dev / uat / prod)', cells: ['y:Per-channel signing key + channel', 'y', 'y', 'y:Deployments', 'y:Branches and channels'] },
+  { cap: 'Staged rollout %', cells: ['y:Deterministic install-id bucketing', 'y', 'y', 'y', 'y:Per-update or per-branch'] },
+  {
+    cap: 'Automatic rollback on a failed boot',
+    cells: [
+      'y:→ last-known-good → embedded, then blocklists the bundle',
+      'y:Detects crashes and reverts automatically',
+      'y:Recovers to a working bundle if startup fails',
+      'y',
+      'y:Catches fatal JS errors in the first 10s, then fetches a replacement',
+    ],
   },
   {
-    cap: 'Server-side auto-pause on failures',
-    cells: ['y:Auto-pauses when the failure rate crosses a threshold', 'n', 'n', 'p:Manual via the dashboard', 'p:Manual'],
+    cap: 'Server-side auto-pause on failure rate',
+    key: true,
+    cells: [
+      'y:Pauses the release once the failure rate crosses a threshold',
+      'p:Automatic rollback exists; a server-side pause is not documented',
+      'n',
+      'p:Manual via the dashboard',
+      'n:Rollouts are operator-driven',
+    ],
   },
-  { cap: 'Force-update ("go to store") gate', cells: ['y:Built-in min-native-version gate', 'n', 'n', 'n', 'p:Build it yourself'] },
-  { cap: 'npx release CLI', cells: ['y', 'y', 'y', 'y', 'y:EAS CLI'] },
-  { cap: 'New Arch + Hermes (RN 0.79+)', cells: ['y', 'y', 'y', 'p:Limited / community support', 'y'] },
+  {
+    cap: 'Force-update to the app store',
+    cells: [
+      'y:Built-in minimum-native-version gate',
+      'p:Not documented as a store gate',
+      'p:Force-applies a JS update; not a store gate',
+      'n',
+      'p:Build it yourself',
+    ],
+  },
+  { cap: 'Release CLI', cells: ['y:npx dash-ota', 'y', 'y:npx hot-updater', 'y', 'y:EAS CLI'] },
+  { cap: 'New Arch + Hermes (RN 0.79+)', cells: ['y', 'y', 'y', 'p:Community forks only', 'y'] },
 ];
 
 const LICENSE = ['MIT — all yours', 'Proprietary', 'MIT', 'Retiring 2025', 'Mixed'];
