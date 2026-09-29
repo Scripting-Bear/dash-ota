@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 4
 title: Pinning & attestation
 ---
 
@@ -26,7 +26,7 @@ openssl s_client -connect ota.example.com:443 </dev/null 2>/dev/null \
   | openssl x509 -outform der | openssl dgst -sha256 -binary | base64
 ```
 
-:::warning Pin before you enable
+:::warning[Pin before you enable]
 A wrong pin **bricks OTA updates**. Pin more than one certificate (e.g. current + next), or pin your
 CA, and roll pins out ahead of a rotation. Verify on a device before shipping — this is exactly why
 it ships off by default.

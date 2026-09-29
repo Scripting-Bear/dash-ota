@@ -42,7 +42,7 @@ function UpdateRow() {
 | `cta` | `string \| null` | button label; `null` in a phase with no action (while downloading) |
 | `ctaEnabled` | `boolean` | false while an action is in flight — the double-tap guard lives here |
 | `busy` | `boolean` | an operation is running; show a spinner |
-| `progress` | `number \| null` | `null` means indeterminate (the native download reports no granular progress) |
+| `progress` | `number \| null` | 0–1 while downloading. `null` means indeterminate — **iOS always reports indeterminate**, because the native side does not emit progress there yet. Render a spinner for `null` and a bar otherwise. |
 | `blocking` | `boolean` | the update is mandatory — do not let the user dismiss this UI |
 | `action` | `() => Promise<void>` | download → restart → retry, whichever the phase calls for |
 
@@ -78,7 +78,7 @@ For diagnostics and non-standard flows.
 | `markHealthy` | `() => void` | Promote the running bundle to last-known-good. Call **once your app is genuinely usable**. |
 | `rollback` | `() => Promise<void>` | Force a revert to the last-known-good bundle. |
 
-:::note How `restart()` works
+:::note[How `restart()` works]
 Restarting under the New Architecture is platform-specific: iOS re-triggers the reload command (the
 host re-resolves the bundle URL), Android relaunches the process, because `ReactHost.reload()` replays
 the bundle loader captured at startup and would silently run the *old* bundle. Both paths are

@@ -6,13 +6,13 @@ description: Push users to the store when a native fix is required — the path 
 
 # Force-update gate
 
-OTA updates JS, not native. When a fix **requires a new binary** (a native dependency, a
-TurboModule change, a security patch in native), you need to push users to the store. dash-ota has
-a built-in gate for exactly this.
+OTA updates JS, not native. When a fix requires a new binary — a native dependency, a TurboModule
+change, a security patch in native code — you have to send people to the store. The force-update
+gate is how dash-ota tells an app that its binary is too old to keep going.
 
 ## How it works
 
-`/check` returns a **native-version policy** per channel:
+Every `/check` returns a native-version policy for the channel, alongside the update itself:
 
 ```json
 {
@@ -24,41 +24,100 @@ a built-in gate for exactly this.
 }
 ```
 
-The client surfaces it as `useOtaUpdate().nativePolicy`:
+The client surfaces it as `useOtaUpdate().nativePolicy`, with `severity` resolved server-side
+against the running binary's build number:
 
-- **`severity: 'none'`** — the device meets the minimum; nothing to do.
-- **`severity: 'soft'`** — the binary is below the minimum; show a **dismissible nudge**.
-- **`severity: 'hard'`** — the binary is too old; show a **blocking "Update from Store"** screen
-  using `storeUrl`.
+| `severity` | Meaning | What to render |
+|---|---|---|
+| `none` | the binary meets the minimum | nothing |
+| `soft` | below the minimum | a dismissible nudge |
+| `hard` | too old to support | a blocking screen |
+
+The gate and OTA coexist. A binary that meets the minimum keeps receiving JS updates as normal;
+only the too-old ones are sent to the store.
 
 ## Set the policy
 
 ```bash
 npx dash-ota native-policy --channel prod --min 42 --severity hard \
-  --store-url "https://play.google.com/store/apps/details?id=..."
+  --store-url "https://play.google.com/store/apps/details?id=com.you.app"
 ```
+
+`--min` is the lowest native build number you still support. It is compared against the build
+number compiled into the app (`ota_native_build` on Android, `CFBundleVersion` on iOS).
 
 ## Render the gate
 
+dash-ota renders nothing itself — it hands you the policy and you decide what the user sees.
+
+Give the provider your store listing. The client never passes the server's `storeUrl` through —
+see the warning below — so without this the gate has no link:
+
 ```tsx
-function ForceUpdateGate({ children }) {
+<DashOtaProvider
+  config={{
+    appVersion: '1.0.0',
+    storage: AsyncStorage,
+    storeUrl: Platform.select({
+      ios: 'https://apps.apple.com/app/id000000000',
+      default: 'market://details?id=com.you.app',
+    }),
+  }}
+>
+```
+
+```tsx
+function ForceUpdateGate({ children }: { children: React.ReactNode }) {
   const { nativePolicy } = useOtaUpdate();
+
   if (nativePolicy?.severity === 'hard') {
-    return <UpdateFromStoreScreen url={nativePolicy.storeUrl} />; // blocking
+    return (
+      <BlockingScreen
+        title="Update required"
+        body="A newer version is required to continue."
+        cta="Update from Store"
+        onPress={() => nativePolicy.storeUrl && Linking.openURL(nativePolicy.storeUrl)}
+      />
+    );
   }
+
   return (
     <>
-      {nativePolicy?.severity === 'soft' && <UpdateNudge url={nativePolicy.storeUrl} />}
+      {nativePolicy?.severity === 'soft' && (
+        <DismissibleBanner
+          text="A new version is available."
+          onPress={() => nativePolicy.storeUrl && Linking.openURL(nativePolicy.storeUrl)}
+        />
+      )}
       {children}
     </>
   );
 }
 ```
 
-## When to use which
+:::warning[The policy is not signed — and only its URL is fixed]
+`nativePolicy` is **not covered by the manifest signature**. It is a sibling of the signed
+manifest in the `/check` response, not a field inside it, so everything in it is whatever the
+server said.
 
-- **JS-fixable and same `runtimeVersion`?** Just OTA them — no store trip.
-- **Native fix required / binary below minimum?** Set a `hard` (or `soft`) policy so old binaries
-  are guided to the store while everyone else keeps getting OTAs.
+The client closes the worst of that for you: **`nativePolicy.storeUrl` is always your
+`config.storeUrl`, never the server's.** A value from the server is dropped and logged, even when
+it looks like a real store link, because no scheme check can tell your listing from an attacker's
+`https://` page.
 
-→ [Force-update UI recipe](/docs/react-native/force-update-ui) · [Guide: force-update](/docs/guides/force-update)
+What is **not** closed: `severity` and `minSupportedNativeVersion` are still the server's word.
+Someone who controls the backend can set `severity: 'hard'` for every install and lock your users
+out of the app. They cannot redirect them anywhere, but they can stop them. See
+[If your server is breached](/docs/security/breach).
+:::
+
+## Choosing a severity
+
+| Situation | What to do |
+|---|---|
+| JS-only fix, same `runtimeVersion` | publish an OTA, no store trip |
+| Native dependency, TurboModule or native security fix | bump the native build, set `hard` for older builds |
+| A new binary is out but the old one still works | `soft` |
+
+A `hard` policy blocks people from using the app, so it is worth being deliberate about. `soft`
+first, `hard` once the store build has had time to propagate, is the usual sequence.

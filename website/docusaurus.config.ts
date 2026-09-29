@@ -16,13 +16,12 @@ const config: Config = {
   trailingSlash: false,
 
   onBrokenLinks: 'throw',
-  onBrokenMarkdownLinks: 'warn',
 
   future: { v4: true },
 
   i18n: { defaultLocale: 'en', locales: ['en'] },
 
-  markdown: { mermaid: true },
+  markdown: { mermaid: true, hooks: { onBrokenMarkdownLinks: 'warn' } },
   themes: [
     '@docusaurus/theme-mermaid',
     [
@@ -67,7 +66,7 @@ const config: Config = {
   ],
 
   themeConfig: {
-    image: 'img/logo.svg',
+    image: 'img/social-card.png',
     colorMode: {
       defaultMode: 'dark',
       disableSwitch: true,
@@ -105,8 +104,9 @@ const config: Config = {
       hideOnScroll: true,
       items: [
         { type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs' },
-        { to: '/docs/getting-started/quickstart', position: 'left', label: 'Quickstart' },
-        { to: '/docs/guides/migrate-from-stallion', position: 'left', label: 'Guides' },
+        { to: '/docs/getting-started/quickstart', position: 'left', label: 'Start here' },
+        { to: '/docs/cli/dashboard', position: 'left', label: 'Dashboard' },
+        { to: '/docs/security/breach', position: 'left', label: 'Security' },
         { to: '/docs/introduction/comparison', position: 'left', label: 'Compare' },
         { to: '/docs/api/react-native', position: 'left', label: 'API' },
         { href: 'https://www.npmjs.com/org/dash-ota', position: 'right', label: 'npm' },

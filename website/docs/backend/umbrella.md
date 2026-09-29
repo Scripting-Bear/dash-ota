@@ -41,4 +41,4 @@ import { createOtaBackend, Store } from '@dash-ota/backend';
 const ota = createOtaBackend({ store: new MyPostgresStore(config) });
 ```
 
-→ [Bring-your-own store](/docs/backend/store)
+→ [Storage & providers](/docs/backend/providers)

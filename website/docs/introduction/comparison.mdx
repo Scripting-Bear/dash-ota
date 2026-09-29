@@ -16,6 +16,10 @@ that holds even against a compromised backend or a broken TLS channel**, while s
 
 <ComparisonMatrix />
 
+Competitor rows were checked against each project's own documentation in September 2026. If
+something here is out of date or unfair, [open an issue](https://github.com/Scripting-Bear/dash-ota/issues)
+— a comparison table nobody corrects is a marketing page, not a comparison.
+
 ## Why the security columns matter
 
 Most OTA tools secure the *transport* (HTTPS, signed download URLs) but trust the **server** to
@@ -25,8 +29,9 @@ malicious JavaScript that runs with your app's full privileges.
 dash-ota removes that trust:
 
 - **Signing happens in the CLI, not the server.** The backend never has the private key, so it
-  physically cannot forge an update — the worst it can do is serve a *validly-signed, older*
-  bundle, which the **downgrade guard** rejects.
+  cannot forge an update at all. What it *can* still do is re-serve a release you withdrew, or
+  stop offering updates entirely — both are covered honestly in
+  [If your server is breached](/docs/security/breach).
 - **Verification happens in native, before JS runs**, against a key compiled into the binary —
   so a tampered bundle never executes, even over a hostile network.
 - **Enrollment transmits no secret.** Each device proves itself with a key generated in the
@@ -38,7 +43,11 @@ See the [full security model](/docs/concepts/security-model) and [threat model](
 
 - You want a zero-ops managed dashboard and are comfortable trusting a vendor → a SaaS like
   Stallion is less setup.
-- You're all-in on Expo/EAS → `expo-updates` with code signing is well-integrated.
+- You're all-in on Expo/EAS → `expo-updates` has opt-in code signing with an embedded X.509
+  certificate and is far better integrated with that toolchain.
+- You want the fastest path to a working self-hosted setup → `hot-updater` has an interactive
+  `init`, adapters for Supabase, Cloudflare and S3, and a web console. dash-ota asks you to
+  understand key custody before your first publish, on purpose.
 - You need OTA on RN versions older than 0.79 / old architecture → dash-ota targets New Arch.
 
 dash-ota's sweet spot is teams that want **ownership + a defensible security story** and are

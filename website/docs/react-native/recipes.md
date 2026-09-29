@@ -47,4 +47,4 @@ const { channel, currentBundle } = useOtaUpdate();
 
 ## Force-update gate
 
-See [Force-update UI](/docs/react-native/force-update-ui).
+See [force-update gate](/docs/concepts/force-update).

@@ -1,5 +1,5 @@
 ---
-sidebar_position: 1
+sidebar_position: 2
 title: Prerequisites
 ---
 
@@ -17,13 +17,13 @@ dash-ota targets modern React Native and a Node backend.
 
 ## Release tooling (CLI)
 
-- **Node 18+** (for `npx dash-ota`).
+- **Node 20.19+** (for `npx dash-ota`). The zstd binding the CLI compresses with declares `node >= 20.19.0`.
 - The **same `hermesc`** that ships in your app binary, to compile OTA bundles to matching HBC
   (the CLI's `bundle`/publish flow and the example's `publish-ota.mjs` handle this).
 
 ## Backend
 
-- **Node 18+**. Express is optional (the middleware works with any Connect-style framework, or
+- **Node 20.19+**. Express is optional (the middleware works with any Connect-style framework, or
   standalone via `node:http`).
 - For production: a place to store update blobs (the filesystem to start with; object storage or a
   CDN later) and release/install metadata (JSON to start with; Postgres and Redis later).

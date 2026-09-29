@@ -16,6 +16,7 @@ import type { OtaConfig } from 'react-native-dash-ota';
 const config: OtaConfig = {
   appVersion: '1.4.0',
   storage,                                       // your AsyncStorage / secure-storage adapter
+  storeUrl: 'market://details?id=com.your.app', // the force-update gate's destination
   getEnrollToken: () => auth.getSessionToken(),  // ties the device key to a real user session
   autoCheckOnLaunch: true,
   autoStage: true,
@@ -44,6 +45,7 @@ export default function Root() {
 | `autoMarkHealthyMs` | `number` | _off_ | Auto-promote the running bundle to last-known-good after N ms. Omit to keep it **manual** (safer — see [crash-loop](/docs/concepts/crash-loop)). |
 | `checkOnAppForeground` | `boolean` | `false` | Re-run a check when the app returns to the foreground (via `AppState`). |
 | `onStatusChange` | `(s: OtaStatus) => void` | — | Fires on every lifecycle status transition. |
+| `storeUrl` | `string` | — | **Set this.** Your store listing, surfaced as `nativePolicy.storeUrl` on the force-update gate. The client never passes the server's value through, because the policy is unsigned — without this the gate has no link. `https://`, `market://` or `itms-apps://`. |
 | `getEnrollToken` | `() => Promise<string \| undefined>` | — | Returns your app session token, attached to `/enroll` so a device key can only be registered by an authenticated user. |
 | `serverUrlOverride` | `string` | — | Override the native-embedded server URL. Tests and local development only — a production build must take it from native, where JS cannot reach it. |
 | `logger` | `OtaLogger` | `console` | `{ info, warn, error }`. |
@@ -71,7 +73,7 @@ See [Storage adapters](/docs/react-native/storage) for AsyncStorage / MMKV / sec
    it, then schedules apply-on-next-cold-start.
 5. Reports any prior crash-loop failure to the backend exactly once.
 
-:::tip Security comes from native
+:::tip[Security comes from native]
 `serverUrlOverride` aside, the channel, server URL, public key, and runtimeVersion all come from
 **native** (your build flavour). JS cannot change which key verifies a bundle.
 :::

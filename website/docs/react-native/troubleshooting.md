@@ -21,13 +21,13 @@ title: Troubleshooting
 The update applies, the JS runs, and every `require`d image renders as an empty box — then on the
 next launch the update silently reverts.
 
-This was a real bug, fixed in **0.4.0**. React Native reads the host's `getJSBundleFile()` /
+This was a real bug, fixed in **0.3.2**. React Native reads the host's `getJSBundleFile()` /
 `bundleURL()` five or six times per launch. Each read used to count a crash-loop boot attempt, so
 the third read tripped the breaker on the *first* boot of every update, and the breaker deleted the
 slot directory while the bytecode was still memory-mapped. JS kept running from the mapped file;
 every image beside it was gone.
 
-If you see this, you are on a build older than 0.4.0. It cannot be fixed by an OTA — the broken
+If you see this, you are on a build older than 0.3.2. It cannot be fixed by an OTA — the broken
 code is native — so it needs a store release. Two things to check on the way:
 
 - `adb logcat -s DashOta` should print `launch: applying pending … (attempt 1/2)` **once** per

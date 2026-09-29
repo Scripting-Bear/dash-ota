@@ -1,6 +1,9 @@
 /**
- * Tailwind — Stitch "Linear-style" dark landing token system, ported verbatim from the
- * dash-ota Stitch export (screen 256325…). Scoped to `.dash-landing`.
+ * Landing-page tokens, scoped to `.dash-landing` so nothing here reaches the Infima docs chrome.
+ *
+ * The palette carries the update lifecycle: amber for work in flight, steel for a settled state,
+ * alarm for the crash-loop breaker. Two greys, not one, so panels read as raised rather than
+ * outlined.
  */
 /** @type {import('tailwindcss').Config} */
 module.exports = {
@@ -11,28 +14,32 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        primary: '#4254f0',
-        'background-light': '#f6f6f8',
-        'background-dark': '#09090b',
-        surface: '#121214',
-        muted: '#8F8F99',
-        border: '#27272A',
-        accent: '#45D09E',
+        body: '#1B2027',
+        panel: '#232A33',
+        raised: '#2B333D',
+        line: '#333C47',
+        ink: '#E6EAEF',
+        muted: '#8C98A6',
+        amber: '#E8A33D',
+        steel: '#6FA8C7',
+        alarm: '#D2544B',
       },
       fontFamily: {
-        display: ['Inter', 'sans-serif'],
+        display: ['Roboto Condensed', 'Inter', 'sans-serif'],
+        sans: ['Inter', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'monospace'],
       },
       borderRadius: {
         DEFAULT: '0.25rem',
-        sm: '0.25rem',
-        md: '0.375rem',
+        sm: '0.1875rem',
+        md: '0.3125rem',
         lg: '0.5rem',
         xl: '0.75rem',
         full: '9999px',
       },
-      maxWidth: {
-        content: '1200px',
+      maxWidth: { content: '1180px' },
+      boxShadow: {
+        panel: '0 1px 0 0 rgba(255,255,255,0.04) inset, 0 8px 24px -12px rgba(0,0,0,0.6)',
       },
     },
   },

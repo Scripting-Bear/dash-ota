@@ -24,7 +24,7 @@ swap is mechanical.
 
 1. **Stand up the backend** — mount [`dashOtaMiddleware`](/docs/backend/express) in an Express app
    (or run standalone). This replaces the Stallion cloud.
-2. **Generate signing keys** per environment ([keygen](/docs/cli/environments-keys)) and **embed
+2. **Generate signing keys** per environment ([keygen](/docs/react-native/environments)) and **embed
    the public key** in each flavour — this is the new capability Stallion lacks (native-verified
    integrity).
 3. **Swap the provider:** replace `withStallion`/`useStallionUpdate` with `<DashOtaProvider>` +
@@ -43,6 +43,6 @@ swap is mechanical.
 
 ## What to plan for
 - You now run a backend (small, but yours). See [deployment](/docs/backend/deployment).
-- You manage signing keys ([custody & rotation](/docs/cli/key-custody)).
+- You manage signing keys ([custody & rotation](/docs/security/key-management)).
 
 → [Comparison](/docs/introduction/comparison)

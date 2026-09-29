@@ -1,76 +1,27 @@
 import { type ReactNode, useState } from 'react';
 import Link from '@docusaurus/Link';
-import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import Layout from '@theme/Layout';
+import LifecycleRail from '@site/src/components/landing/LifecycleRail';
 
-const Icon = ({ name, className = '', fill = false }: { name: string; className?: string; fill?: boolean }) => (
-  <span
-    className={`material-symbols-outlined ${className}`}
-    style={fill ? { fontVariationSettings: "'FILL' 1" } : undefined}
-    aria-hidden
-  >
-    {name}
-  </span>
-);
+/* ------------------------------------------------------------------ primitives */
 
-/* ---- token-coloured code (mirrors Stitch's .token-* classes) ---- */
-const TERMINAL = `<span class="token-comment"># Install &amp; inspect the dash-ota CLI</span>
-<span class="token-keyword">npx</span> dash-ota --help
-
-<span class="token-comment"># Generate the Ed25519 signing key (CI only)</span>
-<span class="token-keyword">npx</span> dash-ota keys generate --key-id key_prod_1
-
-<span class="token-comment"># Bundle, sign &amp; publish a staged rollout</span>
-<span class="token-keyword">npx</span> dash-ota publish \\
-  --bundle-dir ./out --platform android \\
-  --channel prod --rollout <span class="token-string">10</span>`;
-
-const TABS: Record<string, { label: string; html: string; plain: string }> = {
-  client: {
-    label: 'Client SDK',
-    html: `<span class="token-keyword">import</span> { DashOtaProvider } <span class="token-keyword">from</span> <span class="token-string">'react-native-dash-ota'</span>;
-
-<span class="token-comment">// Wrap your root — verify natively before applying.</span>
-<span class="token-keyword">export default function</span> <span class="token-function">Root</span>() {
-  <span class="token-keyword">return</span> (
-    &lt;DashOtaProvider config={{ appVersion: <span class="token-string">'1.4.0'</span> }}&gt;
-      &lt;App /&gt;
-    &lt;/DashOtaProvider&gt;
+function Eyebrow({ children }: { children: ReactNode }) {
+  return (
+    <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{children}</span>
   );
-}`,
-    plain: "import { DashOtaProvider } from 'react-native-dash-ota';",
-  },
-  backend: {
-    label: 'Backend',
-    html: `<span class="token-keyword">import</span> express <span class="token-keyword">from</span> <span class="token-string">'express'</span>;
-<span class="token-keyword">import</span> { dashOtaMiddleware } <span class="token-keyword">from</span> <span class="token-string">'@dash-ota/backend'</span>;
+}
 
-<span class="token-keyword">const</span> app = <span class="token-function">express</span>();
-<span class="token-comment">// Mount the distributor — it never holds the signing key.</span>
-app.<span class="token-function">use</span>(<span class="token-function">dashOtaMiddleware</span>({ adminToken: process.env.OTA_ADMIN_TOKEN }));
-app.<span class="token-function">listen</span>(<span class="token-string">4455</span>);`,
-    plain: "import { dashOtaMiddleware } from '@dash-ota/backend';",
-  },
-  cicd: {
-    label: 'CI/CD',
-    html: `<span class="token-comment"># .github/workflows/ota.yml</span>
-<span class="token-keyword">name</span>: Ship OTA
-<span class="token-keyword">on</span>:
-  push:
-    branches: [ main ]
-
-<span class="token-keyword">jobs</span>:
-  publish:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: npm ci &amp;&amp; npm run bundle:android
-      - run: <span class="token-keyword">npx</span> dash-ota publish --channel prod --rollout 10
-        env:
-          DASH_OTA_SIGNING_KEY: \${{ secrets.DASH_OTA_SIGNING_KEY }}`,
-    plain: 'npx dash-ota publish --channel prod --rollout 10',
-  },
-};
+function Section({
+  children,
+  className = '',
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`mx-auto max-w-content px-5 sm:px-6 ${className}`}>{children}</section>
+  );
+}
 
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -80,279 +31,434 @@ function CopyBtn({ text }: { text: string }) {
       onClick={() => {
         navigator.clipboard?.writeText(text).catch(() => {});
         setDone(true);
-        setTimeout(() => setDone(false), 2000);
+        setTimeout(() => setDone(false), 1600);
       }}
-      className={`absolute top-4 right-4 p-1.5 rounded-md bg-[#09090b] border transition-all ${
-        done ? 'border-accent bg-accent/10 text-accent' : 'border-border hover:border-muted text-muted hover:text-white'
+      className={`absolute right-3 top-3 rounded border px-2 py-1 font-mono text-[11px] transition-colors ${
+        done
+          ? 'border-steel/50 bg-steel/10 text-steel'
+          : 'border-line text-muted hover:border-muted hover:text-ink'
       }`}
-      aria-label="Copy"
+      aria-label="Copy to clipboard"
     >
-      <Icon name={done ? 'check' : 'content_copy'} className="text-[16px]" />
+      {done ? 'copied' : 'copy'}
     </button>
   );
 }
 
-/* ----------------------------------------------------------- hero */
+/** A terminal block. `out` lines are rendered as output, `$` lines as commands. */
+function Terminal({ lines, copy }: { lines: string[]; copy?: string }) {
+  return (
+    <div className="relative overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
+      {copy && <CopyBtn text={copy} />}
+      <div className="flex items-center gap-1.5 border-b border-line px-4 py-2.5">
+        <span className="h-2 w-2 rounded-full bg-line" />
+        <span className="h-2 w-2 rounded-full bg-line" />
+        <span className="h-2 w-2 rounded-full bg-line" />
+      </div>
+      <pre className="overflow-x-auto px-4 py-4 font-mono text-[12.5px] leading-[1.75]">
+        {lines.map((line, i) => {
+          if (line.startsWith('$ ')) {
+            return (
+              <div key={i}>
+                <span className="text-muted">$ </span>
+                <span className="text-ink">{line.slice(2)}</span>
+              </div>
+            );
+          }
+          if (line.startsWith('#')) {
+            return (
+              <div key={i} className="text-muted">
+                {line}
+              </div>
+            );
+          }
+          if (line.startsWith('✓')) {
+            return (
+              <div key={i} className="text-steel">
+                {line}
+              </div>
+            );
+          }
+          return (
+            <div key={i} className="text-ink/60">
+              {line || ' '}
+            </div>
+          );
+        })}
+      </pre>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ hero */
+
+const HERO_TERMINAL = [
+  '# one release, start to finish',
+  '$ npx dash-ota bundle --platform android --out ./out --hermes',
+  '✓ compiled Hermes bytecode (HBC): ./out/index.android.bundle',
+  '',
+  '$ npx dash-ota publish --bundle-dir ./out --channel prod --rollout 10',
+  '  ✓ self-verified signature (sibling .public.json)',
+  '',
+  '  bundleId:        bnd_rt_9f2c1a_7_m1p4x9',
+  '  encryption:      aes-256-gcm',
+  '  uploading:       4 of 121 blobs (117 already present)   rollout: 10%',
+  '✓ published to https://ota.yourapi.com',
+];
+
 function Hero() {
   return (
-    <section className="max-w-content mx-auto px-6 pt-24 pb-20 lg:pt-28 lg:pb-28 flex flex-col lg:flex-row items-center gap-12 lg:gap-8">
-      <div className="flex-1 flex flex-col items-start gap-6 w-full max-w-2xl lg:max-w-none">
-        <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-border bg-surface">
-          <span className="flex h-2 w-2 rounded-full bg-accent" />
-          <span className="text-xs font-medium text-muted uppercase tracking-wider">
-            Trusted, native-verified OTA
-          </span>
-        </div>
-        <h1 className="text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight text-white leading-[1.1]">
-          Ship instantly with <br className="hidden sm:block" />
-          <span className="grad-text">OTA updates</span>
-        </h1>
-        <p className="text-base sm:text-lg text-muted max-w-lg leading-relaxed">
-          A self-hosted, security-hardened over-the-air update system for React Native that bypasses
-          app-store delays without compromising cryptographic integrity. Client, release CLI, and
-          backend — all yours.
-        </p>
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 mt-2 w-full sm:w-auto">
-          <Link
-            to="/docs/getting-started/quickstart"
-            className="h-10 px-5 inline-flex items-center justify-center bg-white text-background-dark text-[13px] font-semibold rounded-md hover:bg-gray-200 transition-colors"
-          >
-            Get started
-          </Link>
-          <Link
-            to="/docs/"
-            className="h-10 px-5 inline-flex items-center justify-center gap-2 bg-surface text-white text-[13px] font-medium rounded-md border border-border hover:border-muted transition-colors group"
-          >
-            <Icon name="terminal" className="text-[18px] text-muted group-hover:text-white transition-colors" />
-            Read the docs
-          </Link>
-        </div>
-        <div className="hidden sm:flex items-center gap-3 mt-4 flex-wrap">
-          {[
-            { i: 'lock', t: 'Ed25519 signed' },
-            { i: 'verified_user', t: 'Verified in native' },
-            { i: 'history', t: 'Fail-closed rollback' },
-          ].map((c) => (
-            <div
-              key={c.t}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-surface border border-border text-xs text-muted font-mono"
+    <Section className="pb-16 pt-16 lg:pb-24 lg:pt-24">
+      <div className="grid items-start gap-10 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)] lg:gap-14">
+        <div>
+          <Eyebrow>Over-the-air updates for React Native</Eyebrow>
+          <h1 className="mt-4 font-display text-[2.6rem] font-bold leading-[1.05] tracking-tight text-ink sm:text-[3.4rem]">
+            Ship JavaScript updates from infrastructure you own.
+          </h1>
+          <p className="mt-5 max-w-xl text-[16.5px] leading-relaxed text-ink/70">
+            No vendor account, no per-seat pricing, and no third party holding the key that signs
+            your releases. Run the backend on a container you already pay for.
+          </p>
+
+          <div className="mt-7 rounded-lg border border-line bg-panel/60 p-4">
+            <div className="flex items-baseline gap-2">
+              <span className="h-1.5 w-1.5 shrink-0 translate-y-[-2px] rounded-full bg-amber" />
+              <p className="text-[14.5px] leading-relaxed text-ink/85">
+                And the part nobody else does: your update server never holds the signing key, so
+                even an attacker with root on it{' '}
+                <span className="text-ink">cannot ship code to your users.</span>
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-7 flex flex-wrap items-center gap-3">
+            <Link
+              to="/docs/getting-started/quickstart"
+              className="rounded-md bg-amber px-5 py-2.5 font-display text-[15px] font-bold uppercase tracking-wide text-body transition-opacity hover:opacity-90 hover:text-body"
             >
-              <Icon name={c.i} className="text-[14px]" />
-              {c.t}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* terminal */}
-      <div className="flex-1 w-full max-w-2xl lg:max-w-none relative group">
-        <div className="absolute -inset-1 bg-gradient-to-r from-primary/30 to-purple-500/30 rounded-xl blur-2xl opacity-50 group-hover:opacity-75 transition-opacity duration-500" />
-        <div className="relative rounded-lg border border-border bg-surface shadow-2xl overflow-hidden flex flex-col lg:min-h-[340px]">
-          <div className="h-10 border-b border-border bg-[#0e0e10] flex items-center px-4 justify-between">
-            <div className="flex items-center gap-2">
-              <div className="size-3 rounded-full bg-[#ED6A5E]" />
-              <div className="size-3 rounded-full bg-[#F4BF4F]" />
-              <div className="size-3 rounded-full bg-[#61C554]" />
-            </div>
-            <div className="text-[11px] font-mono text-muted flex items-center gap-2">
-              <Icon name="folder" className="text-[14px]" />
-              ~/project/release.sh
-            </div>
-            <div className="w-12" />
+              Ship your first update
+            </Link>
+            <Link
+              to="/docs/"
+              className="rounded-md border border-line px-5 py-2.5 text-[15px] text-ink transition-colors hover:border-muted hover:text-ink"
+            >
+              How it works
+            </Link>
           </div>
-          <div className="p-6 font-mono text-[13px] leading-[1.6] overflow-x-auto text-muted relative flex-1">
-            <CopyBtn text="npx dash-ota publish --bundle-dir ./out --platform android --channel prod --rollout 10" />
-            <pre className="bg-transparent p-0 m-0 border-0">
-              <code dangerouslySetInnerHTML={{ __html: TERMINAL }} />
-            </pre>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
 
-const FEATURES = [
-  {
-    icon: 'verified_user',
-    title: 'Native verification',
-    body: 'Ed25519 signatures are verified natively on-device before a bundle runs. Tampered or downgraded bundles are rejected instantly — it holds even if TLS is broken.',
-  },
-  {
-    icon: 'key',
-    title: 'Hardware device-key auth',
-    body: 'Each install enrolls a non-exportable key from the AndroidKeyStore / Secure Enclave. No shared secret is ever transmitted at enrollment.',
-  },
-  {
-    icon: 'commit',
-    title: 'Atomic rollbacks',
-    body: 'If an update crashes on launch, the SDK reverts to the last-known-good bundle, then the embedded one — and disables the bad release. Your app always boots.',
-  },
-];
-
-function Features() {
-  return (
-    <section className="border-y border-border bg-background-dark py-24">
-      <div className="max-w-content mx-auto px-6">
-        <div className="mb-16">
-          <h2 className="text-3xl font-semibold tracking-tight text-white mb-4">
-            Architected for scale and security
-          </h2>
-          <p className="text-muted text-lg max-w-2xl">
-            Trust is split across the CLI, backend, and native runtime — so no single compromise
-            (server, network, or bundle) can forge or apply an update.
+          <p className="mt-5 font-mono text-[12px] text-muted">
+            MIT · Android + iOS · React Native 0.79+ (New Architecture)
           </p>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 border border-border rounded-lg overflow-hidden bg-surface">
-          {FEATURES.map((f, i) => (
-            <div
-              key={f.title}
-              className={`p-8 bg-background-dark hover:bg-surface transition-colors duration-150 group relative ${
-                i < 2 ? 'border-b md:border-b-0 md:border-r border-border' : ''
-              } ${i === 0 ? 'lg:border-r' : ''}`}
-            >
-              <div className="size-10 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center mb-6 text-primary">
-                <Icon name={f.icon} />
-              </div>
-              <h3 className="text-lg font-medium text-white mb-2">{f.title}</h3>
-              <p className="text-sm text-muted leading-relaxed">{f.body}</p>
-            </div>
-          ))}
+
+        <div className="w-full min-w-0">
+          <Terminal
+            lines={HERO_TERMINAL}
+            copy="npx dash-ota bundle --platform android --out ./out --hermes"
+          />
         </div>
       </div>
-    </section>
+    </Section>
   );
 }
 
-function Pipeline() {
-  const Node = ({ icon, label, tag, tagClass, big }: { icon: string; label: string; tag?: string; tagClass?: string; big?: boolean }) => (
-    <div className="flex flex-col items-center gap-4 text-center">
-      <div
-        className={`${big ? 'size-20 border-primary/30 bg-primary/5 shadow-[0_0_30px_rgba(66,84,240,0.2)]' : 'size-16 border-border bg-surface shadow-lg'} rounded-md border flex items-center justify-center relative`}
-      >
-        <Icon name={icon} className={big ? 'text-primary text-3xl' : 'text-muted text-2xl'} />
-      </div>
-      <div className={`text-xs font-mono ${big ? 'text-white font-medium' : 'text-muted'}`}>{label}</div>
-      {tag && <div className={`text-[10px] px-2 py-1 rounded border ${tagClass}`}>{tag}</div>}
-    </div>
-  );
-  const Arrow = ({ label }: { label: string }) => (
-    <div className="flex-1 h-0.5 bg-gradient-to-r from-border via-primary to-border relative min-w-[64px] rounded-full">
-      <Icon
-        name="chevron_right"
-        className="absolute -right-1.5 top-1/2 -translate-y-1/2 text-primary text-base leading-none"
-      />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 px-2 bg-background-dark text-[10px] font-mono text-muted whitespace-nowrap">
-        {label}
-      </div>
-    </div>
-  );
+/* ------------------------------------------------------------------ lifecycle */
+
+function Lifecycle() {
   return (
-    <section className="py-32 bg-surface relative overflow-hidden border-b border-border">
-      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div className="w-[800px] h-[400px] bg-primary/15 blur-[100px] rounded-full" />
-      </div>
-      <div className="max-w-content mx-auto px-6 relative z-10 flex flex-col items-center text-center">
-        <h2 className="text-3xl font-semibold tracking-tight text-white mb-6">Trust-less update pipeline</h2>
-        <p className="text-muted text-lg max-w-2xl mb-16">
-          We never hold your signing key. Sign bundles in CI, store the artifact in your own backend,
-          and let the device verify integrity against an embedded key.
+    <Section className="py-14 lg:py-20">
+      <div className="mb-6 max-w-2xl">
+        <Eyebrow>What happens after you publish</Eyebrow>
+        <h2 className="mt-3 font-display text-[1.9rem] font-bold tracking-tight text-ink">
+          Every release is on trial until it proves itself.
+        </h2>
+        <p className="mt-3 text-[15.5px] leading-relaxed text-ink/70">
+          Updates apply on a cold start, never under a running app. A bundle that fails to reach
+          JavaScript twice is blocklisted and the last working one comes back, on the device,
+          without a deploy.
         </p>
-        <div className="w-full max-w-4xl h-[400px] border border-border rounded-lg bg-background-dark p-1 flex items-center justify-center relative overflow-hidden">
-          <div className="absolute inset-0 pipeline-grid" />
-          <div className="flex items-center justify-between w-full px-6 sm:px-12 z-10">
-            <Node icon="developer_mode" label="Release CLI" tag="Sign · private key" tagClass="text-primary/80 bg-primary/10 border-primary/20" />
-            <Arrow label="Upload artifact" />
-            <Node icon="cloud" label="Your backend" big />
-            <Arrow label="Download" />
-            <Node icon="smartphone" label="Client device" tag="Verify · embedded key" tagClass="text-accent/80 bg-accent/10 border-accent/20" />
-          </div>
-        </div>
       </div>
-    </section>
+      <LifecycleRail />
+    </Section>
   );
 }
 
-const ROWS = [
-  'Native Ed25519 verification',
-  'Safe if the backend is breached',
-  'Self-hosted, no vendor lock-in',
-  'Bring your own CI/CD',
+/* ------------------------------------------------------------------ trust */
+
+const CANNOT = [
+  ['Forge a release', 'No signing key exists on the server. An edited manifest fails Ed25519 verification in native.'],
+  ['Swap a file inside one', 'Every file carries its own SHA-256 in the signed manifest and is re-hashed after decryption.'],
+  ['Move a build between channels', '`channel` and `appId` are signed, and checked against the values compiled into the binary.'],
+  ['Push you backwards', '`bundleVersion` is monotonic. An older release is refused.'],
 ];
 
-function Switch() {
-  const [tab, setTab] = useState<keyof typeof TABS>('client');
+const CAN = [
+  ['Stop serving updates', 'Silence is indistinguishable from "up to date". Alert on a pipeline that goes quiet.'],
+  ['Re-serve a release you withdrew', 'Pause and rollback are server-side state, not signed facts.'],
+  ['Choose where your update wall points', '`nativePolicy` sits outside the signature. Compile your store URLs into the app.'],
+];
+
+function Trust() {
   return (
-    <section className="py-24 max-w-content mx-auto px-6 grid grid-cols-1 lg:grid-cols-2 gap-16 lg:gap-8 items-start">
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-white mb-6">Why switch?</h2>
-        <div className="border border-border rounded-lg overflow-hidden bg-surface">
-          <table className="w-full text-left text-sm" style={{ display: 'table' }}>
-            <thead>
-              <tr className="border-b border-border bg-[#09090b]">
-                <th className="p-4 font-medium text-muted w-1/2">Capability</th>
-                <th className="p-4 font-medium text-white border-l border-border w-1/4 text-center">dash-ota</th>
-                <th className="p-4 font-medium text-muted border-l border-border w-1/4 text-center">Alternatives</th>
-              </tr>
-            </thead>
-            <tbody>
-              {ROWS.map((r) => (
-                <tr key={r} className="border-b border-border last:border-b-0">
-                  <td className="p-4 text-muted">{r}</td>
-                  <td className="p-4 border-l border-border text-center">
-                    <Icon name="check" className="text-accent text-lg" />
-                  </td>
-                  <td className="p-4 border-l border-border text-center">
-                    <Icon name="close" className="text-muted/50 text-lg" />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+    <Section className="py-14 lg:py-20">
+      <div className="mb-8 max-w-2xl">
+        <Eyebrow>Assume the worst case</Eyebrow>
+        <h2 className="mt-3 font-display text-[1.9rem] font-bold tracking-tight text-ink">
+          Someone has root on your update server.
+        </h2>
+        <p className="mt-3 text-[15.5px] leading-relaxed text-ink/70">
+          This is the question most OTA tooling does not answer. Here is the honest version, in
+          both directions.
+        </p>
       </div>
 
-      <div>
-        <h2 className="text-2xl font-semibold tracking-tight text-white mb-6">Drop-in integration</h2>
-        <div className="border border-border rounded-lg bg-surface overflow-hidden">
-          <div className="flex items-center border-b border-border bg-[#09090b] px-2 pt-2 gap-1">
-            {(Object.keys(TABS) as (keyof typeof TABS)[]).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setTab(k)}
-                className={`px-3 py-2 text-[13px] font-medium border-b-2 transition-colors ${
-                  k === tab ? 'text-white border-primary' : 'text-muted border-transparent hover:text-white'
-                }`}
-              >
-                {TABS[k].label}
-              </button>
+      <div className="grid gap-4 md:grid-cols-2">
+        <div className="rounded-lg border border-line bg-panel p-5 shadow-panel">
+          <h3 className="font-display text-[13px] font-bold uppercase tracking-[0.12em] text-steel">
+            They cannot
+          </h3>
+          <ul className="mt-4 space-y-4">
+            {CANNOT.map(([title, body]) => (
+              <li key={title}>
+                <p className="text-[14.5px] font-semibold text-ink">{title}</p>
+                <p className="mt-1 text-[13.5px] leading-relaxed text-ink/65">{body}</p>
+              </li>
             ))}
-          </div>
-          <div className="p-6 relative font-mono text-[13px] leading-[1.6] text-muted overflow-x-auto min-h-[240px]">
-            <CopyBtn text={TABS[tab].plain} />
-            <pre className="bg-transparent p-0 m-0 border-0">
-              <code dangerouslySetInnerHTML={{ __html: TABS[tab].html }} />
-            </pre>
-          </div>
+          </ul>
+        </div>
+
+        <div className="rounded-lg border border-alarm/25 bg-panel p-5 shadow-panel">
+          <h3 className="font-display text-[13px] font-bold uppercase tracking-[0.12em] text-alarm">
+            They still can
+          </h3>
+          <ul className="mt-4 space-y-4">
+            {CAN.map(([title, body]) => (
+              <li key={title}>
+                <p className="text-[14.5px] font-semibold text-ink">{title}</p>
+                <p className="mt-1 text-[13.5px] leading-relaxed text-ink/65">{body}</p>
+              </li>
+            ))}
+          </ul>
+          <Link
+            to="/docs/security/breach"
+            className="mt-5 inline-block font-mono text-[12px] text-amber hover:text-amber"
+          >
+            Read the full breach walkthrough →
+          </Link>
         </div>
       </div>
-    </section>
+    </Section>
   );
 }
 
-export default function Home(): ReactNode {
-  const { siteConfig } = useDocusaurusContext();
+/* ------------------------------------------------------------------ dashboard */
+
+function Dashboard() {
   return (
-    <Layout title={`${siteConfig.title} — secure OTA for React Native`} description={siteConfig.tagline}>
-      <div className="dash-landing dash-home">
-        <Hero />
-        <main>
-          <Features />
-          <Pipeline />
-          <Switch />
-        </main>
+    <Section className="py-14 lg:py-20">
+      <div className="overflow-hidden rounded-lg border border-line bg-panel shadow-panel">
+        <div className="grid gap-0 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="p-6 lg:p-8">
+            <Eyebrow>Operate it</Eyebrow>
+            <h2 className="mt-3 font-display text-[1.75rem] font-bold tracking-tight text-ink">
+              A console that runs on your laptop.
+            </h2>
+            <p className="mt-3 text-[15px] leading-relaxed text-ink/70">
+              Publish, ramp a rollout, pause, roll back and set the force-update policy from a web
+              UI — bound to <code className="font-mono text-[13px] text-steel">127.0.0.1</code>,
+              gated by a token minted per launch, holding nothing.
+            </p>
+            <ul className="mt-5 space-y-2 text-[14px] text-ink/70">
+              {[
+                'Release table with adoption and rollout state',
+                'Live publish log while it builds and uploads',
+                'Typed confirmation on protected environments',
+                'Read-only for any environment with no admin token',
+              ].map((item) => (
+                <li key={item} className="flex gap-2.5">
+                  <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-steel" />
+                  {item}
+                </li>
+              ))}
+            </ul>
+            <Link
+              to="/docs/cli/dashboard"
+              className="mt-6 inline-block rounded-md border border-line px-4 py-2 text-[14px] text-ink transition-colors hover:border-muted hover:text-ink"
+            >
+              Set up the dashboard
+            </Link>
+          </div>
+
+          <div className="border-t border-line p-6 lg:border-l lg:border-t-0 lg:p-8">
+            <Terminal
+              lines={[
+                '$ npx dash-ota dashboard',
+                'dash-ota dashboard → http://127.0.0.1:4460/#t=8Kd2…',
+                '  local only (127.0.0.1) · the link carries',
+                "  this session's token · Ctrl+C to stop",
+                '',
+                '$ npx dash-ota list',
+                'bnd_rt_9f2c1a_7  [android/prod]  v7  10%',
+                '  adoption={"applied":412,"healthy":408,"failed":1}',
+              ]}
+              copy="npx dash-ota dashboard"
+            />
+          </div>
+        </div>
       </div>
+    </Section>
+  );
+}
+
+/* ------------------------------------------------------------------ install */
+
+const TABS: Record<string, { label: string; lines: string[]; copy: string }> = {
+  app: {
+    label: 'Your app',
+    lines: [
+      "import AsyncStorage from '@react-native-async-storage/async-storage';",
+      "import { DashOtaProvider } from 'react-native-dash-ota';",
+      '',
+      'export default function Root() {',
+      '  return (',
+      '    <DashOtaProvider',
+      '      config={{',
+      "        appVersion: '1.4.0',",
+      '        storage: AsyncStorage,',
+      '        getEnrollToken: () => api.otaEnrollToken(),',
+      '      }}',
+      '    >',
+      '      <App />',
+      '    </DashOtaProvider>',
+      '  );',
+      '}',
+    ],
+    copy: 'npm i react-native-dash-ota',
+  },
+  backend: {
+    label: 'Your backend',
+    lines: [
+      "import express from 'express';",
+      "import { dashOtaMiddleware, rawBodySaver } from '@dash-ota/backend';",
+      '',
+      'const app = express();',
+      'app.use(express.json({ verify: rawBodySaver }));',
+      '',
+      '// Distributes pre-signed releases. Never holds a signing key.',
+      'app.use(dashOtaMiddleware({',
+      '  adminToken: process.env.OTA_ADMIN_TOKEN,',
+      '  databaseUrl: process.env.OTA_DATABASE_URL,',
+      '}));',
+      '',
+      'app.listen(4455);',
+    ],
+    copy: 'npm i @dash-ota/backend',
+  },
+  ci: {
+    label: 'Your CI',
+    lines: [
+      '- name: Publish OTA',
+      '  run: |',
+      '    npx dash-ota bundle --platform android --out ./out --hermes',
+      '    npx dash-ota publish --bundle-dir ./out \\',
+      '      --app-id com.your.app --channel prod \\',
+      '      --runtime-version auto --bundle-version ${{ github.run_number }} \\',
+      '      --rollout 10',
+      '  env:',
+      '    OTA_ADMIN_TOKEN: ${{ secrets.OTA_ADMIN_TOKEN }}',
+      '    OTA_KEY_PASSPHRASE: ${{ secrets.OTA_KEY_PASSPHRASE }}',
+    ],
+    copy: 'npx dash-ota publish --channel prod --rollout 10',
+  },
+};
+
+function Install() {
+  const [tab, setTab] = useState<keyof typeof TABS>('app');
+  return (
+    <Section className="py-14 lg:py-20">
+      <div className="mb-6 max-w-2xl">
+        <Eyebrow>Three pieces</Eyebrow>
+        <h2 className="mt-3 font-display text-[1.9rem] font-bold tracking-tight text-ink">
+          Drops into what you already have.
+        </h2>
+        <p className="mt-3 text-[15.5px] leading-relaxed text-ink/70">
+          Autolinked on both platforms. One edit each in{' '}
+          <code className="font-mono text-[13.5px] text-steel">MainApplication.kt</code> and{' '}
+          <code className="font-mono text-[13.5px] text-steel">AppDelegate.swift</code> to point
+          React Native at the OTA bundle — no ProGuard rule, no Podfile entry.
+        </p>
+      </div>
+
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {(Object.keys(TABS) as (keyof typeof TABS)[]).map((key) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setTab(key)}
+            className={`rounded-md border px-3.5 py-1.5 font-display text-[13px] font-bold uppercase tracking-wide transition-colors ${
+              tab === key
+                ? 'border-amber/50 bg-amber/10 text-amber'
+                : 'border-line text-muted hover:border-muted hover:text-ink'
+            }`}
+          >
+            {TABS[key].label}
+          </button>
+        ))}
+      </div>
+
+      <Terminal lines={TABS[tab].lines} copy={TABS[tab].copy} />
+    </Section>
+  );
+}
+
+/* ------------------------------------------------------------------ close */
+
+function Close() {
+  return (
+    <Section className="pb-24 pt-10">
+      <div className="rounded-lg border border-line bg-panel p-8 text-center shadow-panel">
+        <h2 className="font-display text-[1.8rem] font-bold tracking-tight text-ink">
+          Twenty minutes to your first signed update.
+        </h2>
+        <p className="mx-auto mt-3 max-w-xl text-[15.5px] leading-relaxed text-ink/70">
+          Run a backend, make a key, wire the app, publish, and roll it back — with the exact
+          output you should see at every step.
+        </p>
+        <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <Link
+            to="/docs/getting-started/quickstart"
+            className="rounded-md bg-amber px-5 py-2.5 font-display text-[15px] font-bold uppercase tracking-wide text-body transition-opacity hover:opacity-90 hover:text-body"
+          >
+            Start here
+          </Link>
+          <Link
+            to="/docs/introduction/comparison"
+            className="rounded-md border border-line px-5 py-2.5 text-[15px] text-ink transition-colors hover:border-muted hover:text-ink"
+          >
+            Compare with hot-updater and EAS
+          </Link>
+        </div>
+      </div>
+    </Section>
+  );
+}
+
+/* ------------------------------------------------------------------ page */
+
+export default function Home(): ReactNode {
+  return (
+    <Layout
+      title="Self-hosted OTA updates for React Native"
+      description="Ship JavaScript updates from infrastructure you own. The CLI signs, the device verifies, and a breached server still cannot ship code to your users."
+    >
+      <main className="dash-landing dash-home bg-body font-sans text-ink">
+        <Hero />
+        <Lifecycle />
+        <Trust />
+        <Dashboard />
+        <Install />
+        <Close />
+      </main>
     </Layout>
   );
 }

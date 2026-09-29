@@ -1,0 +1,23 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "plugin": ["typedoc-plugin-markdown"],
+  "entryPoints": ["../packages/rn/src/index.tsx"],
+  "tsconfig": "../packages/rn/tsconfig.json",
+  "out": "docs/api/client",
+  "readme": "none",
+  "skipErrorChecking": true,
+  "excludeExternals": true,
+  "excludeInternal": true,
+  "githubPages": false,
+  "hideGenerator": true,
+  "sort": ["alphabetical"],
+  "outputFileStrategy": "members",
+  "entryFileName": "index",
+  "hidePageHeader": true,
+  "hideBreadcrumbs": true,
+  "useCodeBlocks": true,
+  "expandObjects": true,
+  "parametersFormat": "table",
+  "interfacePropertiesFormat": "table",
+  "propertyMembersFormat": "table"
+}

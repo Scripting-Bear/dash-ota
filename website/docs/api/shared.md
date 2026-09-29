@@ -43,6 +43,6 @@ app developers use `react-native-dash-ota` and `@dash-ota/backend`.
 
 :::note
 Crypto is pure Node `crypto`. The one runtime dependency is `@mongodb-js/zstd`, used for
-compression; it needs Node 20.19 or newer. The full auto-generated reference is built from the
-source TSDoc.
+compression, and it declares `node >= 20.19.0` — that dependency is what sets the Node floor for
+the CLI and the backend.
 :::

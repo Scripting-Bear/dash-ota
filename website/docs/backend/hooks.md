@@ -61,4 +61,4 @@ logger?: { info(m: string): void; warn(m: string): void; error(m: string): void 
 Where the backend emits its own logs (enroll, publish, key registration). Defaults to no logging in
 the middleware; pass `console` (or your structured logger) to see activity.
 
-→ [Bring-your-own store](/docs/backend/store)
+→ [Storage & providers](/docs/backend/providers)

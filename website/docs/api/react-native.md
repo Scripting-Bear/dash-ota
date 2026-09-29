@@ -75,6 +75,9 @@ interface OtaStorage {
 - `TransportSecurity`, `IntegrityAttestor`, `noopTransportSecurity`, `noopIntegrityAttestor`.
 
 :::note
-A complete, auto-generated reference (every type and field) is generated from the source TSDoc.
-The pages above cover the surface you'll use day-to-day.
+This is the whole public surface — `src/index.tsx` exports eight values and twenty types, and
+nothing else is importable. The `DashOta` TurboModule itself is deliberately not re-exported.
+
+Every symbol above has a generated page with its full signature, fields and defaults under
+[Client API](/docs/api/client/), built from the source TSDoc by `npm run docs:api`.
 :::

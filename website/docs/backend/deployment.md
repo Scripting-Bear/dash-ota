@@ -5,9 +5,9 @@ title: Deployment
 
 # Deployment
 
-The distributor is a stateless-ish Node service in front of a store. Deploy it like any API.
+The distributor is an ordinary Node service in front of a store. Deploy it like any other API.
 
-## Docker
+## The smallest thing that works
 
 ```dockerfile title="Dockerfile"
 FROM node:20-alpine
@@ -20,31 +20,119 @@ EXPOSE 4455
 CMD ["node", "server.js"]
 ```
 
-Where `server.js` mounts `dashOtaMiddleware()` into Express (or calls `createOtaBackend().listen()`).
+`server.js` either mounts `dashOtaMiddleware()` into your Express app or calls
+`createOtaBackend().listen()`. Point `OTA_STORAGE_DIR` and `OTA_DATA_DIR` at persistent volumes and
+this runs on one box with the built-in disk store. It is a real deployment, and it is enough until
+you need more than one instance.
 
-## Behind your gateway
+## A production stack
 
-- Terminate **HTTPS** at your gateway/load balancer; dash-ota integrity holds even if TLS were
-  broken, but you still want transport security and confidentiality.
-- Mount it at the **root** of its own service, or alongside your API (the middleware only owns
-  `/ota/v2/*`, `/admin/*`, `/health`).
-- Pass `OTA_ADMIN_TOKEN` and your store credentials via secrets, never in the image.
+Once you want durability and more than one replica, the disk store stops being the right answer.
+This is the OTA service behind a TLS-terminating proxy, with Postgres for metadata, Redis for the
+shared cache, and MinIO (or any S3-compatible bucket) for blobs:
 
-## Storage
+```yaml title="docker-compose.yml"
+services:
+  ota:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm ci && npm run backend"
+    environment:
+      OTA_PORT: "4455"
+      OTA_ADMIN_TOKEN: "${OTA_ADMIN_TOKEN}"      # required — no default, fails closed
+      OTA_DATABASE_URL: "postgres://ota:ota@db:5432/ota"
+      OTA_REDIS_URL: "redis://cache:6379"
+      OTA_S3_BUCKET: "ota-bundles"
+      OTA_S3_ENDPOINT: "http://blob:9000"
+      OTA_S3_FORCE_PATH_STYLE: "true"
+      OTA_S3_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: "minioadmin"
+      AWS_SECRET_ACCESS_KEY: "minioadmin"
+      OTA_MAX_BUNDLE_BYTES: "104857600"          # 100 MiB
+    depends_on: [db, cache, blob]
 
-Point `storageDir`/`dataDir` at persistent volumes for the built-in disk store, or implement a
-[custom store](/docs/backend/store) backed by Postgres/Redis/object storage for scale.
+  db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: ota, POSTGRES_PASSWORD: ota, POSTGRES_DB: ota }
+    volumes: ["dbdata:/var/lib/postgresql/data"]
 
-## Health & observability
+  cache:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["cachedata:/data"]
 
-- `GET /health` returns `{ ok, releases }` for liveness/readiness probes.
-- Wire `onConfirm` / `onPublish` / `logger` to your metrics + audit pipeline (see [Hooks](/docs/backend/hooks)).
-- The server-side **auto-pause** is your safety net — alert on it.
+  blob:
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment: { MINIO_ROOT_USER: minioadmin, MINIO_ROOT_PASSWORD: minioadmin }
+    volumes: ["blobdata:/data"]
 
-## Env summary
+volumes: { dbdata: {}, cachedata: {}, blobdata: {} }
+```
 
-`OTA_PORT`, `OTA_ADMIN_TOKEN`, `OTA_STORAGE_DIR`, `OTA_DATA_DIR`, `OTA_TS_SKEW_MS`,
-`OTA_DL_TTL_MS`, `OTA_NONCE_TTL_MS`, `OTA_AUTOPAUSE_RATE`, `OTA_AUTOPAUSE_MIN`, `OTA_REQUIRE_SIG`,
-`OTA_REQUIRE_ENROLL_AUTH`. See [Configuration](/docs/backend/configuration).
+The adapters are optional peer dependencies, so install the ones you use in your service image:
+`npm i pg ioredis @aws-sdk/client-s3`. Create the bucket once, from the MinIO console on `:9001`
+or with `mc mb`.
 
-→ [Production hardening](/docs/backend/hardening)
+## Reverse proxy and TLS
+
+Terminate TLS at the proxy and forward to the service. The OTA routes are absolute — `/ota/v2/*`,
+`/admin/*`, `/health`, `/ready` — so mount at the **root**. A sub-path mount breaks request
+signature verification, because the signature covers the path the client sent.
+
+```nginx
+server {
+  listen 443 ssl;
+  server_name ota.example.com;
+  # ssl_certificate / ssl_certificate_key ...
+  location / {
+    proxy_pass http://ota:4455;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    client_max_body_size 120m;   # >= OTA_MAX_BLOB_BYTES, for the blob upload route
+    proxy_buffering off;         # blob downloads stream and serve Range; buffering breaks resume
+  }
+}
+```
+
+Serve `/admin/*` over HTTPS only — the admin token is the CLI's publish credential. Flood
+protection for `/enroll` and `/check` belongs here too: the service rate-limits per install, but
+limiting across installs is the proxy's job.
+
+## Liveness and readiness are different probes
+
+This distinction matters more than it looks:
+
+- **`GET /health`** — liveness. Returns `{ "ok": true }` and **never touches storage**. Use it for
+  the container liveness probe, so a briefly unreachable database does not restart a healthy
+  process.
+- **`GET /ready`** — readiness. Queries the store. Returns `200 { "ready": true, "releases": N }`
+  when the backing store answers, `503 { "ready": false }` when it does not. Use it for load
+  balancer rotation, so an instance that cannot reach its database is pulled out of service.
+
+```yaml
+livenessProbe:  { httpGet: { path: /health, port: 4455 } }
+readinessProbe: { httpGet: { path: /ready,  port: 4455 } }
+```
+
+## Scaling and backups
+
+More than one replica needs a **shared Redis**. The anti-replay nonce guard, the download tokens
+and the rate-limit counters are per-process otherwise, which means a device can replay a request
+against a different instance. Postgres and S3 are shared by nature.
+
+Back up Postgres and the blob store. The cache is ephemeral on purpose — losing it forces fresh
+nonces and tokens, and costs no data.
+
+## Secrets and configuration
+
+Pass `OTA_ADMIN_TOKEN` and your store credentials as secrets, never baked into the image. The full
+list of variables and their defaults is in [Configuration](/docs/backend/configuration); the ones
+that matter most in production are `OTA_ADMIN_TOKEN`, `OTA_DATABASE_URL`, `OTA_REDIS_URL`,
+`OTA_S3_BUCKET`, `OTA_MAX_BUNDLE_BYTES`, `OTA_AUTOPAUSE_RATE` and `OTA_AUTOPAUSE_MIN`.
+
+Wire `onConfirm`, `onPublish` and `logger` into your metrics and audit pipeline — see
+[Hooks](/docs/backend/hooks). Server-side auto-pause is the safety net that pulls a failing
+release without you; alert on it.
+
+→ [Production hardening](/docs/backend/hardening) · [Storage](/docs/backend/providers)

@@ -1,83 +1,86 @@
 /**
- * dash-ota theme — Stitch "Linear style": near-black canvas, hairline #27272A borders,
- * indigo #4254f0 primary, mint #45D09E accent, Inter + JetBrains Mono. Dark-only, so the
+ * dash-ota theme — Stitch "Linear style": near-black canvas, hairline #333C47 borders,
+ * indigo #4E90B2 primary, mint #6FA8C7 accent, Inter + JetBrains Mono. Dark-only, so the
  * Docusaurus chrome (navbar, docs, footer) matches the landing exactly.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Roboto+Condensed:wght@700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&display=swap');
 
 :root {
   /* brand */
-  --ifm-color-primary: #5e6ad2;
-  --ifm-color-primary-dark: #4254f0;
-  --ifm-color-primary-darker: #3a4ae0;
-  --ifm-color-primary-darkest: #2f3cc0;
-  --ifm-color-primary-light: #7480e0;
-  --ifm-color-primary-lighter: #8893e6;
-  --ifm-color-primary-lightest: #a3abee;
+  --ifm-color-primary: #6FA8C7;
+  --ifm-color-primary-dark: #4E90B2;
+  --ifm-color-primary-darker: #417E9E;
+  --ifm-color-primary-darkest: #356B88;
+  --ifm-color-primary-light: #86B7D1;
+  --ifm-color-primary-lighter: #9CC5DA;
+  --ifm-color-primary-lightest: #B5D3E3;
 
-  --dash-accent: #45d09e;
-  --dash-border: #27272a;
-  --dash-surface: #121214;
-  --dash-bg: #09090b;
-  --dash-muted: #8f8f99;
+  --dash-accent: #6FA8C7;
+  --dash-border: #333C47;
+  --dash-surface: #232A33;
+  --dash-bg: #1B2027;
+  --dash-muted: #8C98A6;
 
   /* typography */
   --ifm-font-family-base: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --ifm-font-family-monospace: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --ifm-heading-font-weight: 600;
+  --ifm-heading-font-family: 'Roboto Condensed', 'Inter', system-ui, sans-serif;
+  --ifm-heading-font-weight: 700;
+  --dash-amber: #e8a33d;
+  --dash-alarm: #d2544b;
   --ifm-heading-letter-spacing: -0.02em;
   --ifm-code-font-size: 90%;
 
   /* surfaces (dark-only) */
-  --ifm-background-color: #09090b;
-  --ifm-background-surface-color: #121214;
-  --ifm-font-color-base: #ededef;
+  --ifm-background-color: #1B2027;
+  --ifm-background-surface-color: #232A33;
+  --ifm-font-color-base: #E6EAEF;
   --ifm-heading-color: #ffffff;
   --ifm-navbar-background-color: rgba(18, 18, 20, 0.6);
   --ifm-navbar-shadow: none;
   --ifm-toc-border-color: var(--dash-border);
-  --ifm-color-emphasis-0: #09090b;
-  --ifm-color-emphasis-100: #121214;
-  --ifm-color-emphasis-200: #1a1a1e;
-  --ifm-color-emphasis-300: #27272a;
-  --ifm-color-emphasis-400: #3a3a3f;
-  --ifm-color-emphasis-600: #8f8f99;
-  --ifm-color-emphasis-700: #a1a1aa;
-  --ifm-menu-color: #a1a1aa;
+  --ifm-color-emphasis-0: #1B2027;
+  --ifm-color-emphasis-100: #232A33;
+  --ifm-color-emphasis-200: #2B333D;
+  --ifm-color-emphasis-300: #333C47;
+  --ifm-color-emphasis-400: #3D4753;
+  --ifm-color-emphasis-600: #8C98A6;
+  --ifm-color-emphasis-700: #9BA7B4;
+  --ifm-menu-color: #9BA7B4;
   --ifm-menu-color-background-active: rgba(66, 84, 240, 0.1);
   --ifm-menu-color-background-hover: rgba(255, 255, 255, 0.04);
-  --ifm-toc-link-color: #8f8f99;
-  --ifm-link-color: #8893e6;
+  --ifm-toc-link-color: #8C98A6;
+  --ifm-link-color: #9CC5DA;
   --ifm-table-border-color: var(--dash-border);
   --ifm-hr-border-color: var(--dash-border);
-  --ifm-blockquote-color: #a1a1aa;
-  --ifm-card-background-color: #121214;
+  --ifm-blockquote-color: #9BA7B4;
+  --ifm-card-background-color: #232A33;
   --docusaurus-highlighted-code-line-bg: rgba(66, 84, 240, 0.16);
 }
 
 /* Docusaurus toggles data-theme="dark"; mirror the palette so nothing reverts. */
 [data-theme='dark'] {
-  --ifm-color-primary: #5e6ad2;
-  --ifm-color-primary-dark: #4254f0;
-  --ifm-color-primary-darker: #3a4ae0;
-  --ifm-color-primary-darkest: #2f3cc0;
-  --ifm-color-primary-light: #7480e0;
-  --ifm-color-primary-lighter: #8893e6;
-  --ifm-color-primary-lightest: #a3abee;
-  --ifm-background-color: #09090b;
-  --ifm-background-surface-color: #121214;
-  --ifm-font-color-base: #ededef;
+  --ifm-color-primary: #6FA8C7;
+  --ifm-color-primary-dark: #4E90B2;
+  --ifm-color-primary-darker: #417E9E;
+  --ifm-color-primary-darkest: #356B88;
+  --ifm-color-primary-light: #86B7D1;
+  --ifm-color-primary-lighter: #9CC5DA;
+  --ifm-color-primary-lightest: #B5D3E3;
+  --ifm-background-color: #1B2027;
+  --ifm-background-surface-color: #232A33;
+  --ifm-font-color-base: #E6EAEF;
   --ifm-heading-color: #ffffff;
 }
 
 html {
   scroll-behavior: smooth;
-  background-color: #09090b;
+  background-color: #1B2027;
 }
 body {
-  background-color: #09090b;
+  background-color: #1B2027;
 }
 
 /* ---------- Navbar (sticky glass) ---------- */
@@ -264,7 +267,7 @@ blockquote {
 
 /* ---------- Markdown tables: premium, no toyish zebra ---------- */
 .markdown table thead tr {
-  background: #09090b;
+  background: #1B2027;
 }
 .markdown table thead th {
   color: #fff;
@@ -284,7 +287,7 @@ blockquote {
 
 /* ---------- Footer ---------- */
 .footer {
-  background: #09090b;
+  background: #1B2027;
   border-top: 1px solid var(--dash-border);
 }
 .footer__title {
@@ -311,4 +314,12 @@ blockquote {
   max-width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+/* Wordmark: the dash is the mark, so the title is set in the display face beside the icon. */
+.navbar__title {
+  font-family: 'Roboto Condensed', Inter, sans-serif;
+  font-weight: 700;
+  font-size: 1.22rem;
+  letter-spacing: -0.01em;
 }

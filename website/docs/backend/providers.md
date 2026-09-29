@@ -1,6 +1,6 @@
 ---
-sidebar_position: 8
-title: Storage providers & adapters
+sidebar_position: 7
+title: Storage & providers
 ---
 
 # Storage providers & adapters
@@ -81,7 +81,7 @@ Optional peer: `npm i pg`. Records are stored as `jsonb` keyed by their natural 
 UPSERTs. The schema (`ota_releases`, `ota_installs`, `ota_trusted_keys`, `ota_native_policies`) is
 created on first use — no separate migration step.
 
-:::note Concurrency caveat
+:::note[Concurrency caveat]
 Per-row writes are atomic, but the adoption counters (`/confirm`) use a read-modify-write in the
 Store, so a counter increment can be lost under very high concurrent `/confirm`. Optimistic-locking
 that path is a tracked follow-up; it affects every `DatabaseProvider`, including the disk default.
@@ -112,8 +112,42 @@ dashOtaMiddleware({
 Optional peer: `npm i @aws-sdk/client-s3`. Credentials come from the standard AWS env chain. The
 download path **streams** straight from the object (the backend never buffers a whole ciphertext).
 
-## Writing your own
+## How blobs are laid out
 
-Implement the interfaces in `@dash-ota/backend` (`DatabaseProvider`, `BlobStore`, `CacheProvider`) —
-each is small and fully `async` — and inject them via `providers`. The route core never changes.
+Worth knowing before you point this at a bucket: blobs are **content-addressed and global**, stored
+at `blobs/<sha256>`, not grouped per release. One file that appears in twenty releases is stored
+once. Deleting a release only removes the blobs no other release still references, and every read
+re-checks that the requesting release's manifest actually lists that blob.
+
+This is why the content key must stay stable for a channel — see
+[Keys, custody & rotation](/docs/security/key-management).
+
+## Replacing the whole store
+
+The three providers cover the infrastructure most people swap. If you need to replace the
+persistence layer wholesale — a different database shape, an existing service that already owns
+this data — implement `Store` itself and pass it in:
+
+```ts
+import { createOtaBackend } from '@dash-ota/backend';
+const ota = createOtaBackend({ store: new MyStore(config) });
+```
+
+A `Store` owns six groups of behaviour:
+
+- **Releases** — `addRelease`, `listReleases`, `getRelease`, `setRollout`, `setPaused`, `rollback`,
+  and `pickEligible`, which does the targeting and rollout matching.
+- **Installs** — `enroll` (stores the device public key, idempotent so key rotation works) and
+  `getDevicePublicKey`.
+- **Trusted keys** — `registerKey`, `getTrustedKey`, used to sanity-check publishes.
+- **Anti-replay** — `registerNonce`, `issueDownloadToken` / `peekDownloadToken`,
+  `issueServerNonce` / `consumeServerNonce`.
+- **Adoption** — `recordConfirm`, which also trips auto-pause past the failure threshold.
+- **Native policy** — `setNativePolicy`, `resolveNativePolicy`.
+
+Keep `pickEligible`'s semantics identical — exact `runtimeVersion`, the stable rollout bucket,
+`bundleVersion` greater than the device's current, matching channel and platform. Targeting
+correctness lives entirely in that method.
+
+→ [Deployment](/docs/backend/deployment) · [Production hardening](/docs/backend/hardening)
 ```

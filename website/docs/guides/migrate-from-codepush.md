@@ -41,4 +41,4 @@ covers the same workflow and adds a stronger security model.
 - No reliance on a retiring service (CodePush) and a stronger security posture than hot-updater's
   signed-URL model.
 
-→ [Comparison](/docs/introduction/comparison) · [Self-host the backend](/docs/guides/self-host-backend)
+→ [Comparison](/docs/introduction/comparison) · [Self-host the backend](/docs/backend/deployment)

@@ -1,0 +1,100 @@
+# dash-ota
+
+> Self-hosted over-the-air updates for React Native. The CLI signs releases with an Ed25519
+> key you hold, the backend only distributes them, and the device verifies against a public
+> key compiled into the binary — so a breached backend cannot forge an update.
+
+- [FAQ](https://scripting-bear.github.io/dash-ota/docs/faq)
+
+## Introduction
+
+- [What is dash-ota?](https://scripting-bear.github.io/dash-ota/docs/): A self-hosted, security-hardened over-the-air update system for React Native — client, CLI, and backend, all owned by you.
+- [dash-ota vs alternatives](https://scripting-bear.github.io/dash-ota/docs/introduction/comparison): How dash-ota compares to Stallion, hot-updater, CodePush, and expo-updates.
+- [Architecture](https://scripting-bear.github.io/dash-ota/docs/introduction/architecture): How dash-ota's three packages divide trust so no single compromise can forge or apply an update.
+
+## Getting Started
+
+- [If you've never shipped an OTA update](https://scripting-bear.github.io/dash-ota/docs/getting-started/what-is-an-ota-update): What an over-the-air update is, what it can and cannot change, and the three ideas you need before starting.
+- [Prerequisites](https://scripting-bear.github.io/dash-ota/docs/getting-started/prerequisites)
+- [Ship your first update](https://scripting-bear.github.io/dash-ota/docs/getting-started/quickstart): Backend, keys, app wiring, and a signed update on a real device — start to finish.
+- [Concepts & glossary](https://scripting-bear.github.io/dash-ota/docs/getting-started/concepts): The vocabulary you need — runtimeVersion, bundleVersion, channel, manifest, device key, and more.
+
+## Core Concepts
+
+- [The OTA lifecycle](https://scripting-bear.github.io/dash-ota/docs/concepts/lifecycle): enroll → check → download → verify → stage → apply → confirm, and the rollback path.
+- [Security model](https://scripting-bear.github.io/dash-ota/docs/concepts/security-model): Where trust lives, what each part of the system can do, and the one boundary worth understanding.
+- [Versioning & targeting](https://scripting-bear.github.io/dash-ota/docs/concepts/versioning-targeting): runtimeVersion, bundleVersion, channels, targetAppVersions, rollout % — and the store-vs-OTA problem.
+- [Native vs JS trust split](https://scripting-bear.github.io/dash-ota/docs/concepts/native-vs-js): Why the trust-critical work runs in native, before and independent of JavaScript.
+- [Crash-loop circuit breaker](https://scripting-bear.github.io/dash-ota/docs/concepts/crash-loop): How a bad bundle auto-reverts so your app always boots to something that runs.
+- [Force-update gate](https://scripting-bear.github.io/dash-ota/docs/concepts/force-update): Push users to the store when a native fix is required — the path OTA alone can't cover.
+
+## React Native Client
+
+- [Installation](https://scripting-bear.github.io/dash-ota/docs/react-native/installation)
+- [Android setup](https://scripting-bear.github.io/dash-ota/docs/react-native/android-setup)
+- [iOS setup](https://scripting-bear.github.io/dash-ota/docs/react-native/ios-setup)
+- [Environments & flavours](https://scripting-bear.github.io/dash-ota/docs/react-native/environments): Wire dev / uat / prod so each embeds its own channel, signing key, and runtimeVersion.
+- [Provider & config](https://scripting-bear.github.io/dash-ota/docs/react-native/provider-config): <DashOtaProvider> and every OtaConfig option.
+- [useOtaUpdate()](https://scripting-bear.github.io/dash-ota/docs/react-native/use-ota-update): The hook — a ready-to-render ui view model, plus raw state and actions.
+- [Update modes](https://scripting-bear.github.io/dash-ota/docs/react-native/update-modes)
+- [markHealthy & crash-loop](https://scripting-bear.github.io/dash-ota/docs/react-native/mark-healthy)
+- [Storage adapters](https://scripting-bear.github.io/dash-ota/docs/react-native/storage)
+- [Recipes](https://scripting-bear.github.io/dash-ota/docs/react-native/recipes)
+- [Troubleshooting](https://scripting-bear.github.io/dash-ota/docs/react-native/troubleshooting)
+
+## Backend
+
+- [Installation & overview](https://scripting-bear.github.io/dash-ota/docs/backend/installation)
+- [Express integration](https://scripting-bear.github.io/dash-ota/docs/backend/express)
+- [Other frameworks & standalone](https://scripting-bear.github.io/dash-ota/docs/backend/frameworks)
+- [Umbrella factory](https://scripting-bear.github.io/dash-ota/docs/backend/umbrella)
+- [Configuration](https://scripting-bear.github.io/dash-ota/docs/backend/configuration)
+- [Hooks](https://scripting-bear.github.io/dash-ota/docs/backend/hooks)
+- [Storage & providers](https://scripting-bear.github.io/dash-ota/docs/backend/providers)
+- [Endpoints & request signing](https://scripting-bear.github.io/dash-ota/docs/backend/endpoints)
+- [Deployment](https://scripting-bear.github.io/dash-ota/docs/backend/deployment)
+- [Production hardening](https://scripting-bear.github.io/dash-ota/docs/backend/hardening)
+
+## CLI
+
+- [Overview](https://scripting-bear.github.io/dash-ota/docs/cli/overview)
+- [The dashboard](https://scripting-bear.github.io/dash-ota/docs/cli/dashboard): A local web console for publishing, ramping and rolling back — no SaaS, no hosted account.
+- [Commands](https://scripting-bear.github.io/dash-ota/docs/cli/commands)
+- [Release workflow](https://scripting-bear.github.io/dash-ota/docs/cli/release-workflow)
+- [Hermes & HBC](https://scripting-bear.github.io/dash-ota/docs/cli/hermes)
+- [CI/CD integration](https://scripting-bear.github.io/dash-ota/docs/cli/ci-cd)
+
+## Guides & Recipes
+
+- [Staged rollout & auto-pause](https://scripting-bear.github.io/dash-ota/docs/guides/staged-rollout)
+- [Rolling back a release](https://scripting-bear.github.io/dash-ota/docs/guides/rollback)
+- [Migrate from Stallion](https://scripting-bear.github.io/dash-ota/docs/guides/migrate-from-stallion)
+- [Migrate from CodePush / hot-updater](https://scripting-bear.github.io/dash-ota/docs/guides/migrate-from-codepush)
+
+## Security
+
+- [Threat model](https://scripting-bear.github.io/dash-ota/docs/security/threat-model)
+- [If your server is breached](https://scripting-bear.github.io/dash-ota/docs/security/breach)
+- [Controls explained](https://scripting-bear.github.io/dash-ota/docs/security/controls)
+- [Pinning & attestation](https://scripting-bear.github.io/dash-ota/docs/security/pinning-attestation)
+- [Keys, custody & rotation](https://scripting-bear.github.io/dash-ota/docs/security/key-management)
+- [Honest limitations](https://scripting-bear.github.io/dash-ota/docs/security/limitations)
+
+## Architecture
+
+- [Manifest schema](https://scripting-bear.github.io/dash-ota/docs/architecture/manifest-schema)
+- [Content-addressed blobs](https://scripting-bear.github.io/dash-ota/docs/architecture/content-addressed-blobs)
+- [Request signing](https://scripting-bear.github.io/dash-ota/docs/architecture/request-signing)
+- [Slot model & atomic apply](https://scripting-bear.github.io/dash-ota/docs/architecture/slot-model)
+- [TurboModule & codegen](https://scripting-bear.github.io/dash-ota/docs/architecture/turbomodule)
+
+## API Reference
+
+- [react-native-dash-ota](https://scripting-bear.github.io/dash-ota/docs/api/react-native)
+- [@dash-ota/backend](https://scripting-bear.github.io/dash-ota/docs/api/backend)
+- [@dash-ota/shared](https://scripting-bear.github.io/dash-ota/docs/api/shared)
+
+## Contributing
+
+- [Contributing](https://scripting-bear.github.io/dash-ota/docs/contributing)
+- [Roadmap](https://scripting-bear.github.io/dash-ota/docs/contributing/roadmap)

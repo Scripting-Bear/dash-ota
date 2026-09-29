@@ -1,5 +1,5 @@
 ---
-sidebar_position: 2
+sidebar_position: 3
 title: Commands
 ---
 
@@ -22,7 +22,7 @@ dash-ota keygen --key-id key_prod_1 --out .keys
 | `--server` / `--admin-token` | — | optionally register the new key immediately |
 
 Writes `<key-id>.private.pem` (**encrypted** by default), `.public.pem`, `.public.json`; prints
-`publicKeyRawB64`. See [Key custody](/docs/cli/key-custody).
+`publicKeyRawB64`. See [Keys, custody & rotation](/docs/security/key-management).
 
 ## `register-key`
 Tell the backend to trust a public key.
@@ -112,6 +112,25 @@ dash-ota rollout  --bundle-id <id> --pct 50
 dash-ota pause    --bundle-id <id>            # add --resume to resume
 dash-ota rollback --bundle-id <id>            # pause + flag
 ```
+
+:::note[The percentage flag is named differently in the two places]
+`publish` sets the initial percentage with **`--rollout`**; `rollout` changes it later with
+**`--pct`**. Mixing them up used to be dangerous — `--pct` defaults to 100, so a typo'd
+`rollout --rollout 50` quietly ramped to everyone. The CLI now refuses any flag a command does
+not accept and points at the right one:
+
+```
+$ dash-ota rollout --bundle-id bnd_x --rollout 50
+✗ unknown flag for `rollout`:
+  --rollout   (did you mean --pct?)
+
+  accepted: --bundle-id --pct --server --admin-token --allow-insecure
+```
+:::
+
+`rollback` is **one-way**. It sets both `rolledBack` and `paused`, and while `pause --resume`
+clears the pause, nothing clears `rolledBack` — devices holding a live download token start
+getting 410 on the blobs. Recovering means publishing a new release; there is no unpublish.
 
 ## native-policy
 Set the [force-update gate](/docs/concepts/force-update) per channel.

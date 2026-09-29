@@ -63,3 +63,20 @@ jobs:
 
 Wire follow-up jobs (or a manual `workflow_dispatch`) to `dash-ota rollout --pct …` and
 `dash-ota rollback` so ramps and pulls are auditable.
+
+## Shipping both platforms
+
+Android and iOS need separate bundles — the Hermes bytecode differs, and so does the
+`runtimeVersion` fingerprint if the native trees diverge. Run the job as a matrix over
+`--platform android|ios`, each with its own `bundle --hermes` and its own `publish`:
+
+```yaml
+strategy:
+  matrix:
+    platform: [android, ios]
+steps:
+  - run: npx dash-ota bundle --platform ${{ matrix.platform }} --out ./out --hermes
+  - run: npx dash-ota publish --bundle-dir ./out --platform ${{ matrix.platform }} …
+```
+
+A release is per platform, so each one gets its own `bundleId` and its own rollout percentage.

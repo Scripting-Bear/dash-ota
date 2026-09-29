@@ -44,6 +44,12 @@ Header `x-ota-admin-token: <adminToken>`. Used by the [CLI](/docs/cli/overview).
 
 Plus `GET /health` (liveness) and `GET /ready` (readiness, with a release count).
 
+`/admin/native-policy` validates its body: `minSupportedNativeVersion` must be a non-negative
+integer, `severity` must be `soft` or `hard`, and `storeUrl` must start with `https://`, `market://` or
+`itms-apps://`. That last rule matters because the policy is **not covered by the manifest
+signature** and apps open the URL from a blocking screen — see
+[If your server is breached](/docs/security/breach).
+
 ## Publishing takes three steps
 
 A release is invisible to devices until it is finalized, which is what makes an interrupted publish

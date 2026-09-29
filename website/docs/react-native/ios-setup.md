@@ -25,7 +25,7 @@ OTA_PUBLIC_KEYS = BASE64_RAW_ED25519_PUBLIC_KEY
 OTA_RUNTIME_VERSION = rt1
 ```
 
-:::caution `//` is a comment in xcconfig
+:::caution[`//` is a comment in xcconfig]
 Write URLs as `https:/$()/host` — the empty `$()` interpolation breaks up the `//` so it isn't
 treated as a comment. The native `DashOtaConfig` reads `OTA_*` from `Bundle.main`.
 :::

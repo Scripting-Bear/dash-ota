@@ -1,77 +1,68 @@
 ---
 sidebar_position: 2
 title: Security model
-description: What each control buys, and the precise boundary between integrity and confidentiality.
+description: Where trust lives, what each part of the system can do, and the one boundary worth understanding.
 ---
 
 # Security model
 
-dash-ota's security model is deliberately conservative and **honest about its boundaries**. This
-page explains what each control actually guarantees.
+The whole design follows from one decision: **the thing that distributes your updates is not
+trusted to create them.**
 
-## The controls
+## Who holds what
 
-### 1. Ed25519 code signing (integrity)
+| | Holds the signing key | Can create an update | Can serve an update |
+|---|---|---|---|
+| Your CI / machine | **yes** | yes | no |
+| The backend | no | **no** | yes |
+| The device | no (public key only) | no | — verifies |
 
-Every manifest is **signed in the CLI** with an Ed25519 private key that lives only in your CI.
-The app embeds the **public** key in its binary and **verifies the signature in native** before a
-bundle ever runs.
+The CLI signs a manifest with an Ed25519 private key that lives in your CI or key store. The
+backend receives that manifest already signed, stores it, and hands it out. The device verifies it
+against a public key compiled into the app binary, in native code, before anything is written to
+disk.
 
-- The signature covers the *whole* manifest: `runtimeVersion`, `bundleVersion`, the AES content
-  key, and the **per-file SHA-256 list** — so an attacker can't swap even a single asset.
-- Verification is native and happens *before* JS executes → a tampered bundle never runs, **even
-  if TLS is completely broken**.
-- The backend never has the private key → **a breached backend cannot forge an update**.
+Nothing in that chain requires the backend to be honest. That is the point, and it is what
+[a breached server](/docs/security/breach) cannot get around.
 
-### 2. AES-256-GCM payload encryption (confidentiality + authenticity)
+## The one boundary worth understanding
 
-The bundle bytes are AES-256-GCM ciphertext; the content key travels *inside* the signed manifest.
-GCM is **authenticated** — the tag detects any tampering of the bytes. This protects against
-**passive** sniffing and at-rest exposure.
+Integrity and confidentiality are not equally protected here, and the difference matters:
 
-### 3. Hardware device-key request auth (no secret to intercept)
+> **Integrity holds even if TLS is completely broken. Confidentiality against an active MITM does
+> not, until you turn pinning on.**
 
-Each install generates a non-exportable EC P-256 key in the **AndroidKeyStore / Secure Enclave**.
-At enroll it registers only the **public** half (gated by your app session token). Requests are
-signed with **ECDSA-P256** over a canonical string, plus a nonce and timestamp. There is **no
-symmetric secret** transmitted at bootstrap — nothing to sniff or replay.
+Integrity does not depend on the network at all. The verification key is in the binary, so a forged
+certificate, hijacked DNS and a hostile server still cannot produce a manifest the device accepts.
 
-### 4. Anti-replay
+Confidentiality is weaker. The bundle bytes are AES-256-GCM ciphertext, but the content key that
+opens them travels inside the manifest, over the same TLS channel. Someone who can forge a
+certificate and read `/check` can read the key. So encryption here buys you protection against
+passive sniffing and against anyone reading the blob store — not against an attacker who is
+actively sitting in the connection.
 
-`/check` and `/confirm` carry a per-request **nonce + timestamp** (rejected if stale/reused), and
-`/check` issues a **server nonce** that `/confirm` must echo — binding a confirm to a real check.
+Closing that last gap is what [TLS pinning](/docs/security/pinning-attestation) is for. It ships,
+and it is off until you set pins.
 
-### 5. Targeting guards
+Stated plainly: **rely on signing for integrity, and on pinning for confidentiality against an
+active MITM.** Do not oversell the encryption as MITM-proof — it isn't, and the docs say so on
+purpose.
 
-- **runtimeVersion gate** — native refuses any bundle whose `runtimeVersion` ≠ the binary's.
-- **Downgrade guard** — native rejects a `bundleVersion` lower than current (defeats replay of a
-  validly-signed *old* bundle).
+## Two controls that ship turned off
 
-## The integrity vs confidentiality boundary
+- **TLS certificate pinning** — enforced in native on the blob download. Set `ota_tls_pins`
+  (Android) or `OTA_TLS_PINS` (iOS); a mismatch throws. Both platforms hash the full DER
+  certificate, so one pin value covers both.
+- **Device attestation** — the client attaches a Play Integrity or App Attest token at enrollment,
+  and your `verifyEnrollToken` hook decides whether to trust it. dash-ota does not verify the token
+  for you.
 
-This is the most important nuance, stated plainly:
+Neither is on until you configure it, and the core never depends on either.
 
-> **Integrity is guaranteed in v1, even against an active MITM. Confidentiality against an
-> *active* MITM is not — it waits for the (modular) pinning plug-in.**
+## Going deeper
 
-Why: Ed25519 verification uses a key **embedded in the binary**, so integrity holds regardless of
-the network. But the AES **content key** rides inside the manifest over the same TLS channel — an
-attacker who can forge a CA and read `/check` could read the key. So AES-GCM gives you
-**defense-in-depth confidentiality** (passive sniffing, at-rest), and **active-MITM
-confidentiality** is closed only by [TLS pinning](/docs/security/pinning-attestation).
-
-Don't oversell encryption as MITM-proof; do rely on signing for integrity.
-
-## What's deliberately deferred (and modular)
-
-- **TLS certificate/public-key pinning** — closes active-MITM confidentiality.
-- **Device attestation** (Play Integrity / App Attest) — proves a genuine, unmodified app.
-
-Both are **modular plug-ins** the core never depends on, so they drop in later without changes.
-→ [Pinning & attestation](/docs/security/pinning-attestation)
-
-## See also
-
-- [Threat model table](/docs/security/threat-model)
-- [Key management & rotation](/docs/security/key-management)
-- [Honest limitations](/docs/security/limitations)
+- [Threat model](/docs/security/threat-model) — the table of threat, control, and where it runs.
+- [Controls explained](/docs/security/controls) — all thirteen controls, property by property.
+- [If your server is breached](/docs/security/breach) — what an attacker with root can and cannot do.
+- [What dash-ota does not do](/docs/security/limitations) — the honest limits.
+- [Keys, custody & rotation](/docs/security/key-management).

@@ -13,7 +13,7 @@ A checklist for running the distributor in production.
 - ✅ **Implement `verifyEnrollToken`** against your real auth — don't ship the presence-only default.
 - ✅ **Strong `adminToken`** from a secret; rotate it; restrict `/admin/*` at the network layer too.
 - ✅ **HTTPS only** in front of the service.
-- ✅ **Persistent, backed-up store** for releases + ciphertext (or a [custom store](/docs/backend/store)).
+- ✅ **Persistent, backed-up store** for releases + ciphertext (or a [custom store](/docs/backend/providers)).
 
 ## Should-do
 

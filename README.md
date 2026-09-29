@@ -10,14 +10,17 @@ breached backend cannot forge an update.
 
 ---
 
-## 📚 Documentation
+## Documentation
 
-| Guide | What it covers |
+Full documentation, including a step-by-step first update: **https://scripting-bear.github.io/dash-ota**
+
+| | |
 |---|---|
-| **[Backend integration](./docs/backend.md)** | Mount `@dash-ota/backend` into Express/Connect (or run standalone), config, hooks, endpoints |
-| **[React Native integration](./docs/react-native.md)** | Install `react-native-dash-ota`, native per-flavour config, `<DashOtaProvider>` + `useOtaUpdate()` |
-| **[CLI usage](./docs/cli.md)** | `dash-ota` commands: keygen → publish → rollout, per-env keys, key custody |
-| **[Design & threat model](./DESIGN.md)** | Full architecture, security model, versioning/targeting, lifecycle, evidence |
+| [If you've never shipped an OTA update](https://scripting-bear.github.io/dash-ota/docs/getting-started/what-is-an-ota-update) | start here if the idea is new |
+| [Ship your first update](https://scripting-bear.github.io/dash-ota/docs/getting-started/quickstart) | backend, keys, app wiring, publish, roll back |
+| [If your server is breached](https://scripting-bear.github.io/dash-ota/docs/security/breach) | what an attacker with root can and cannot do |
+| [The local dashboard](https://scripting-bear.github.io/dash-ota/docs/cli/dashboard) | a web console that runs on your machine |
+| [Wire protocol](./docs/PROTOCOL.md) · [Design & threat model](./DESIGN.md) | the specs |
 
 ---
 

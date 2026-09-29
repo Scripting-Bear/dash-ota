@@ -15,7 +15,7 @@ const COLS = ['dash-ota', 'Stallion', 'hot-updater', 'CodePush', 'expo-updates']
 const ROWS: { cap: string; key?: boolean; cells: string[] }[] = [
   {
     cap: 'Self-hosted backend',
-    cells: ['y:You run it — Express middleware or standalone', 'n:Managed SaaS only', 'y:Your S3 / Supabase / Cloudflare', 'n:App Center retiring 2025', 'p:EAS-hosted, or self-host the updates server'],
+    cells: ['y:You run it — Express middleware or standalone', 'n:Managed SaaS only', 'y:Your S3 / Supabase / Cloudflare', 'p:Self-host only — App Center retired Mar 2025, server source archived May 2025', 'p:EAS-hosted, or self-host the updates server'],
   },
   {
     cap: 'Signed bundles, verified in native',

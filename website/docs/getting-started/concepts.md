@@ -1,5 +1,5 @@
 ---
-sidebar_position: 3
+sidebar_position: 4
 title: Concepts & glossary
 description: The vocabulary you need — runtimeVersion, bundleVersion, channel, manifest, device key, and more.
 ---

@@ -29,7 +29,7 @@ After install + pod install, the `DashOta` module should be available. In a rele
 provider will log `[dash-ota] enrolled device key` on first launch once the server URL + public
 key are wired.
 
-:::note New Architecture
+:::note[New Architecture]
 dash-ota is a TurboModule (codegen spec `DashOtaSpec`, native module name `DashOta`, Android
 package `com.dashota`). It requires the New Architecture — there is no old-bridge fallback.
 :::

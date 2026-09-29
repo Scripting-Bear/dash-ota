@@ -36,6 +36,18 @@ npx dash-ota keygen --key-id key_prod    # → prod
 npx dash-ota register-key --key-id <id> --key-file .keys/<id>.public.json
 ```
 
+This is what gives you key isolation. A prod build embeds only the prod public key, so a bundle
+signed with the dev key — accidentally or otherwise — fails verification in native with
+`manifest signature did not verify`. A leaked dev key cannot reach prod installs.
+
+When you publish, pass the matching `--key-id`. The manifest records it, and the app verifies
+against the key it embeds for that environment.
+
+```bash
+dash-ota publish --bundle-dir ./out --platform android --channel uat \
+  --runtime-version auto --bundle-version 2 --key-id key_uat
+```
+
 ## Android — product flavours from `.env`
 
 The example loads `.env.{dev,uat,prod}` and injects per-flavour `resValue`:
@@ -73,4 +85,19 @@ The active flavour's channel is available at runtime:
 const { channel } = useOtaUpdate(); // 'dev' | 'uat' | 'prod'
 ```
 
-→ Full walkthrough: [Guide: multi-env setup](/docs/guides/multi-env)
+## Keeping the values in `.env` files
+
+The example app keeps one file per environment and reads them from Gradle. Nothing in the library
+requires this — it only ever reads the compiled-in resources — but it keeps the five values in one
+place per environment:
+
+```ini title=".env.prod"
+OTA_CHANNEL=prod
+OTA_SERVER_URL=https://ota.yourapi.com
+OTA_PUBLIC_KEYS=<key_prod publicKeyRawB64>
+OTA_RUNTIME_VERSION=rt1
+OTA_NATIVE_BUILD=42
+```
+
+→ [Android setup](/docs/react-native/android-setup) · [iOS setup](/docs/react-native/ios-setup) ·
+[Keys, custody & rotation](/docs/security/key-management)

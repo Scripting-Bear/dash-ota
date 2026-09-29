@@ -1,0 +1,11 @@
+{
+  "label": "Client reference",
+  "position": 4,
+  "link": {
+    "type": "doc",
+    "id": "api/client/index"
+  },
+  "customProps": {
+    "generated": true
+  }
+}
