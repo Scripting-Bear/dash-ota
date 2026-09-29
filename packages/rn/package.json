@@ -109,7 +109,7 @@
       "customExportConditions": [
         "require",
         "react-native",
-        "<%- project.sourceCondition -%>"
+        "react-native-dash-ota-source"
       ]
     },
     "modulePathIgnorePatterns": [
