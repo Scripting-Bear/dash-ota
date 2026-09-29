@@ -56,3 +56,13 @@ jobs:
         run: npm run build
       - name: Tests
         run: npm test
+
+  # The Swift sources import Apple frameworks, so they cannot build on the Linux runner — the
+  # Linux `npm test` skips them. Run them where they can actually run; macOS minutes are free
+  # for public repositories.
+  ios:
+    name: iOS store tests
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm run test:ios

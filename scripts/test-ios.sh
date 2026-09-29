@@ -6,10 +6,12 @@
 # is isolated per run. That is why no test-only hook exists in the production source.
 set -e
 
-# Needs the Swift toolchain, so it is macOS-only. Skip cleanly elsewhere rather than failing the
-# run, the same way the Redis/Postgres/S3 adapter tests skip without their service.
-if ! command -v swiftc >/dev/null 2>&1; then
-  echo "iOS store tests skipped (no swiftc — macOS with Xcode only)"
+# macOS only. Swift itself exists on the Linux runners, so checking for `swiftc` is not enough —
+# the sources import Apple frameworks (`os` for unified logging, and CryptoKit/Security further
+# in), which Linux Swift does not ship. Skip cleanly elsewhere rather than failing the run, the
+# same way the Redis/Postgres/S3 adapter tests skip without their service.
+if [ "$(uname -s)" != "Darwin" ] || ! command -v swiftc >/dev/null 2>&1; then
+  echo "iOS store tests skipped (needs macOS with the Swift toolchain)"
   exit 0
 fi
 
