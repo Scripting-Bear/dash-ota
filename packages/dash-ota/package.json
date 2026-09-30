@@ -1,0 +1,13 @@
+{
+  "name": "dash-ota",
+  "version": "0.1.0",
+  "description": "Runs the dash-ota CLI (@dash-ota/cli). In a project, install @dash-ota/cli directly.",
+  "type": "module",
+  "bin": { "dash-ota": "bin.mjs" },
+  "files": ["bin.mjs"],
+  "dependencies": { "@dash-ota/cli": "^0.6.1" },
+  "engines": { "node": ">=20.19.0" },
+  "license": "MIT",
+  "homepage": "https://scripting-bear.github.io/dash-ota/",
+  "repository": { "type": "git", "url": "git+https://github.com/Scripting-Bear/dash-ota.git" }
+}

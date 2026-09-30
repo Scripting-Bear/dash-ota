@@ -14,9 +14,9 @@ cd ios && pod install && cd ..
 ```
 
 The CLI's npm package is `@dash-ota/cli`, and the command it installs is called `dash-ota`. Once it
-is a dev dependency, `npx dash-ota <command>` run from the project folder uses that local copy. There
-is no npm package named `dash-ota`, so anywhere the CLI is not installed, run
-`npx @dash-ota/cli <command>` instead.
+is a dev dependency, `npx dash-ota <command>` run from the project folder uses that local copy, at
+the version your lockfile pins. Outside a project, `npx dash-ota` still works: the small `dash-ota`
+package on npm downloads the CLI and runs it.
 
 ## Requirements
 

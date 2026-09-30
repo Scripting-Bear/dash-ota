@@ -18,9 +18,10 @@ npm i -D @dash-ota/cli
 npx dash-ota <command> [flags]
 ```
 
-`npx dash-ota` runs the copy in your project's `node_modules`. There is no npm package called just
-`dash-ota`, so in a folder without the CLI installed use `npx @dash-ota/cli <command>`, which
-downloads the right package. The CLI needs Node 20.19 or later. It includes a native zstd module
+`npx dash-ota` runs the copy in your project's `node_modules`, at the version your lockfile pins.
+In a folder without the CLI installed, `npx dash-ota` downloads the `dash-ota` package, a small
+wrapper that runs the latest `@dash-ota/cli`. Install the CLI itself in projects: installing both
+packages directly gives two packages with the same `dash-ota` command. The CLI needs Node 20.19 or later. It includes a native zstd module
 (`@mongodb-js/zstd`); if your npm version asks you to approve install scripts, run
 `npm install-scripts approve @mongodb-js/zstd`.
 

@@ -93,8 +93,8 @@ npm i -D @dash-ota/cli
 echo ".keys/" >> .gitignore
 ```
 
-`npx dash-ota …` runs that local copy. There is no npm package called just `dash-ota`, so outside
-a project that has the CLI installed, use `npx @dash-ota/cli …` instead.
+`npx dash-ota …` runs that local copy, so everyone on the project uses the version in your
+lockfile.
 
 Now make an **Ed25519 key pair**. The private half signs every release and never leaves your
 machine or CI. The public half gets compiled into your app, and the app uses it to check that an

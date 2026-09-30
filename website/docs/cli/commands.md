@@ -10,8 +10,8 @@ away: `npx dash-ota <command> --help` (or `-h`) prints a command's flags, which 
 and their defaults.
 
 The examples assume `@dash-ota/cli` is installed in your app (`npm i -D @dash-ota/cli`) and are
-run from the app root. Outside such a project, write `npx @dash-ota/cli` instead of
-`npx dash-ota`. There is no npm package called just `dash-ota`.
+run from the app root. Outside such a project `npx dash-ota` works too: it downloads the `dash-ota`
+wrapper package, which runs the latest `@dash-ota/cli`.
 
 Commands that talk to the backend take three shared flags, described in
 [Overview](/docs/cli/overview):

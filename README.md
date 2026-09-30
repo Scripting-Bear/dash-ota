@@ -31,9 +31,10 @@ Four packages over one shared core (npm workspaces monorepo):
 | Package | Role |
 |---|---|
 | **`packages/rn`** → `react-native-dash-ota` | Client library: one `<DashOtaProvider>` + `useOtaUpdate()` over native Android (Kotlin + Tink) / iOS (Swift CryptoKit). TurboModule (New Arch). Verifies + decrypts in native, applies on next cold start, rolls back on crash. |
-| **`packages/cli`** → `@dash-ota/cli` | Release tooling; the binary is `dash-ota` (`npx @dash-ota/cli …`, or `npx dash-ota …` once `@dash-ota/cli` is installed in your project). Bundles, encrypts, **signs** with your Ed25519 private key (keep it in CI or a KMS), publishes, operates rollouts. |
+| **`packages/cli`** → `@dash-ota/cli` | Release tooling; the binary is `dash-ota` (install `@dash-ota/cli` as a dev dependency and run `npx dash-ota …`; outside a project, `npx dash-ota` uses the `dash-ota` wrapper package). Bundles, encrypts, **signs** with your Ed25519 private key (keep it in CI or a KMS), publishes, operates rollouts. |
 | **`packages/backend`** → `@dash-ota/backend` | Config-driven, plug-and-play distributor. One `dashOtaMiddleware()` into any Express/Connect app, or standalone. Serves **pre-signed** manifests + ciphertext; **never holds the signing key**. |
 | **`packages/shared`** → `@dash-ota/shared` | Crypto/protocol core (Ed25519, AES-256-GCM, ECDSA device-key auth, canonical JSON, manifest schema). Crypto from Node's built-in `crypto`; zstd from `@mongodb-js/zstd`. |
+| **`packages/dash-ota`** → `dash-ota` | A two-line wrapper so `npx dash-ota` runs `@dash-ota/cli` anywhere. Republish it only when the CLI moves to a new minor version. |
 
 ---
 
