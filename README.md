@@ -96,3 +96,7 @@ DESIGN.md       design & threat model
 
 > Keep Ed25519 **private** signing keys in CI secrets or a KMS, never in the repo (`.keys/` and
 > `*.private.pem` are gitignored here).
+
+## Security
+
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
